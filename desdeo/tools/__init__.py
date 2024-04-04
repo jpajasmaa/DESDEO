@@ -20,8 +20,13 @@ __all__ = [
     "add_stom_sf_diff",
     "add_stom_sf_nondiff",
     "add_weighted_sums",
+<<<<<<< HEAD
     "available_nevergrad_optimizers",
     "create_ng_generic_solver",
+=======
+    "create_gurobipy_solver",
+    "create_ng_ngopt_solver",
+>>>>>>> f8ec05e (Added some tests and fixed some bugs)
     "create_pyomo_bonmin_solver",
     "create_pyomo_ipopt_solver",
     "create_pyomo_gurobi_solver",
@@ -32,11 +37,16 @@ __all__ = [
     "guess_best_solver",
 ]
 
+<<<<<<< HEAD
 from desdeo.tools.ng_solver_interfaces import (
     NevergradGenericOptions,
     available_nevergrad_optimizers,
     create_ng_generic_solver,
 )
+=======
+from desdeo.tools.gurobipy_solver_interfaces import create_gurobipy_solver
+from desdeo.tools.ng_solver_interfaces import NgOptOptions, create_ng_ngopt_solver
+>>>>>>> f8ec05e (Added some tests and fixed some bugs)
 from desdeo.tools.pyomo_solver_interfaces import (
     BonminOptions,
     IpoptOptions,
