@@ -972,7 +972,7 @@ def test_parse_sympy_basic_arithmetics():
 =======
 @pytest.mark.gurobipy
 def test_parse_gurobipy_basic_arithmetics():
-    """Test the JSON parser for correctly parsing MathJSON into pyomo expressions."""
+    """Test the JSON parser for correctly parsing MathJSON into gurobipy expressions."""
     gp_model = GurobipyModel("Test model")
 
     x_1 = 6.9
