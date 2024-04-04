@@ -192,8 +192,14 @@ markers = [
     "nautilus: tests related to the NAUTILUS method",
     "nevergrad: tests related to the nevergrad solvers and their interfaces",
     "scalarization: tests related to scalarization functions",
-    "nimbus: tests related to the NIMBUS method"
+    "nimbus: tests related to the NIMBUS method",
+    "gurobipy: tests related to the gurobipy solver"
 ]
+<<<<<<< HEAD
+=======
+addopts = "-m 'not performance' -m 'not nautilus'"
+pythonpath = "."
+>>>>>>> ab4032e (added gurobipy mark to pytest)
 
 [build-system]
 requires = ["poetry-core"]
