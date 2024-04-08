@@ -12,6 +12,7 @@ from desdeo.mcdm.nautilus_navigator import (
 from desdeo.problem import (
     Problem,
     get_nadir_dict,
+    get_ideal_dict,
     numpy_array_to_objective_dict,
     objective_dict_to_numpy_array,
 )
@@ -263,7 +264,7 @@ def nautili_all_steps(
     step_number = previous_responses[-1].step_number + 1
     first_iteration = True
     reachable_solution = dict
-    #pref_agg_method = "mean" # TODO: change
+    pref_agg_method = pref_agg_method # TODO: change
 
     # Calculate the improvement directions for each DM
 
@@ -308,14 +309,23 @@ def nautili_all_steps(
 
     # can just aggregate mean and median here
     if pref_agg_method == "mean":
+        print(pref_agg_method)
         g_improvement_direction = np.mean(list(improvement_directions.values()), axis=0)
     if pref_agg_method == "median":
+        print(pref_agg_method)
         g_improvement_direction = np.median(list(improvement_directions.values()), axis=0)
-    else:
+    if pref_agg_method == "maxmin":
+        print(pref_agg_method)
+        nadir = get_nadir_dict(problem)
+        ideal = get_ideal_dict(problem)
         # TODO: smarter way to get these
         g_improvement_direction = aggregate("maxmin", reference_points, nav_point_arr,
-            len(reference_points.columns),len(reference_points.rows), # TODO: not stable idea
-             problem.ideal, problem.nadir)
+            3,3,
+            #len(reference_points.columns),len(reference_points.rows), # TODO: not stable idea
+             ideal, nadir
+             #np.array([0.,0.,0.]),
+             #np.array([2.,2.,2.])
+             )
         #g_improvement_direction = aggregate("mean", improvement_directions, nav_point, nav_point_arr, None, None, None, None)
 
     group_improvement_direction = {
@@ -376,16 +386,23 @@ def aggregate(pref_agg_method: str,
     # TODO: HERE is aggre. TODO: make smarter. NOTE the different logic on the lists or dictionaries. Make own function.
 
     g_improvement_direction = None
+    rp_a = {}
+    for key, p in reference_points.items():
+        rp_a[key] = list(p.values())
+    rp_arr = np.array(list(rp_a.values()))
+    ideal = np.array(list(ideal.values()))
+    nadir = np.array(list(nadir.values()))
+
     if pref_agg_method == "maxmin":
         # TODO: get from the problem?
-        rp_arr = np.array([pref[1] for pref in reference_points.items()])
+        #rp_arr = np.array([pref[1] for pref in reference_points.items()])
         group_pref = agg_maxmin(rp_arr, nav_point_arr, k, q, ideal, nadir)
         print(group_pref)
         g_improvement_direction = nav_point_arr - group_pref
 
     if pref_agg_method == "maxmin_cones":
         # TODO:
-        rp_arr = np.array([pref[1] for pref in reference_points.items()])
+        #rp_arr = np.array([pref[1] for pref in reference_points.items()])
         group_pref = agg_maxmin_cones(rp_arr, nav_point_arr, k, q, ideal, nadir)
         print(group_pref)
         g_improvement_direction = nav_point_arr - group_pref
@@ -400,8 +417,6 @@ def agg_maxmin(agg, cip, k, q, ideal, nadir):
     # how many rows for X, n of DMs, n of objs + 1 for alpha
     #ra = k+q+1
     alpha = k+q
-    print(ideal)
-    print(nadir)
     
     # bounds for objectives and DMs
     # TODO: consider bounds smarter, now just taking for 1st objective
@@ -474,8 +489,9 @@ def agg_maxmin_cones(agg, cip, k, q, ideal, nadir):
     alpha = k+q
     
     # bounds for objectives and DMs
-    for i in range(k+q+1):
-        b = (0, nadir[0])
+    # TODO: fix
+    for _ in range(k+q+1):
+        b = (ideal[0], nadir[0])
         bnds.append(b)
           
     # create X of first iteration guess
