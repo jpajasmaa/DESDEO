@@ -296,6 +296,7 @@ def nautili_all_steps(
             #else:
             #    improvement = reference_point
 
+            # TODO: note, now does not throw error when using maxmin
             if np.any(improvement < 0):
                 msg = (
                     f"If a reference point is provided, it must be better than the navigation point.\n"
@@ -314,12 +315,12 @@ def nautili_all_steps(
     if pref_agg_method == "median":
         print(pref_agg_method)
         g_improvement_direction = np.median(list(improvement_directions.values()), axis=0)
-    if pref_agg_method == "maxmin":
+    if pref_agg_method == "maxmin" or pref_agg_method == "maxmin_cones":
         print(pref_agg_method)
         nadir = get_nadir_dict(problem)
         ideal = get_ideal_dict(problem)
         # TODO: smarter way to get these
-        g_improvement_direction = aggregate("maxmin", reference_points, nav_point_arr,
+        g_improvement_direction = aggregate(pref_agg_method, reference_points, nav_point_arr,
             3,3,
             #len(reference_points.columns),len(reference_points.rows), # TODO: not stable idea
              ideal, nadir
@@ -372,15 +373,13 @@ def aggregate(pref_agg_method: str,
 
     """Aggregates maxmin.
 
-    Creates the initial response of the method, which sets the navigation point to the nadir point
-    and the reachable bounds to the ideal and nadir points.
+    
 
     Args:
-        problem (Problem): The problem to be solved.
-        create_solver (CreateSolverType | None, optional): The solver to use. Defaults to ???.
+        pref_agg_method: the string depicting what preference aggregation method to use
 
     Returns:
-        NAUTILUS_Response: The initial response of the method.
+        group improvemnet direction
     """
 
     # TODO: HERE is aggre. TODO: make smarter. NOTE the different logic on the lists or dictionaries. Make own function.
@@ -419,9 +418,16 @@ def agg_maxmin(agg, cip, k, q, ideal, nadir):
     alpha = k+q
     
     # bounds for objectives and DMs
-    # TODO: consider bounds smarter, now just taking for 1st objective
+    # TODO: upper bound is less than the lower bound, if having negative obj values, 
+    i = 0
     for _ in range(k+q+1):
-        b = (ideal[0], nadir[0])
+        if i < k:
+            b = (ideal[i], nadir[i])
+            i += 1
+        else:
+            i = 0
+            b = (ideal[i], nadir[i])
+            i += 1
         print("boiunds",b)
         bnds.append(b)
           
@@ -515,7 +521,7 @@ def agg_maxmin_cones(agg, cip, k, q, ideal, nadir):
         #print(cip)
         #print(agg[j, :])
         #print(X[:3])
-        return lambda X: X[alpha] - eval_RP(cip, agg[j,:], X[:3])
+        return lambda X: X[alpha] - eval_RP(cip, agg[j,:], X[:k]) 
     
     # Create constraints
     Cons = []

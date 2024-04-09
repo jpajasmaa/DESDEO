@@ -82,6 +82,42 @@ def test_nautili_aggregation_maxmin():
     #g_improvement_direction = aggregate("mean", improvement_directions, nav_point, nav_point_arr, None, None, None, None)
     #assert g_improvement_direction is not None
 
+@pytest.mark.slow
+@pytest.mark.nautili
+def test_nautili_aggregation_maxmin_river_poll():
+    """TODO: Test nautili aggregation aggregation """
+
+    #problem = dtlz2_5x_3f_data_based
+    problem = river_pollution_problem()
+
+    nadir = get_nadir_dict(problem)
+    ideal = get_ideal_dict(problem)
+    print(nadir)
+    print(ideal)
+
+    #rps = {
+    #    "DM1": np.array([0.9, 0.8, 0.4]),
+    #    "DM2": np.array([0.8, 0.8, 0.5]),
+    #    "DM3": np.array([0.5, 0.6, 0.8]),
+    #}
+    rps = {
+        "DM1": {"f1": -5, "f2": -3, "f3": 0.6, "f_4": -7},
+        "DM2": {"f1": -4.7, "f2": -2.9, "f3": 5, "f_4": -0.47},
+        "DM3": {"f1": -6, "f2": -3.2, "f3": 2.8, "f_4": -1.7},
+    }
+
+    # TODO: fix the bounds to make this work
+    nav_point_arr = np.array([-4.75, -2.85, 0.32, -9.7])
+    g_improvement_direction = aggregate("maxmin", rps, nav_point_arr, 4, 3, ideal, nadir)
+    assert g_improvement_direction is not None
+    g_improvement_direction2 = aggregate("maxmin_cones", rps, nav_point_arr, 4, 3, ideal, nadir)
+    assert g_improvement_direction2 is not None
+
+    #g_improvement_direction = aggregate("mean", improvement_directions, nav_point, nav_point_arr, None, None, None, None)
+    #assert g_improvement_direction is not None
+
+
+
 
 @pytest.mark.skip
 @pytest.mark.slow
