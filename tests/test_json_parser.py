@@ -5,6 +5,7 @@ import json
 import math
 from pathlib import Path
 
+import gurobipy as gp
 import numpy.testing as npt
 import polars as pl
 import pyomo.environ as pyomo
@@ -12,7 +13,6 @@ import pytest
 import sympy as sp
 
 from desdeo.problem.evaluator import GenericEvaluator
-from desdeo.problem.gurobipy_model_extension import GurobipyModel
 from desdeo.problem.infix_parser import InfixExpressionParser
 from desdeo.problem.json_parser import FormatEnum, MathParser, replace_str
 from desdeo.problem.schema import (
@@ -973,7 +973,7 @@ def test_parse_sympy_basic_arithmetics():
 @pytest.mark.gurobipy
 def test_parse_gurobipy_basic_arithmetics():
     """Test the JSON parser for correctly parsing MathJSON into gurobipy expressions."""
-    gp_model = GurobipyModel("Test model")
+    gp_model = gp.Model("Test model")
 
     x_1 = 6.9
     x_2 = 0.1
@@ -982,13 +982,21 @@ def test_parse_gurobipy_basic_arithmetics():
     gp_model.addConstr(gp_model.addVar(name='x_2',obj=1)>=x_2)
     gp_model.addConstr(gp_model.addVar(name='x_3',obj=1)>=x_3)
 
+    constants={}
     c_1 = 4.2
-    gp_model.addConstant(4.2, name="c_1")
+    constants["c_1"] = 4.2
     c_2 = 2.2
-    gp_model.addConstant(2.2, name="c_2")
+    constants["c_2"] = 2.2
     gp_model.update()
     gp_model.optimize()
 >>>>>>> c812bef (Added a parser for converting json to gurobipy expressions)
+
+    def callback(name: str):
+        expression = gp_model.getVarByName(name)
+        if expression is None:  # noqa: SIM102
+            if name in constants:
+                expression = constants[name]
+        return expression
 
     tests = [
         ("x_1 + x_2 + x_3", x_1 + x_2 + x_3),
@@ -1347,7 +1355,7 @@ def test_parse_sympy_max():
 
     for str_expr, result in tests:
         json_expr = infix_parser.parse(str_expr)
-        gurobipy_expr = gurobipy_parser.parse(json_expr, gp_model)
+        gurobipy_expr = gurobipy_parser.parse(json_expr, callback)
         #print(str_expr)
 
         npt.assert_array_almost_equal(

@@ -32,6 +32,7 @@ __all__ = [
     "create_pyomo_gurobi_solver",
     "create_scipy_de_solver",
     "create_scipy_minimize_solver",
+<<<<<<< HEAD
     "get_corrected_ideal_and_nadir",
     "get_corrected_reference_point",
     "guess_best_solver",
@@ -45,6 +46,12 @@ from desdeo.tools.ng_solver_interfaces import (
 )
 =======
 from desdeo.tools.gurobipy_solver_interfaces import create_gurobipy_solver
+=======
+    "PersistentGurobipySolver"
+]
+
+from desdeo.tools.gurobipy_solver_interfaces import create_gurobipy_solver, PersistentGurobipySolver
+>>>>>>> b9a0b9a (Fixed bugs, still needs more testing)
 from desdeo.tools.ng_solver_interfaces import NgOptOptions, create_ng_ngopt_solver
 >>>>>>> f8ec05e (Added some tests and fixed some bugs)
 from desdeo.tools.pyomo_solver_interfaces import (
