@@ -20,7 +20,12 @@ __all__ = [
     "PyomoBonminSolver",
     "PyomoGurobiSolver",
     "PyomoIpoptSolver",
+<<<<<<< HEAD
 >>>>>>> ca1da4a (Pyomo solver changes.)
+=======
+    "ScipyDeSolver",
+    "ScipyMinimizeSolver",
+>>>>>>> 5534f8c (Scipy solver interface changes.)
     "SolverOptions",
     "SolverResults",
     "ScalarizationError",
@@ -40,6 +45,7 @@ __all__ = [
     "available_nevergrad_optimizers",
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
 =======
     "GurobipySolver",
 >>>>>>> 68555b4 (Gurobipy solver changes.)
@@ -56,6 +62,8 @@ __all__ = [
     "create_scipy_de_solver",
     "create_scipy_minimize_solver",
 <<<<<<< HEAD
+=======
+>>>>>>> 5534f8c (Scipy solver interface changes.)
     "get_corrected_ideal_and_nadir",
     "get_corrected_reference_point",
     "guess_best_solver",
@@ -118,8 +126,8 @@ from desdeo.tools.scalarization import (
     add_weighted_sums,
 )
 from desdeo.tools.scipy_solver_interfaces import (
-    create_scipy_de_solver,
-    create_scipy_minimize_solver,
+    ScipyDeSolver,
+    ScipyMinimizeSolver,
 )
 
 from desdeo.tools.generics import CreateSolverType, SolverOptions, SolverResults
