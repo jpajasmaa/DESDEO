@@ -22,6 +22,10 @@ __all__ = [
     "add_weighted_sums",
 <<<<<<< HEAD
     "available_nevergrad_optimizers",
+<<<<<<< HEAD
+=======
+    "GurobipySolver",
+>>>>>>> 68555b4 (Gurobipy solver changes.)
     "create_ng_generic_solver",
 =======
     "create_gurobipy_solver",
@@ -39,6 +43,14 @@ __all__ = [
 ]
 
 <<<<<<< HEAD
+<<<<<<< HEAD
+=======
+from desdeo.tools.generics import CreateSolverType, SolverOptions, SolverResults
+from desdeo.tools.gurobipy_solver_interfaces import (
+    PersistentGurobipySolver,
+    GurobipySolver,
+)
+>>>>>>> 68555b4 (Gurobipy solver changes.)
 from desdeo.tools.ng_solver_interfaces import (
     NevergradGenericOptions,
     available_nevergrad_optimizers,

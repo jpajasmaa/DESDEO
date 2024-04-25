@@ -200,8 +200,11 @@ markers = [
     "gurobipy: tests related to the gurobipy solver"
 ]
 <<<<<<< HEAD
+<<<<<<< HEAD
 =======
 addopts = "-m 'not performance' -m 'not nautilus'"
+=======
+>>>>>>> 68555b4 (Gurobipy solver changes.)
 pythonpath = "."
 >>>>>>> ab4032e (added gurobipy mark to pytest)
 
