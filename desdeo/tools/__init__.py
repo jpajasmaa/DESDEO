@@ -7,12 +7,16 @@ __all__ = [
 <<<<<<< HEAD
 =======
     "GurobipySolver",
+    "NevergradGenericOptions",
     "NevergradGenericSolver",
     "PersistentGurobipySolver",
+<<<<<<< HEAD
 >>>>>>> 0e36c8d (Nevergrad solver interface changes.)
+=======
+    "ProximalSolver",
+>>>>>>> 2ec0ac6 (Proximal solver changes.)
     "SolverOptions",
     "SolverResults",
-    "NevergradGenericOptions",
     "ScalarizationError",
     "add_asf_diff",
     "add_asf_generic_nondiff",
@@ -65,6 +69,7 @@ from desdeo.tools.ng_solver_interfaces import (
     NevergradGenericSolver,
     available_nevergrad_optimizers,
 )
+<<<<<<< HEAD
 =======
 from desdeo.tools.gurobipy_solver_interfaces import create_gurobipy_solver
 =======
@@ -75,6 +80,9 @@ from desdeo.tools.gurobipy_solver_interfaces import create_gurobipy_solver, Pers
 >>>>>>> b9a0b9a (Fixed bugs, still needs more testing)
 from desdeo.tools.ng_solver_interfaces import NgOptOptions, create_ng_ngopt_solver
 >>>>>>> f8ec05e (Added some tests and fixed some bugs)
+=======
+from desdeo.tools.proximal_solver import ProximalSolver
+>>>>>>> 2ec0ac6 (Proximal solver changes.)
 from desdeo.tools.pyomo_solver_interfaces import (
     BonminOptions,
     IpoptOptions,
