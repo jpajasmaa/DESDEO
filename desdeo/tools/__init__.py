@@ -4,6 +4,12 @@ __all__ = [
     "BonminOptions",
     "IpoptOptions",
     "CreateSolverType",
+<<<<<<< HEAD
+=======
+    "GurobipySolver",
+    "NevergradGenericSolver",
+    "PersistentGurobipySolver",
+>>>>>>> 0e36c8d (Nevergrad solver interface changes.)
     "SolverOptions",
     "SolverResults",
     "NevergradGenericOptions",
@@ -23,6 +29,7 @@ __all__ = [
 <<<<<<< HEAD
     "available_nevergrad_optimizers",
 <<<<<<< HEAD
+<<<<<<< HEAD
 =======
     "GurobipySolver",
 >>>>>>> 68555b4 (Gurobipy solver changes.)
@@ -31,6 +38,8 @@ __all__ = [
     "create_gurobipy_solver",
     "create_ng_ngopt_solver",
 >>>>>>> f8ec05e (Added some tests and fixed some bugs)
+=======
+>>>>>>> 0e36c8d (Nevergrad solver interface changes.)
     "create_pyomo_bonmin_solver",
     "create_pyomo_ipopt_solver",
     "create_pyomo_gurobi_solver",
@@ -47,14 +56,14 @@ __all__ = [
 =======
 from desdeo.tools.generics import CreateSolverType, SolverOptions, SolverResults
 from desdeo.tools.gurobipy_solver_interfaces import (
-    PersistentGurobipySolver,
     GurobipySolver,
+    PersistentGurobipySolver,
 )
 >>>>>>> 68555b4 (Gurobipy solver changes.)
 from desdeo.tools.ng_solver_interfaces import (
     NevergradGenericOptions,
+    NevergradGenericSolver,
     available_nevergrad_optimizers,
-    create_ng_generic_solver,
 )
 =======
 from desdeo.tools.gurobipy_solver_interfaces import create_gurobipy_solver
