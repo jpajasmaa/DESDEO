@@ -14,7 +14,13 @@ __all__ = [
 >>>>>>> 0e36c8d (Nevergrad solver interface changes.)
 =======
     "ProximalSolver",
+<<<<<<< HEAD
 >>>>>>> 2ec0ac6 (Proximal solver changes.)
+=======
+    "PyomoBonminSolver",
+    "PyomoGurobiSolver",
+    "PyomoIpoptSolver",
+>>>>>>> ca1da4a (Pyomo solver changes.)
     "SolverOptions",
     "SolverResults",
     "ScalarizationError",
@@ -86,9 +92,15 @@ from desdeo.tools.proximal_solver import ProximalSolver
 from desdeo.tools.pyomo_solver_interfaces import (
     BonminOptions,
     IpoptOptions,
+<<<<<<< HEAD
     create_pyomo_bonmin_solver,
     create_pyomo_ipopt_solver,
     create_pyomo_gurobi_solver,
+=======
+    PyomoBonminSolver,
+    PyomoGurobiSolver,
+    PyomoIpoptSolver,
+>>>>>>> ca1da4a (Pyomo solver changes.)
 )
 from desdeo.tools.scalarization import (
     ScalarizationError,
