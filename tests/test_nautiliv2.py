@@ -14,6 +14,7 @@ from desdeo.mcdm.nautiliv2 import (
     nautili_all_steps,
     NAUTILI_Response, 
     aggregate,
+    nautili_init
 )
 
 from desdeo.problem import (
@@ -88,7 +89,7 @@ def test_nautili_aggregation_maxmin_river_poll():
     """TODO: Test nautili aggregation aggregation """
 
     #problem = dtlz2_5x_3f_data_based
-    problem = river_pollution_problem()
+    problem = river_pollution_problem(five_objective_variant=False)
 
     nadir = get_nadir_dict(problem)
     ideal = get_ideal_dict(problem)
@@ -119,37 +120,46 @@ def test_nautili_aggregation_maxmin_river_poll():
 
 
 
-@pytest.mark.skip
+#@pytest.mark.skip
 @pytest.mark.slow
 @pytest.mark.nautili
 def test_nautili_all_steps():
     # TODO: does not run
     #problem = dtlz2_5x_3f_data_based 
-    problem = binh_and_korn(maximize=(False, False))
+    #problem = binh_and_korn(maximize=(False, False))
 
-    nav_point = {"f_1": 60.0, "f_2": 20.1}
-    ideal = {"f_1": 0.0, "f_2": 0.0}
-
-    rps = {
-        "DM1": {"f_1": 50, "f_2": 5},
-        "DM2": {"f_1": 30, "f_2": 3},
-        "DM3": {"f_1": 20, "f_2": 14},
-    }
-
-    #prev_nav_point = problem.nadir
-    #nav_point = get_nadir_dict(problem)
-    #nav_point = {"f1": 1.0, "f2": 1.0, "f3": 1.0}
-    #ideal = {"f1": 0.0, "f2": 0.0, "f3": 0.0}
+    #nav_point = {"f_1": 60.0, "f_2": 20.1}
+    #ideal = {"f_1": 0.0, "f_2": 0.0}
 
     #rps = {
-    #    "DM1": {"f1": 0.8, "f2": 0.7, "f3": 0.6},
-    #    "DM2": {"f1": 0.7, "f2": 0.8, "f3": 0.5},
-    #    "DM3": {"f1": 0.5, "f2": 0.6, "f3": 0.8},
+    #    "DM1": {"f_1": 50, "f_2": 5},
+    #    "DM2": {"f_1": 30, "f_2": 3},
+    #    "DM3": {"f_1": 20, "f_2": 14},
     #}
 
-    # TODO: should use this to get ini resp
-    # initial_response = nautili_init(problem)
+    problem = dtlz2(10,3)
 
+    nadir = get_nadir_dict(problem)
+    ideal = get_ideal_dict(problem)
+
+    #rps = {
+    #    "DM1": np.array([0.9, 0.8, 0.4]),
+    #    "DM2": np.array([0.8, 0.8, 0.5]),
+    #    "DM3": np.array([0.5, 0.6, 0.8]),
+    #}
+    rps = {
+        "DM1": {"f1": 0.8, "f2": 0.7, "f3": 0.6},
+        "DM2": {"f1": 0.7, "f2": 0.8, "f3": 0.5},
+        "DM3": {"f1": 0.5, "f2": 0.6, "f3": 0.8},
+    }
+
+    # TODO: should use this to get ini resp
+    initial_response = nautili_init(problem)
+
+    all_resp = nautili_all_steps(problem, 5, rps, [initial_response], "maxmin")
+    #all_resp
+
+    """
     lower_bounds, upper_bounds = solve_reachable_bounds(problem, nav_point)
     prev_resp = [NAUTILI_Response(
         distance_to_front=0,
@@ -177,3 +187,4 @@ def test_nautili_all_steps():
     #assert res_1[-1].navigation_point["f_1"] < 0
 
     assert res_1.success
+    """

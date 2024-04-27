@@ -43,7 +43,7 @@ class NAUTILI_Response(BaseModel):
     navigation_point: dict = Field(description="The navigation point used in the step.")
     reachable_solution: dict | None = Field(description="The reachable solution found in the step.")
     reachable_bounds: dict = Field(description="The reachable bounds found in the step.")
-    #pref_agg_method: str | None = Field(description="The preference aggregation method used.")
+    #pref_agg_method: str = Field(description="The preference aggregation method used.") # get some validation error from pydanctic dunno
 
 
 class NautiliError(Exception):
@@ -324,8 +324,6 @@ def nautili_all_steps(
             3,3,
             #len(reference_points.columns),len(reference_points.rows), # TODO: not stable idea
              ideal, nadir
-             #np.array([0.,0.,0.]),
-             #np.array([2.,2.,2.])
              )
         #g_improvement_direction = aggregate("mean", improvement_directions, nav_point, nav_point_arr, None, None, None, None)
 
@@ -373,8 +371,6 @@ def aggregate(pref_agg_method: str,
 
     """Aggregates maxmin.
 
-    
-
     Args:
         pref_agg_method: the string depicting what preference aggregation method to use
 
@@ -418,11 +414,15 @@ def agg_maxmin(agg, cip, k, q, ideal, nadir):
     alpha = k+q
     
     # bounds for objectives and DMs
-    # TODO: upper bound is less than the lower bound, if having negative obj values, 
+    # TODO: Need to make smarter for bounds to consider if obj is maximized. now assumes minimization. Also prob wrong place for the bounds.
     i = 0
     for _ in range(k+q+1):
         if i < k:
-            b = (ideal[i], nadir[i])
+            # dumb way of converting max to min for scipy
+            if (ideal[i] > nadir[i]):
+                 b = (-1*ideal[i], -1*nadir[i])
+            else:
+                b = (ideal[i], nadir[i])
             i += 1
         else:
             i = 0
@@ -449,6 +449,7 @@ def agg_maxmin(agg, cip, k, q, ideal, nadir):
     def DMconstr(k,j):
         # w - S_4(R) <= 0
         return lambda X: X[alpha] - sum((agg[j,i] - cip[i])*X[i] for i in range(k))
+      
     
     # Create constraints
     Cons = []
@@ -456,7 +457,7 @@ def agg_maxmin(agg, cip, k, q, ideal, nadir):
         Cons.append({'type':'eq', 'fun' : feas_space_const(k, q, i)})
     
     for j in range(q):
-        Cons.append({'type':'ineq', 'fun' : DMconstr(k,j)}) 
+        Cons.append({'type':'ineq', 'fun' : DMconstr(k,j)})
         
     # Convex constraint
     def constraint5(X):
@@ -469,7 +470,6 @@ def agg_maxmin(agg, cip, k, q, ideal, nadir):
     # The s_m(R) for all DMs
     def fx(X):
         return -1*X[alpha] #max alpha
-
         
     from scipy.optimize import minimize
     solution = minimize(fx,
@@ -517,11 +517,7 @@ def agg_maxmin_cones(agg, cip, k, q, ideal, nadir):
     # constraints for DMs S
     def DMconstr(j):
         # w - S_1(R) <= 0
-        #print("AT DMconst")
-        #print(cip)
-        #print(agg[j, :])
-        #print(X[:3])
-        return lambda X: X[alpha] - eval_RP(cip, agg[j,:], X[:k]) 
+        return lambda X: X[alpha] - eval_RP(cip, agg[j,:], X[:k])
     
     # Create constraints
     Cons = []
@@ -529,7 +525,7 @@ def agg_maxmin_cones(agg, cip, k, q, ideal, nadir):
         Cons.append({'type':'eq', 'fun' : feas_space_const(k, q, i)})
     
     for j in range(q):
-        Cons.append({'type':'ineq', 'fun' : DMconstr(j)}) 
+        Cons.append({'type':'ineq', 'fun' : DMconstr(j)})
         
     # Convex constraint
     def constraint5(X):
@@ -537,7 +533,7 @@ def agg_maxmin_cones(agg, cip, k, q, ideal, nadir):
         return sum(X[k:k+q]) - 1
 
     con5 ={'type':'eq', 'fun':constraint5}
-    Cons.append(con5)    
+    Cons.append(con5)
 
     # The s_m(R) for all DMs
     def fx(X):
