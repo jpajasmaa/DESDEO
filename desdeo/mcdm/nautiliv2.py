@@ -250,7 +250,6 @@ def nautili_step(  # NOQA: PLR0913
     )
 
 
-
 def nautili_all_steps(
     problem: Problem,
     steps_remaining: int,

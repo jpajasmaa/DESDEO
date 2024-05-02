@@ -23,8 +23,23 @@ from desdeo.problem import (
     river_pollution_problem,
     get_nadir_dict,
     get_ideal_dict,
-    dtlz2
+    dtlz2, 
+    momip_ti7
 )
+
+from desdeo.problem.schema import (
+    Constant,
+    Constraint,
+    ConstraintTypeEnum,
+    DiscreteRepresentation,
+    ExtraFunction,
+    Objective,
+    ObjectiveTypeEnum,
+    Problem,
+    Variable,
+    VariableTypeEnum,
+)
+
 
 
 @pytest.mark.skip
@@ -33,6 +48,19 @@ from desdeo.problem import (
 def test_nautili_aggregation_mean():
     """TODO: Test nautili aggregation aggregation """
 
+    problem2 = river_pollution_problem(False) # does not work momip_ti7()
+
+    nadir = get_nadir_dict(problem2)
+    ideal = get_ideal_dict(problem2)
+    rps = {
+        "DM1": {"f_1": -5, "f_2": -3.2, "f_3": 0.5, "f_4": -1},
+        "DM2": {"f_1": -4, "f_2": -3, "f_3": 6, "f_4": -1},
+        "DM3": {"f_1": -6, "f_2": -2.9, "f_3": 3, "f_4": -1},
+    }
+    initial_response = nautili_init(problem2)
+
+    all_resp = nautili_all_steps(problem2, 3, rps, [initial_response], pref_agg_method="mean")
+    #all_resp
     #test do not make sense rn
     problem = dtlz2_5x_3f_data_based
     #nav_point = get_nadir_dict(problem)
