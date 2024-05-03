@@ -18,11 +18,7 @@ class FormatEnum(str, Enum):
 
     polars = "polars"
     pyomo = "pyomo"
-<<<<<<< HEAD
-    sympy = "sympy"
-=======
     gurobipy = "gurobipy"
->>>>>>> c812bef (Added a parser for converting json to gurobipy expressions)
 
 
 class ParserError(Exception):
@@ -180,46 +176,6 @@ class MathParser:
             self.MAX: lambda *args: _PyomoMax(args),
         }
 
-<<<<<<< HEAD
-        sympy_env = {
-            # Basic arithmetic operations
-            self.NEGATE: lambda x: -to_sympy_expr(x),
-            self.ADD: lambda *args: reduce(lambda x, y: to_sympy_expr(x) + to_sympy_expr(y), args),
-            self.SUB: lambda *args: reduce(lambda x, y: to_sympy_expr(x) - to_sympy_expr(y), args),
-            self.MUL: lambda *args: reduce(lambda x, y: to_sympy_expr(x) * to_sympy_expr(y), args),
-            self.DIV: lambda *args: reduce(lambda x, y: to_sympy_expr(x) / to_sympy_expr(y), args),
-            # Exponentiation and logarithms
-            self.EXP: lambda x: sp.exp(to_sympy_expr(x)),
-            self.LN: lambda x: sp.log(to_sympy_expr(x)),
-            self.LB: lambda x: sp.log(to_sympy_expr(x), 2),
-            self.LG: lambda x: sp.log(to_sympy_expr(x), 10),
-            self.LOP: lambda x: sp.log(1 + to_sympy_expr(x)),
-            self.SQRT: lambda x: sp.sqrt(to_sympy_expr(x)),
-            self.SQUARE: lambda x: to_sympy_expr(x) ** 2,
-            self.POW: lambda x, y: to_sympy_expr(x) ** to_sympy_expr(y),
-            # Trigonometric operations
-            self.SIN: lambda x: sp.sin(to_sympy_expr(x)),
-            self.COS: lambda x: sp.cos(to_sympy_expr(x)),
-            self.TAN: lambda x: sp.tan(to_sympy_expr(x)),
-            self.ARCSIN: lambda x: sp.asin(to_sympy_expr(x)),
-            self.ARCCOS: lambda x: sp.acos(to_sympy_expr(x)),
-            self.ARCTAN: lambda x: sp.atan(to_sympy_expr(x)),
-            # Hyperbolic functions
-            self.SINH: lambda x: sp.sinh(to_sympy_expr(x)),
-            self.COSH: lambda x: sp.cosh(to_sympy_expr(x)),
-            self.TANH: lambda x: sp.tanh(to_sympy_expr(x)),
-            self.ARCSINH: lambda x: sp.asinh(to_sympy_expr(x)),
-            self.ARCCOSH: lambda x: sp.acosh(to_sympy_expr(x)),
-            self.ARCTANH: lambda x: sp.atanh(to_sympy_expr(x)),
-            # Other
-            self.ABS: lambda x: sp.Abs(to_sympy_expr(x)),
-            self.CEIL: lambda x: sp.ceiling(to_sympy_expr(x)),
-            self.FLOOR: lambda x: sp.floor(to_sympy_expr(x)),
-            # Note: Max and Min in sympy take any number of arguments
-            self.MAX: lambda *args: sp.Max(*args),
-            # Rational numbers, for now assuming two-element list for numerator and denominator
-            self.RATIONAL: lambda x, y: sp.Rational(x, y),
-=======
         def gp_error():
             msg = "The gurobipy model format only supports linear and quadratic expressions."
             ParserError(msg)
@@ -265,7 +221,6 @@ class MathParser:
             # Other operations
             self.RATIONAL: lambda lst: reduce(lambda x, y: x / y, lst),  # not supported
             self.MAX: lambda *args: gp.max_(args),
->>>>>>> c812bef (Added a parser for converting json to gurobipy expressions)
         }
 
         match to_format:
@@ -275,15 +230,9 @@ class MathParser:
             case FormatEnum.pyomo:
                 self.env = pyomo_env
                 self.parse = self._parse_to_pyomo
-<<<<<<< HEAD
-            case FormatEnum.sympy:
-                self.env = sympy_env
-                self.parse = self._parse_to_sympy
-=======
             case FormatEnum.gurobipy:
                 self.env = gurobipy_env
                 self.parse = self._parse_to_gurobipy
->>>>>>> c812bef (Added a parser for converting json to gurobipy expressions)
             case _:
                 msg = f"Given target format {to_format} not supported. Must be one of {FormatEnum}."
                 raise ParserError(msg)

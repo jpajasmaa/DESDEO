@@ -155,14 +155,7 @@ lint.dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
 # Assume Python 3.12.
 target-version = "py312"
 
-<<<<<<< HEAD
-[tool.ruff.lint.mccabe]
-max-complexity = 15
-
-[tool.ruff.per-file-ignores]
-=======
 [tool.ruff.lint.per-file-ignores]
->>>>>>> b9a0b9a (Fixed bugs, still needs more testing)
 # Ignore certain rules in test files
 "tests/**/*.py" = [
     "S101",    # asserts allowed in tests...
@@ -200,14 +193,7 @@ markers = [
     "gurobipy: tests related to the gurobipy solver",
     "pareto_navigator: tests related to the Pareto Navigator method"
 ]
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
-addopts = "-m 'not performance' -m 'not nautilus'"
-=======
->>>>>>> 68555b4 (Gurobipy solver changes.)
 pythonpath = "."
->>>>>>> ab4032e (added gurobipy mark to pytest)
 
 [build-system]
 requires = ["poetry-core"]

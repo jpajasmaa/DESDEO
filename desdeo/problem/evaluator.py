@@ -1,9 +1,6 @@
 """Different evaluators are defined for evaluating multiobjective optimization problems."""
 
-<<<<<<< HEAD
-=======
 import copy
->>>>>>> b9a0b9a (Fixed bugs, still needs more testing)
 from enum import Enum
 
 import polars as pl

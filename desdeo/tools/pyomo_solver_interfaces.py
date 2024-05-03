@@ -1,9 +1,9 @@
 """Defines solver interfaces for pyomo."""
 
 from collections.abc import Callable
-from dataclasses import dataclass, fields
 
 import pyomo.environ as pyomo
+from pydantic import BaseModel, Field
 from pyomo.opt import SolverResults as _pyomo_SolverResults
 from pyomo.opt import SolverStatus as _pyomo_SolverStatus
 from pyomo.opt import TerminationCondition as _pyomo_TerminationCondition
@@ -12,9 +12,8 @@ from desdeo.problem import Problem, PyomoEvaluator
 from desdeo.tools.generics import SolverResults
 
 
-@dataclass
-class BonminOptions:
-    """Defines a dataclass to store and pass options to the Bonmin solver.
+class BonminOptions(BaseModel):
+    """Defines a pydantic model to store and pass options to the Bonmin solver.
 
     Because Bonmin utilizes many sub-solver, the options specific to Bonmin
     must be prefixed in their name with 'bonmin.{option_name}',
@@ -22,38 +21,70 @@ class BonminOptions:
     https://www.coin-or.org/Bonmin/options_list.html
 
     Note:
+        Not all options are available through this model.
         Please add options as they are needed and make a pull request.
     """
 
-    tol: float = 1e-8
+    tol: float = Field(description="Sets the convergence tolerance of ipopt. Defaults to 1e-8.", default=1e-8)
     """Sets the convergence tolerance of ipopt. Defaults to 1e-8."""
 
-    bonmin_integer_tolerance: float = 1e-6
+    bonmin_integer_tolerance: float = Field(
+        description="Numbers within this value of an integer are considered integers. Defaults to 1e-6.", default=1e-6
+    )
     """Numbers within this value of an integer are considered integers. Defaults to 1e-6."""
 
-    bonmin_algorithm: str = "B-BB"
+    bonmin_algorithm: str = Field(
+        description=(
+            "Presets some of the options in Bonmin based on the algorithm choice. Defaults to 'B-BB'. "
+            "A good first option to try is 'B-Hyb'."
+        ),
+        default="B-BB",
+    )
     """Presets some of the options in Bonmin based on the algorithm choice. Defaults to 'B-BB'.
     A good first option to try is 'B-Hyb'.
     """
 
     def asdict(self) -> dict[str, float]:
-        """Converts the dataclass in a dict so that Bonmin specific options are in the correct format.
+        """Converts the Pydantic model into a dict so that Bonmin specific options are in the correct format.
 
-        This means that the attributes starting with `bonmin.optionname` will be
-        converted to keys in the format `bonmin_optionname` in the returned dict.
+        This means that the attributes starting with `bonmin_optionname` will be
+        converted to keys in the format `bonmin.optionname` in the returned dict.
         """
         output = {}
-        for field in fields(self):
-            if (rest := field.name.split(sep="_"))[0] == "bonmin":
-                output[f"bonmin.{'_'.join(rest[1:])}"] = getattr(self, field.name)
+        for field_name, _ in self.__fields__.items():
+            if (rest := field_name.split(sep="_"))[0] == "bonmin":
+                # Convert to Bonmin specific format
+                output[f"bonmin.{'_'.join(rest[1:])}"] = getattr(self, field_name)
             else:
-                output[f"{field.name}"] = getattr(self, field.name)
+                # Keep the field as is
+                output[field_name] = getattr(self, field_name)
 
         return output
 
 
+class IpoptOptions(BaseModel):
+    """Defines a pydantic dataclass to pass options to the Ipopt solver.
+
+    For more information and documentation on the options,
+    see https://coin-or.github.io/Ipopt/
+
+    Note:
+        Not all options are available through this model.
+        Please add options as they are needed and make a pull request.
+    """
+
+    tol: float = Field(description="The desired relative convergence tolerance. Defaults to 1e-8.", default=1e-8)
+    """The desired relative convergence tolerance. Defaults to 1e-8."""
+
+    max_iter: int = Field(description="Maximum number of iterations. Must be >1. Defaults to 3000.", default=3000)
+    """Maximum number of iterations. Must be >1. Defaults to 3000."""
+
+
 _default_bonmin_options = BonminOptions()
-"""Defines Bonmin options with the default values."""
+"""Defines Bonmin options with default values."""
+
+_default_ipopt_options = IpoptOptions()
+"""Defines Ipopt optins with default values."""
 
 
 def parse_pyomo_optimizer_results(
@@ -62,7 +93,7 @@ def parse_pyomo_optimizer_results(
     """Parses pyomo SolverResults into DESDEO SolverResults.
 
     Args:
-        opt_res (_pyomo_SolverResults): the pyomo solver results.
+        opt_res (SolverResults): the pyomo solver results.
         problem (Problem): the problem being solved.
         evaluator (PyomoEvaluator): the evaluator utilized to get the pyomo solver results.
 
@@ -73,7 +104,9 @@ def parse_pyomo_optimizer_results(
 
     variable_values = {var.symbol: results[var.symbol] for var in problem.variables}
     objective_values = {obj.symbol: results[obj.symbol] for obj in problem.objectives}
-    constraint_values = {con.symbol: results[con.symbol] for con in problem.constraints}
+    constraint_values = (
+        {con.symbol: results[con.symbol] for con in problem.constraints} if problem.constraints else None
+    )
     success = (
         opt_res.solver.status == _pyomo_SolverStatus.ok
         and opt_res.solver.termination_condition == _pyomo_TerminationCondition.optimal
@@ -92,38 +125,12 @@ def parse_pyomo_optimizer_results(
     )
 
 
-<<<<<<< HEAD
-def create_pyomo_bonmin_solver(
-    problem: Problem, options: BonminOptions = _default_bonmin_options
-) -> Callable[[str], SolverResults]:
-    """Creates a pyomo solver that utilizes bonmin.
-=======
 class PyomoBonminSolver:
     """Creates pyomo solvers that utilize bonmin."""
->>>>>>> ca1da4a (Pyomo solver changes.)
 
     def __init__(self, problem: Problem, options: BonminOptions | None = _default_bonmin_options):
         """The solver is initialized with a problem and solver options.
 
-<<<<<<< HEAD
-    Bonmin must be installed on the system running DESDEO, and its executable
-    must be defined in the PATH.
-
-    For more info about bonmin, see: https://www.coin-or.org/Bonmin/
-
-    Args:
-        problem (Problem): the problem to be solved.
-        options (BonminOptions): options to be passed to the Bonmin solver.
-            Defaults to `default_bonmin_options` defined in this source
-            file.
-
-    Returns:
-        Callable[[str], SolverResults]: returns a callable function that takes
-            as its argument one of the symbols defined for a function expression in
-            problem.
-    """
-    evaluator = PyomoEvaluator(problem)
-=======
         Suitable for mixed-integer problems. The objective function being minimized
         (target) and the constraint functions must be twice continuously
         differentiable. When the objective functions and constraints are convex, the
@@ -149,7 +156,6 @@ class PyomoBonminSolver:
             self.options = _default_bonmin_options
         else:
             self.options = options
->>>>>>> ca1da4a (Pyomo solver changes.)
 
     def solve(self, target: str) -> SolverResults:
         """Solve the problem for a given target.
@@ -171,12 +177,6 @@ class PyomoBonminSolver:
 
         return parse_pyomo_optimizer_results(opt_res, self.problem, self.evaluator)
 
-<<<<<<< HEAD
-def create_pyomo_gurobi_solver(
-    problem: Problem, options: dict[str,any]|None = None
-) -> Callable[[str], SolverResults]:
-    """Creates a pyomo solver that utilizes gurobi.
-=======
 
 class PyomoIpoptSolver:
     """Create a pyomo solver that utilizes Ipopt."""
@@ -225,7 +225,6 @@ class PyomoIpoptSolver:
 
 class PyomoGurobiSolver:
     """Creates a pyomo solver that utilized Gurobi."""
->>>>>>> ca1da4a (Pyomo solver changes.)
 
     def __init__(self, problem: Problem, options: dict[str, any] | None = None):
         """Creates a pyomo solver that utilizes gurobi.
@@ -235,16 +234,6 @@ class PyomoGurobiSolver:
         Suitable for solving mixed-integer linear and quadratic optimization
         problems.
 
-<<<<<<< HEAD
-    Returns:
-        Callable[[str], SolverResults]: returns a callable function that takes
-            as its argument one of the symbols defined for a function expression in
-            problem.
-    """
-    evaluator = PyomoEvaluator(problem)
-    if options is None:
-        options = {}
-=======
         Args:
             problem (Problem): the problem to be solved.
             options (GurobiOptions): Dictionary of Gurobi parameters to set.
@@ -260,22 +249,10 @@ class PyomoGurobiSolver:
             self.options = {}
         else:
             self.options = options
->>>>>>> ca1da4a (Pyomo solver changes.)
 
     def solve(self, target: str) -> SolverResults:
         """Solve the problem for a given target.
 
-<<<<<<< HEAD
-        opt = pyomo.SolverFactory('gurobi', solver_io='python', options=options)
-
-        with pyomo.SolverFactory(
-            'gurobi', solver_io='python'
-        ) as opt:
-            opt_res = opt.solve(evaluator.model)
-            return parse_pyomo_optimizer_results(opt_res, problem, evaluator)
-
-    return solver
-=======
         Args:
             target (str): the symbol of the objective function to be optimized.
 
@@ -289,4 +266,3 @@ class PyomoGurobiSolver:
         with pyomo.SolverFactory("gurobi", solver_io="python") as opt:
             opt_res = opt.solve(self.evaluator.model)
             return parse_pyomo_optimizer_results(opt_res, self.problem, self.evaluator)
->>>>>>> ca1da4a (Pyomo solver changes.)
