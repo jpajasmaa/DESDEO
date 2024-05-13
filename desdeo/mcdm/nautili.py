@@ -9,6 +9,7 @@ from desdeo.mcdm.nautilus_navigator import (
 )
 from desdeo.problem import (
     Problem,
+    get_ideal_dict,
     get_nadir_dict,
     numpy_array_to_objective_dict,
     objective_dict_to_numpy_array,
@@ -251,6 +252,7 @@ def nautili_all_steps(
     steps_remaining: int,
     reference_points: dict[str, dict[str, float]],
     previous_responses: list[NAUTILI_Response],
+    pref_agg_method: str | None,
     create_solver: CreateSolverType | None = None,
 ):
     responses = []
@@ -258,6 +260,7 @@ def nautili_all_steps(
     step_number = previous_responses[-1].step_number + 1
     first_iteration = True
     reachable_solution = dict
+    pref_agg_method: str | None
 
     # Calculate the improvement directions for each DM
 
@@ -290,9 +293,29 @@ def nautili_all_steps(
                 raise NautiliError(msg)
             # The improvement direction is in the true objective space
             improvement_directions[dm] = improvement * max_multiplier
-    mean_improvement_direction = np.mean(list(improvement_directions.values()), axis=0)
+    # can just aggregate mean and median here
+    if pref_agg_method == "mean":
+        print(pref_agg_method)
+        g_improvement_direction = np.mean(list(improvement_directions.values()), axis=0)
+    if pref_agg_method == "median":
+        print(pref_agg_method)
+        g_improvement_direction = np.median(list(improvement_directions.values()), axis=0)
+    if pref_agg_method == "maxmin" or pref_agg_method == "maxmin_cones":
+        print(pref_agg_method)
+        nadir = get_nadir_dict(problem)
+        ideal = get_ideal_dict(problem)
+        #k = len(ideal) #len(ideal.values) ? # n of objs
+        #q = 3 # n of DMs
+        # TODO: smarter way to get these
+        g_improvement_direction = aggregate(pref_agg_method, reference_points, nav_point_arr,
+            #k,q,
+            len(ideal), max(range(0, dm in reference_points)), # TODO: unncessary complex for number of DMs
+             ideal, nadir
+             )
+        #g_improvement_direction = aggregate("mean", improvement_directions, nav_point, nav_point_arr, None, None, None, None)
+
     group_improvement_direction = {
-        obj.symbol: mean_improvement_direction[i] for i, obj in enumerate(problem.objectives)
+        obj.symbol: g_improvement_direction[i] for i, obj in enumerate(problem.objectives)
     }
 
     while steps_remaining > 0:
@@ -323,3 +346,226 @@ def nautili_all_steps(
         steps_remaining -= 1
         step_number += 1
     return responses
+
+"""
+BELOW related to pref agg tests
+"""
+def aggregate(pref_agg_method: str,
+    reference_points: dict[str, dict[str, float]],
+    nav_point_arr = list[float],
+    k = int,
+    q = int,
+    ideal = list[float],
+    nadir = list[float]):
+
+    """Aggregates maxmin.
+
+    Args:
+        pref_agg_method: the string depicting what preference aggregation method to use
+
+    Returns:
+        group improvemnet direction
+    """
+
+    # TODO: HERE is aggre. TODO: make smarter. NOTE the different logic on the lists or dictionaries. Make own function.
+
+    g_improvement_direction = None
+    rp_a = {}
+    for key, p in reference_points.items():
+        rp_a[key] = list(p.values())
+    rp_arr = np.array(list(rp_a.values()))
+    ideal = np.array(list(ideal.values()))
+    nadir = np.array(list(nadir.values()))
+
+    if pref_agg_method == "maxmin":
+        # TODO: get from the problem?
+        #rp_arr = np.array([pref[1] for pref in reference_points.items()])
+        group_pref = agg_maxmin(rp_arr, nav_point_arr, k, q, ideal, nadir)
+        print(group_pref)
+        g_improvement_direction = nav_point_arr - group_pref
+
+    if pref_agg_method == "maxmin_cones":
+        # TODO:
+        #rp_arr = np.array([pref[1] for pref in reference_points.items()])
+        group_pref = agg_maxmin_cones(rp_arr, nav_point_arr, k, q, ideal, nadir)
+        print(group_pref)
+        g_improvement_direction = nav_point_arr - group_pref
+
+    return g_improvement_direction
+
+# TODO: rename all
+def agg_maxmin(agg, cip, k, q, ideal, nadir):
+    agg_pref = []     
+    # X = [R1, R2, R3, W1, W2, W3, W4, ALPHA]
+    bnds = []
+    # how many rows for X, n of DMs, n of objs + 1 for alpha
+    #ra = k+q+1
+    alpha = k+q
+
+    # bounds for objectives and DMs
+    # TODO: Need to make smarter for bounds to consider if obj is maximized. now assumes minimization. Also prob wrong place for the bounds.
+    i = 0
+    for _ in range(k+q+1):
+        if i < k:
+            # dumb way of converting max to min for scipy
+            if (ideal[i] > nadir[i]):
+                 b = (-1*ideal[i], -1*nadir[i])
+            else:
+                b = (ideal[i], nadir[i])
+            i += 1
+        else:
+            i = 0
+            b = (ideal[i], nadir[i])
+            i += 1
+        print("boiunds",b)
+        bnds.append(b)
+
+    # create X of first iteration guess
+    X = np.zeros(k+q+1) # last number (alpha, the param to maximize) can stay as zero change the rest
+    # Fill first guess for RP taking max from the DMs
+    for i in range(k):
+        X[i] = np.max(agg[:,i])
+
+    # Calculate the weights for DMs
+    for qk in range(q):
+        X[k+qk] = 1/q
+
+    # constraints for feasible space
+    def feas_space_const(k, q, i):
+        return lambda X: (sum([X[k+j]*agg[j,i] for j in range(q)]) - X[i])
+
+    # constraints for DMs S
+    def DMconstr(k,j):
+        # w - S_4(R) <= 0
+        return lambda X: X[alpha] - sum((agg[j,i] - cip[i])*X[i] for i in range(k))
+
+    # Create constraints
+    Cons = []
+    for i in range(k):
+        Cons.append({'type':'eq', 'fun' : feas_space_const(k, q, i)})
+
+    for j in range(q):
+        Cons.append({'type':'ineq', 'fun' : DMconstr(k,j)})
+
+    # Convex constraint
+    def constraint5(X):
+        # sum_{r=1}^4(lambda_r) - 1 = 0
+        return sum(X[k:k+q]) - 1
+
+    con5 ={'type':'eq', 'fun':constraint5}
+    Cons.append(con5)
+
+    # The s_m(R) for all DMs
+    def fx(X):
+        return -1*X[alpha] #max alpha
+
+    from scipy.optimize import minimize
+    solution = minimize(fx,
+                  X, 
+                  method = 'trust-constr',
+                  bounds = bnds,
+                  constraints = Cons,
+                  options={'gtol': 1e-12, 'xtol': 1e-12, 'maxiter': 2000, 'disp': True}
+                  )
+
+    # Decision variables (solutions)
+    agg_pref.append(solution.x[0:k])
+
+    return agg_pref[0]
+
+
+def agg_maxmin_cones(agg, cip, k, q, ideal, nadir):
+    agg_pref = []     
+    # X = [R1, R2, R3, W1, W2, W3, W4, ALPHA]
+    bnds = []
+    # how many rows for X, n of DMs, n of objs + 1 for alpha
+    #ra = k+q+1
+    alpha = k+q
+
+    # bounds for objectives and DMs
+    # TODO: fix
+    for _ in range(k+q+1):
+        b = (ideal[0], nadir[0])
+        bnds.append(b)
+
+    # create X of first iteration guess
+    X = np.zeros(k+q+1) # last number (alpha, the param to maximize) can stay as zero change the rest
+    # Fill first guess for RP taking max from the DMs
+    for i in range(k):
+        X[i] = np.max(agg[:,i])
+
+    # Calculate the weights for DMs
+    for qk in range(q):
+        X[k+qk] = 1/q
+
+    # constraints for feasible space
+    def feas_space_const(k, q, i):
+        return lambda X: (sum([X[k+j]*agg[j,i] for j in range(q)]) - X[i])
+
+    # constraints for DMs S
+    def DMconstr(j):
+        # w - S_1(R) <= 0
+        return lambda X: X[alpha] - eval_RP(cip, agg[j,:], X[:k])
+
+    # Create constraints
+    Cons = []
+    for i in range(k):
+        Cons.append({'type':'eq', 'fun' : feas_space_const(k, q, i)})
+
+    for j in range(q):
+        Cons.append({'type':'ineq', 'fun' : DMconstr(j)})
+
+    # Convex constraint
+    def constraint5(X):
+        # sum_{r=1}^4(lambda_r) - 1 = 0
+        return sum(X[k:k+q]) - 1
+
+    con5 ={'type':'eq', 'fun':constraint5}
+    Cons.append(con5)
+
+    # The s_m(R) for all DMs
+    def fx(X):
+        return -1*X[alpha] #max alpha
+
+    from scipy.optimize import minimize
+    solution = minimize(fx,
+                  X, 
+                  method = 'trust-constr',
+                  bounds = bnds,
+                  constraints = Cons,
+                  options={'gtol': 1e-12, 'xtol': 1e-12, 'maxiter': 2000, 'disp': True}
+                  )
+
+    #print(solution.x)
+    # Decision variables (solutions)
+    agg_pref.append(solution.x[0:k])
+
+    return agg_pref[0]
+
+# given a search direction from old CIP RO to new suggested point R1, evaluate point P using a cone model
+def eval_RP(R0, R1, P, a=0.5):
+    # calc dir vector.
+    D = R1 - R0
+    # constant of hyperplane going through P
+    cv = np.matmul(D, P)
+    # express as linear combination between R0 and R1
+    tv = (cv - np.matmul(D, R1)) / (np.matmul(D, R0)-np.matmul(D, R1))
+    # point B
+    B = (tv*R0+(1-tv)*R1)
+    # calculate direction vector V
+    V = P - B
+    #normalize vectros
+    D1 = D/np.sqrt(np.sum(D**2))
+    V1 = V/np.sqrt(np.sum(V**2))
+
+    #via tan beta, length of XB
+    lXB = np.sqrt(np.sum(V**2)) * a/(1-a)
+    # location of point X
+    X = B - lXB * D1
+    #print(X)
+    # all components of the eval_value should be the same
+    eval_value = (X-R0)/(R1-R0)
+    #print("eval_list",eval_value)
+    # return the first finite component.
+    eval_value = eval_value[np.isfinite(eval_value)][0]
+    return eval_value
