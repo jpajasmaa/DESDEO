@@ -377,6 +377,84 @@ def momip_ti2() -> Problem:
         objectives=[f_1, f_2],
     )
 
+# i don't know ideal and nadir
+def vechicle_crash() -> Problem:
+    r"""The crash safety design problem with 3 objectives.
+
+    Liao, X., Li, Q., Yang, X., Zhang, W. & Li, W. (2007).
+    Multiobjective optimization for crash safety design of vehicles
+    using stepwise regression model. Structural and multidisciplinary
+    optimization, 35(6), 561-569. https://doi.org/10.1007/s00158-007-0163-x
+
+    Arguments:
+        var_iv (np.array): Optional, initial variable values. Must be between
+            1 and 3. Defaults are [2, 2, 2, 2, 2].
+
+    Returns:
+        MOProblem: a problem object.
+    """
+
+    constants = [
+        # for f_1
+        Constant(name="f1c0", symbol="f1c0", value=1640.2823),
+        Constant(name="f1c1", symbol="f1c1", value=2.3573285),
+        Constant(name="f1c2", symbol="f1c2", value=2.3220035),
+        Constant(name="f1c3", symbol="f1c3", value=4.5688768),
+        Constant(name="f1c4", symbol="f1c4", value=7.7213633),
+        Constant(name="f1c5", symbol="f1c5", value=4.4559504),
+        # for f_2
+        Constant(name="f1c0", symbol="f1c0", value=6.5856),
+        Constant(name="f1c1", symbol="f1c1", value=2.3573285),
+        Constant(name="f1c2", symbol="f1c2", value=2.3220035),
+        Constant(name="f1c3", symbol="f1c3", value=4.5688768),
+        Constant(name="f1c4", symbol="f1c4", value=7.7213633),
+        Constant(name="f1c5", symbol="f1c5", value=4.4559504),
+    ]
+
+    x_1 = Variable(name="x_1", symbol="x_1", variable_type=VariableTypeEnum.real, lowerbound=1, upperbound=3)
+    x_2 = Variable(name="x_2", symbol="x_2", variable_type=VariableTypeEnum.real, lowerbound=1, upperbound=3)
+    x_3 = Variable(name="x_3", symbol="x_3", variable_type=VariableTypeEnum.real, lowerbound=1, upperbound=3)
+    x_4 = Variable(name="x_4", symbol="x_4", variable_type=VariableTypeEnum.real, lowerbound=1, upperbound=3)
+    x_5 = Variable(name="x_5", symbol="x_5", variable_type=VariableTypeEnum.real, lowerbound=1, upperbound=3)
+
+    f_1 = Objective(
+        name="f_1",
+        symbol="f_1",
+        func="f1c0 + f1c1 * x_1 + f1c2 * x_2  + f1c3 * x_3  + f1c4 * x_4  + f1c5 * x_5",
+        objective_type=ObjectiveTypeEnum.analytical,
+        ideal=-3,
+        nadir=3,
+        maximize=False,
+    )
+    f_2 = Objective(
+        name="f_2",
+        symbol="f_2",
+        func="-(x_2 + x_5)",
+        objective_type=ObjectiveTypeEnum.analytical,
+        ideal=3,
+        nadir=-3,
+        maximize=False,
+    )
+    f_3 = Objective(
+        name="f_3",
+        symbol="f_3",
+        func="x_3 + x_6",
+        objective_type=ObjectiveTypeEnum.analytical,
+        ideal=-3,
+        nadir=3,
+        maximize=False,
+    )
+
+
+    return Problem(
+        name="MOMIP Test Instance 7",
+        description="Test instance 17",
+        variables=[x_1, x_2, x_3, x_4, x_5],
+        #constraints=[con_1, con_2],
+        objectives=[f_1, f_2, f_3],
+    )
+    
+
 
 def momip_ti7() -> Problem:
     r"""Defines the mixed-integer multiobjective optimization problem test instance 7 (T7).
@@ -620,7 +698,7 @@ def dtlz2(n_variables: int, n_objectives: int) -> Problem:
                 func=f_m_expr,
                 maximize=False,
                 ideal=0,
-                nadir=2,  # Assuming the range of g and the trigonometric functions
+                nadir=2,
                 is_convex=False,
                 is_linear=False,
                 is_twice_differentiable=True,

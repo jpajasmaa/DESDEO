@@ -17,6 +17,7 @@ from desdeo.problem import (
 from desdeo.tools.generics import CreateSolverType, SolverResults
 from desdeo.tools.scalarization import (
     add_asf_generic_nondiff,
+    add_asf_nondiff,
     add_epsilon_constraints,
     add_lte_constraints,
     add_scalarization_function,
@@ -38,6 +39,7 @@ class NAUTILI_Response(BaseModel):
     reference_points: dict | None = Field(description="The reference point used in the step.")
     improvement_directions: dict | None = Field(description="The improvement directions for each DM.")
     group_improvement_direction: dict | None = Field(description="The group improvement direction.")
+    group_reference_point: dict | None = Field(description="The group reference point.")
     navigation_point: dict = Field(description="The navigation point used in the step.")
     reachable_solution: dict | None = Field(description="The reachable solution found in the step.")
     reachable_bounds: dict = Field(description="The reachable bounds found in the step.")
@@ -158,6 +160,7 @@ def solve_reachable_solution(
     # create and add scalarization function
     # previous_nav_point = objective_dict_to_numpy_array(problem, previous_nav_point).tolist()
     # weights = objective_dict_to_numpy_array(problem, group_improvement_direction).tolist()
+    
     problem_w_asf, target = add_asf_generic_nondiff(
         problem,
         symbol="asf",
@@ -165,6 +168,17 @@ def solve_reachable_solution(
         weights=group_improvement_direction,
         reference_in_aug=True,
     )
+    
+    # makes maxmincones better in some cases
+    """
+    problem_w_asf, target = add_asf_nondiff(
+        problem,
+        symbol="asf",
+        reference_point=group_improvement_direction,
+        #weights=group_improvement_direction,
+        reference_in_aug=True,
+    )
+    """
 
     # Note: We do not solve the global problem. Instead, we solve this constrained problem:
     const_exprs = [
@@ -203,6 +217,7 @@ def nautili_init(problem: Problem, create_solver: CreateSolverType | None = None
         reference_points=None,
         improvement_directions=None,
         group_improvement_direction=None,
+        group_reference_point=None,
         step_number=0,
     )
 
@@ -214,6 +229,7 @@ def nautili_step(  # NOQA: PLR0913
     nav_point: dict,
     create_solver: CreateSolverType | None = None,
     group_improvement_direction: dict | None = None,
+    group_reference_point: dict | None = None,
     reachable_solution: dict | None = None,
 ) -> NAUTILI_Response:
     if group_improvement_direction is None and reachable_solution is None:
@@ -228,9 +244,7 @@ def nautili_step(  # NOQA: PLR0913
 
     # update nav point
     new_nav_point = calculate_navigation_point(problem, nav_point, reachable_solution, steps_remaining)
-
     # update_bounds
-
     lower_bounds, upper_bounds = solve_reachable_bounds(problem, new_nav_point, create_solver=create_solver)
 
     distance = calculate_distance_to_front(problem, new_nav_point, reachable_solution)
@@ -241,6 +255,7 @@ def nautili_step(  # NOQA: PLR0913
         reference_points=None,
         improvement_directions=None,
         group_improvement_direction=group_improvement_direction,
+        group_reference_point=group_reference_point,
         navigation_point=new_nav_point,
         reachable_solution=reachable_solution,
         reachable_bounds={"lower_bounds": lower_bounds, "upper_bounds": upper_bounds},
@@ -297,22 +312,26 @@ def nautili_all_steps(
     if pref_agg_method == "mean":
         print(pref_agg_method)
         g_improvement_direction = np.mean(list(improvement_directions.values()), axis=0)
-    if pref_agg_method == "median":
-        print(pref_agg_method)
-        g_improvement_direction = np.median(list(improvement_directions.values()), axis=0)
+        # TODO mean does not work bc the added g_rp
+        # g_reference_point = np.mean(list(improvement_directions.values()), axis=0) # same for mean so it does not break!
+    #if pref_agg_method == "median":
+    #    print(pref_agg_method)
+    #    g_improvement_direction = np.median(list(improvement_directions.values()), axis=0)
     if pref_agg_method == "maxmin" or pref_agg_method == "maxmin_cones":
         print(pref_agg_method)
         nadir = get_nadir_dict(problem)
         ideal = get_ideal_dict(problem)
-        #k = len(ideal) #len(ideal.values) ? # n of objs
-        #q = 3 # n of DMs
-        # TODO: smarter way to get these
-        g_improvement_direction = aggregate(pref_agg_method, reference_points, nav_point_arr,
-            #k,q,
-            len(ideal), max(range(0, dm in reference_points)), # TODO: unncessary complex for number of DMs
-             ideal, nadir
-             )
-        #g_improvement_direction = aggregate("mean", improvement_directions, nav_point, nav_point_arr, None, None, None, None)
+        #print(reference_points)
+        #print("here")
+        g_reference_point = aggregate(pref_agg_method, reference_points, nav_point_arr,
+            len(ideal),
+            len(reference_points.keys()),
+            ideal, nadir
+            )
+        group_reference_point = {
+            obj.symbol: g_reference_point[i] for i, obj in enumerate(problem.objectives)
+        }
+        g_improvement_direction = nav_point_arr - g_reference_point
 
     group_improvement_direction = {
         obj.symbol: g_improvement_direction[i] for i, obj in enumerate(problem.objectives)
@@ -326,6 +345,7 @@ def nautili_all_steps(
                 step_number=step_number,
                 nav_point=nav_point,
                 group_improvement_direction=group_improvement_direction,
+                group_reference_point=group_reference_point,
                 create_solver=create_solver,
             )
             first_iteration = False
@@ -369,29 +389,30 @@ def aggregate(pref_agg_method: str,
 
     # TODO: HERE is aggre. TODO: make smarter. NOTE the different logic on the lists or dictionaries. Make own function.
 
-    g_improvement_direction = None
+    print(f"number of Objs:{k}, number of DMs:{q}")
+    group_reference_point = None
     rp_a = {}
     for key, p in reference_points.items():
         rp_a[key] = list(p.values())
     rp_arr = np.array(list(rp_a.values()))
     ideal = np.array(list(ideal.values()))
-    nadir = np.array(list(nadir.values()))
+    nadir = np.array(list(nadir.values())) #- np.array([1,1,1]) # TODO: remember to remove this
 
     if pref_agg_method == "maxmin":
         # TODO: get from the problem?
         #rp_arr = np.array([pref[1] for pref in reference_points.items()])
         group_pref = agg_maxmin(rp_arr, nav_point_arr, k, q, ideal, nadir)
-        print(group_pref)
-        g_improvement_direction = nav_point_arr - group_pref
+        print("group RP", group_pref) # nav_point_arr - group_pref
+        group_reference_point = group_pref
 
     if pref_agg_method == "maxmin_cones":
         # TODO:
         #rp_arr = np.array([pref[1] for pref in reference_points.items()])
         group_pref = agg_maxmin_cones(rp_arr, nav_point_arr, k, q, ideal, nadir)
-        print(group_pref)
-        g_improvement_direction = nav_point_arr - group_pref
+        print(group_pref) # nav_point_arr - group_pref
+        group_reference_point = group_pref
 
-    return g_improvement_direction
+    return group_reference_point
 
 # TODO: rename all
 def agg_maxmin(agg, cip, k, q, ideal, nadir):
@@ -405,6 +426,7 @@ def agg_maxmin(agg, cip, k, q, ideal, nadir):
     # bounds for objectives and DMs
     # TODO: Need to make smarter for bounds to consider if obj is maximized. now assumes minimization. Also prob wrong place for the bounds.
     i = 0
+    
     for _ in range(k+q+1):
         if i < k:
             # dumb way of converting max to min for scipy
@@ -419,7 +441,8 @@ def agg_maxmin(agg, cip, k, q, ideal, nadir):
             i += 1
         print("boiunds",b)
         bnds.append(b)
-
+    
+    # bnds = [(0,1), (0,1), (0,1), (0,1)]
     # create X of first iteration guess
     X = np.zeros(k+q+1) # last number (alpha, the param to maximize) can stay as zero change the rest
     # Fill first guess for RP taking max from the DMs
@@ -461,11 +484,11 @@ def agg_maxmin(agg, cip, k, q, ideal, nadir):
 
     from scipy.optimize import minimize
     solution = minimize(fx,
-                  X, 
+                  X,
                   method = 'trust-constr',
                   bounds = bnds,
                   constraints = Cons,
-                  options={'gtol': 1e-12, 'xtol': 1e-12, 'maxiter': 2000, 'disp': True}
+                  options={'gtol': 1e-12, 'maxiter': 2000, 'disp': True}
                   )
 
     # Decision variables (solutions)
@@ -533,7 +556,7 @@ def agg_maxmin_cones(agg, cip, k, q, ideal, nadir):
                   method = 'trust-constr',
                   bounds = bnds,
                   constraints = Cons,
-                  options={'gtol': 1e-12, 'xtol': 1e-12, 'maxiter': 2000, 'disp': True}
+                  options={'gtol': 1e-12, 'maxiter': 2000, 'disp': True}
                   )
 
     #print(solution.x)
@@ -567,5 +590,52 @@ def eval_RP(R0, R1, P, a=0.5):
     eval_value = (X-R0)/(R1-R0)
     #print("eval_list",eval_value)
     # return the first finite component.
-    eval_value = eval_value[np.isfinite(eval_value)][0]
-    return eval_value
+    eval_value2 = eval_value[np.isfinite(eval_value)][0]
+    return eval_value2
+
+
+if __name__=="__main__":
+    from desdeo.problem import (
+    binh_and_korn,
+    momip_ti7,
+    objective_dict_to_numpy_array,
+    river_pollution_problem,
+    get_nadir_dict,
+    get_ideal_dict,
+    dtlz2,
+    #variable_dict_to_numpy_array,
+    objective_dict_to_numpy_array
+    )
+    from desdeo.tools import (
+        BonminOptions,
+        NevergradGenericOptions,
+        NevergradGenericSolver,
+        PyomoBonminSolver,
+        ScipyMinimizeSolver,
+    )
+
+    problem = dtlz2(10,3)
+    nadir = get_nadir_dict(problem)
+    ideal = get_ideal_dict(problem)
+    total_steps = 5
+    pref_agg_method="maxmin_cones"
+    DMs = 3
+
+    initial_response = nautili_init(problem)
+    rps = {
+    "DM1": {"f_1": 0.5, "f_2": 0.8, "f_3": 0.8},
+    "DM2": {"f_1": 0.5, "f_2": 0.8, "f_3": 0.8},
+    "DM3": {"f_1": 0.8, "f_2": 0.8, "f_3": 0.5},
+    }
+    all_resp = nautili_all_steps(
+        problem,
+        total_steps,
+        rps,
+        [initial_response], # Note that this is a list of NAUTILUS_Response objects
+        pref_agg_method=pref_agg_method, # used pref agg method
+    )
+    #print(all_resp)
+    print(all_resp[-1].reference_points)
+    print(all_resp[-1].group_improvement_direction)
+    print(all_resp[-1].navigation_point)
+    print("reachable solution:", all_resp[-1].reachable_solution)
