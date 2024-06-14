@@ -439,6 +439,48 @@ def nautili_all_steps(
         group_reference_point = {
             obj.symbol: g_reference_point[i] for i, obj in enumerate(problem.objectives)
         } 
+    if pref_agg_method == "eq_mean":
+        for dm in improvement_directions:
+            dict_impr = numpy_array_to_objective_dict(problem, improvement_directions[dm])
+            opt_result = solve_reachable_solution(problem, dict_impr, nav_point)
+            reachable_solution = opt_result.optimal_objectives
+            improvement_directions[dm] = objective_dict_to_numpy_array(problem, reachable_solution)
+        #print(improvement_directions)
+        #print(pref_agg_method)
+        g_reference_point = np.mean(list(improvement_directions.values()), axis=0)
+        g_improvement_direction = nav_point_arr - g_reference_point
+        #nav_point_arr - g_improvement_direction
+        group_reference_point = {
+            obj.symbol: g_reference_point[i] for i, obj in enumerate(problem.objectives)
+        } 
+    # This should work currently.
+    if pref_agg_method == "eq_maxmin" or pref_agg_method == "eq_maxmin_cones":
+        print(pref_agg_method)
+        nadir = get_nadir_dict(problem)
+        ideal = get_ideal_dict(problem)
+        # use improvmenet directions because we are solving the problem for each DM
+        for dm in improvement_directions:
+            dict_impr = numpy_array_to_objective_dict(problem, improvement_directions[dm])
+            opt_result = solve_reachable_solution(problem, dict_impr, nav_point)
+            reachable_solution = opt_result.optimal_objectives
+            # reachable solution is set to improvement directions object as A RP for that DM.
+            improvement_directions[dm] = reachable_solution #- nav_point
+            #improvement_directions[dm] = objective_dict_to_numpy_array(problem, reachable_solution) - nav_point_arr
+        # here they are now converted back to RPS
+        reference_points = improvement_directions
+
+        # solve maxmin normally, againg improvmenet directions contain the reference points
+        g_reference_point = aggregate(pref_agg_method, reference_points, nav_point_arr,
+            len(ideal),
+            len(reference_points.keys()), # get number of DMs
+            ideal, nadir
+            )
+        group_reference_point = {
+            obj.symbol: g_reference_point[i] for i, obj in enumerate(problem.objectives)
+        }
+        g_improvement_direction = nav_point_arr - g_reference_point
+
+    
     if pref_agg_method == "maxmin" or pref_agg_method == "maxmin_cones":
         print(pref_agg_method)
         nadir = get_nadir_dict(problem)
@@ -520,14 +562,14 @@ def aggregate(pref_agg_method: str,
     ideal = np.array(list(ideal.values()))
     nadir = np.array(list(nadir.values())) 
 
-    if pref_agg_method == "maxmin":
+    if pref_agg_method == "maxmin" or pref_agg_method == "eq_maxmin":
         # TODO: get from the problem?
         #rp_arr = np.array([pref[1] for pref in reference_points.items()])
         group_pref = agg_maxmin(rp_arr, nav_point_arr, k, q, ideal, nadir)
         print("group RP", group_pref) # nav_point_arr - group_pref
         group_reference_point = group_pref
 
-    if pref_agg_method == "maxmin_cones":
+    if pref_agg_method == "maxmin_cones" or pref_agg_method == "eq_maxmin_cones":
         # TODO:
         #rp_arr = np.array([pref[1] for pref in reference_points.items()])
         group_pref = agg_maxmin_cones(rp_arr, nav_point_arr, k, q, ideal, nadir)
@@ -566,11 +608,13 @@ def agg_maxmin(agg, cip, k, q, ideal, nadir):
     """
         #bnds.append(b)
     
-    for _ in range(k+1):
-        bnds.append((-np.inf,np.inf))
+    for _ in range(k):
+        #bnds.append((-np.inf,np.inf))
+        bnds.append((0,1)) # only for dtlz2
 
     for _ in range(k, k+q):
         bnds.append((0,1))
+    bnds.append((0,10000))
 
     # bnds = [(0,1), (0,1), (0,1), (0,1)]
     # create X of first iteration guess
@@ -584,16 +628,32 @@ def agg_maxmin(agg, cip, k, q, ideal, nadir):
     for qk in range(q):
         X[k+qk] = 1/q
 
+    X[alpha] = 1
     # constraints for feasible space
-    def feas_space_const(X, k, q, i): #X!!
-        return lambda X: (sum([X[k+j]*agg[j,i] for j in range(q)]) - X[i])
+    def feas_space_const(X, k, q, i, agg): #X!!
+        return lambda X: sum([X[k+j]*agg[j,i] for j in range(q)]) - X[i]
+
+    # p = r1 DM's suggested point,
+    # c = r0, current iteration point
+    # r = R, suggested group point. 
+    def maxmin_crit(p, c, r):
+        return np.sum((p - c)*r)
 
     # constraints for DMs S
-    def DMconstr(X, j, k):
+    def DMconstr(X, q, k, agg, cip):
         # alpha - S_4(R) <= 0
         # R x[:alpha]*agg[j, :] for j in range(q) 
         # equ 4
-        return lambda X: X[alpha] - sum((agg[j,i] - cip[i])*X[i] for i in range(k))
+        #print("val", X[j], sum((agg[j,i] - cip[i])*X[i] for i in range(k)))
+        print("vals",[maxmin_crit(agg[j,:], cip, X[:k]) for j in range(q)] )
+        # i am taking the wrong min, I need to take the min of the UTItILIES of DMS not fro each point individually
+        
+        # anna pelkät vektorit !!!
+        return lambda X: X[alpha] - np.min([maxmin_crit(agg[j,:], cip, X[:k]) for j in range(q)] )
+
+        #return lambda X: X[alpha] - np.min([(agg[j,i] - cip[i])*X[i] for i in range(k) for j in range(q)]) 
+        
+        #return lambda X: X[alpha] - sum((agg[j,i] - cip[i])*X[i] for i in range(k)) # TODO: this is the only different thing, so should be able to just combine the functions of maxmin and maxmmin cones
         #sum(X[i]*agg[j, :] for i in range(k) ) # Make to do exactly what equ4 says, mka new func as constra. that can take this function,
         #return lambda X: X[alpha] - sum(X[i]*agg[j, :] for i in range(nDMs))
         #return lambda X: X[alpha] - (sum([X[j]*agg[j,i] for j in range(q)]) - X[i]) #- sum((agg[j,i] - cip[i])*X[i] for i in range(k))
@@ -601,35 +661,39 @@ def agg_maxmin(agg, cip, k, q, ideal, nadir):
     # Create constraints
     Cons = []
     for i in range(k):
-        Cons.append({'type':'eq', 'fun' : feas_space_const(X, k, q, i)})
+        Cons.append({'type':'eq', 'fun' : feas_space_const(X, k, q, i, agg)})
 
-    for j in range(q):
-        Cons.append({'type':'ineq', 'fun' : DMconstr(X, j, k)})
+    # inequality mean in scipy that has to be NONNEGATIVE
+    Cons.append({'type':'ineq', 'fun' : DMconstr(X, q, k, agg, cip)})
+    #for j in range(q):
+        #Cons.append({'type':'ineq', 'fun' : DMconstr(X, j, k, agg, cip)})
 
     # Convex constraint
     def constraint5(X):
         # sum_{r=1}^4(lambda_r) - 1 = 0
-        return sum(X[:alpha]) - 1
+        return sum(X[k:k+q]) - 1
 
     con5 ={'type':'eq', 'fun':constraint5}
     Cons.append(con5)
 
     # The s_m(R) for all DMs
     def fx(X):
-        return -1*X[alpha] #+ sum((agg[j,i] - cip[i])*X[i] for i in range(k) for j in range(q)) #max alpha
-
+        #return -1*X[alpha]  
+        return -1*X[alpha]-np.min([maxmin_crit(agg[j,:], cip, X[:k]) for j in range(q)] )
+        #return -1* sum((agg[j,i] - cip[i])*X[i] for i in range(k) for j in range(q))
+        
     from scipy.optimize import minimize
     solution = minimize(fx,
                   X,
-                  method = 'SLSQP',
+                  #method = 'SLSQP',
                   bounds = bnds,
                   constraints = Cons,
-                  options={'ftol': 1e-20, 'eps':1e-10,'maxiter': 5000, 'disp': True}
-                  #method = 'trust-constr',
+                  #options={'ftol': 1e-20, 'eps':1e-10,'maxiter': 10000, 'disp': True}
+                  method = 'trust-constr',
                   #bounds = bnds,
                   #constraints = Cons,
                   #hess = lambda x: np.zeros_like(X),
-                  #options={'gtol': 1e-12, 'maxiter': 5000, 'disp': True}
+                  options={'xtol': 1e-20, 'gtol': 1e-20, 'maxiter': 10000, 'disp': True}
                   )
 
     # Decision variables (solutions)
@@ -667,54 +731,47 @@ def agg_maxmin_cones(agg, cip, k, q, ideal, nadir):
         bnds.append(b)
     """
     for _ in range(k):
-        bnds.append((-np.inf,np.inf))
+        #bnds.append((-np.inf,np.inf))
+        bnds.append((0,1)) # only for dtlz2
 
     for _ in range(k, k+q):
         bnds.append((0,1))
-    bnds.append((-np.inf,np.inf)) # aplha can be anyhing
+    bnds.append((0,10000))
+    #bnds.append((-np.inf,np.inf)) # aplha can be anyhing
     print(bnds)
     
     # create X of first iteration guess
     X = np.zeros(k+q+1) # last number (alpha, the param to maximize) can stay as zero change the rest
-    # Fill first guess for RP taking max from the DMs
+    X[alpha] = 1 # set alpha to 1 for some reason at begining
+    # Fill first guess for RP taking mean from all the RPs
     for i in range(k):
         X[i] = np.mean(agg[:,i])
 
-    # Calculate the weights for DMs
+    # Set the starting weights for DMs
     for qk in range(q):
         X[k+qk] = 1/q
 
     # constraints for feasible space
     def feas_space_const(X, k, q, i):
-        return lambda X: (sum([X[k+j]*agg[j,i] for j in range(q)]) - X[i])
+        return lambda X: sum([X[k+j]*agg[j,i] for j in range(q)]) - X[i]
 
-    # constraints for DMs S
-    def DMconstr(X,j, k):
+    # constraints for DMs S.. TODO: DO I need these anmyore CHECK
+    def DMconstr(X, q, k, cip, agg):
         # w - S_1(R) <= 0
-        return lambda X: X[alpha] - eval_RP(cip, agg[j,:], X[:k]) # why seems to work better with +
-        #return lambda X: (1/q) - eval_RP(cip, agg[j,:], X[:k])
-        #return lambda X: X[k+j] - eval_RP(cip, agg[j,:], X[:k]) - (1/q)
+        # alpha - (-max(eval_RP))
+        print("vals:", [eval_RP(cip, agg[j,:], X[:k]) for j in range(q)])
+        return lambda X: X[alpha] + np.max([eval_RP(cip, agg[j,:], X[:k]) for j in range(q)])
+        #return lambda X: X[alpha] + eval_RP(cip, agg[q,:], X[:k]) # same result whether we get the max of all DMs or individually.
 
-
-    # TODO: make this is correct
-    def weight_pos(X, i, k):
-        # dm weight => 0
-        return lambda X: X[k+j] - X[k+j]
-
-    # should not use unless really have to.
-    def eval_rp_constr(X,j,q):
-        # DM weights should be the same
-        # current weight - /1/q) = 0
-        return lambda X: (2/q) - X[k+j] 
-        #return lambda X: X[k+j] - (2/q)
 
     # Create constraints
     Cons = []
     for i in range(k):
         Cons.append({'type':'eq', 'fun' : feas_space_const(X,k, q, i)})
-        
-    for j in range(q):
-        Cons.append({'type':'ineq', 'fun' : DMconstr(X,j,k)})
+    
+    Cons.append({'type':'ineq', 'fun' : DMconstr(X,q,k, cip, agg)})
+    #for j in range(q):
+    #    Cons.append({'type':'ineq', 'fun' : DMconstr(X,j,k, cip, agg)})
         #Cons.append({'type':'ineq', 'fun' : weight_pos(X,j,k)})
         #Cons.append({'type':'ineq', 'fun': eval_rp_constr(X,j,q)})
 
@@ -727,20 +784,21 @@ def agg_maxmin_cones(agg, cip, k, q, ideal, nadir):
     Cons.append(con5)
 
     # The s_m(R) for all DMs
-    def fx(X):
-        return -1*X[alpha] # - np.min([eval_RP(cip, agg[j,:], X[:k]) for j in range(q)])#max alpha
+    def fx(X): # , cip, agg, k, q DO I need these?
+        # if I change this sign to -, it works for case 1. But then in the second part of case 1, it seems not to work properly
+        return -1*X[alpha] + np.max([eval_RP(cip, agg[j,:], X[:k]) for j in range(q)])
 
     print(X.shape)
     from scipy.optimize import minimize
     solution = minimize(fx,
                   X, 
-                  #method = 'trust-constr',
-                  method = 'SLSQP',
+                  method = 'trust-constr', # which is better, ofcourse they bring different solutions.
+                  #method = 'SLSQP',
                   bounds = bnds,
                   constraints = Cons,
                   #hess = lambda x: np.zeros_like(X),
-                  options={'ftol': 1e-20, 'eps':1e-10,'maxiter': 5000, 'disp': True}
-                  #options={'xtol': 1e-20,'gtol': 1e-20, 'barrier_tol': 1e-12,'maxiter': 5000, 'disp': True}
+                  #options={'ftol': 1e-20, 'eps':1e-10,'maxiter': 10000, 'disp': True}
+                  options={'xtol': 1e-20,'gtol': 1e-20, 'maxiter': 10000, 'disp': True}
                   )
 
     print(solution.x)
@@ -777,7 +835,7 @@ def eval_RP(R0, R1, P, a=0.5):
     #print("eval_values\r\n", eval_value)
     eval_value2 = eval_value[np.isfinite(eval_value)][0]
     #print(eval_value2)
-    return eval_value2
+    return eval_value2 #* (-1) # TODO: note this !! check if it workds but WHY?
 
 # TODO: update to consider all objs and DMs.
 def df_from_responses(all_resp, ndms):
@@ -923,7 +981,7 @@ def visualize_3d(filename, all_resp, ndms):
 
     df = df_from_responses(all_resp, ndms)
     # TODO: change this when changing the task
-    df.to_csv(f"results/dtlz2/{filename}.csv")
+    #df.to_csv(f"results/dtlz2/{filename}.csv")
     visu_ideal = [0,0,0]
     visu_nadir = [1,1,1]
 
@@ -942,7 +1000,7 @@ def visualize_3d(filename, all_resp, ndms):
     animation_frame=f"step_n",
     )
     fig3.show()
-    fig3.write_html(f"results/dtlz2/{filename}.html")
+    #fig3.write_html(f"results/dtlz2/{filename}.html")
 
 def test_binhkorn():
     problem = binh_and_korn()
@@ -954,16 +1012,16 @@ def test_binhkorn():
     total_steps = 5
     #steps_remaining = 1
     ## take a step back
-    pref_agg_method="maxmin_cones"
+    pref_agg_method="maxmin"
     DMs = 5
 
     initial_response = nautili_init(problem)
     rps= {
-    "DM1": {"f_1": 50, "f_2": 30 }, # dm1 and dm2 prefer f1
-    "DM2": {"f_1": 50, "f_2": 30 },
-    "DM3": {"f_1": 50, "f_2": 30 },
-    "DM4": {"f_1": 0.3, "f_2": 0.3, },
-    "DM5": {"f_1": 50, "f_2": 30 },
+    "DM1": {"f_1": 100, "f_2": 30 }, # dm1 and dm2 prefer f1
+    "DM2": {"f_1": 100, "f_2": 30 },
+    "DM3": {"f_1": 100, "f_2": 30 },
+    "DM4": {"f_1": 30, "f_2": 50, },
+    "DM5": {"f_1": 30, "f_2": 50 },
     }
     all_resp = nautili_all_steps(
         problem,
@@ -980,44 +1038,42 @@ def test_binhkorn():
 
     visualize_2d("binhtestmaxmin_cones", all_resp, DMs)
 
-def test_dltz2_stepat3(prefs1, prefs2):
+def test_dltz2_stepat3(prefs1, prefs2, pref_agg_methods, M, case):
     problem = dtlz2(10,3)
     nadir = get_nadir_dict(problem)
     ideal = get_ideal_dict(problem)
     total_steps = 5
-    # TODO: change these
-    pref_agg_method="maxmin_cones"
-    testname="4C6D2test"
-    DMs = 4
+    testnames= [f"{M}_DTLZ2_{case}_{pa}" for pa in pref_agg_methods]
 
-    initial_response = nautili_init(problem)
+    for idx, pref_agg_method in enumerate(pref_agg_methods):
+        initial_response = nautili_init(problem)
 
-    all_resp = nautili_all_steps(
-        problem,
-        total_steps,
-        prefs1,
-        [initial_response], 
-        pref_agg_method=pref_agg_method, 
-    )
-    # to go to back to step 3
-    stepback_resp = all_resp[:3]
+        all_resp = nautili_all_steps(
+            problem,
+            total_steps,
+            prefs1,
+            [initial_response], 
+            pref_agg_method=pref_agg_method, 
+        )
+        # to go to back to step 3
+        stepback_resp = all_resp[:3]
 
-    all_resp2 = nautili_all_steps(
-        problem,
-        2,
-        prefs2,
-        stepback_resp, 
-        pref_agg_method=pref_agg_method, 
-    )
-    # append to stepback_resp
-    for item in all_resp2:
-        print(item)
-        stepback_resp.append(item)
+        all_resp2 = nautili_all_steps(
+            problem,
+            2,
+            prefs2,
+            stepback_resp, 
+            pref_agg_method=pref_agg_method, 
+        )
+        # append to stepback_resp
+        for item in all_resp2:
+            #print(item)
+            stepback_resp.append(item)
 
-    # visualize and save results
-    visualize_3d(testname, stepback_resp, DMs)
-    s = objective_dict_to_numpy_array(problem, stepback_resp[-1].reachable_solution)
-    print(check_PO(s))
+        # visualize and save results
+        visualize_3d(testnames[idx], stepback_resp, DMs)
+        s = objective_dict_to_numpy_array(problem, stepback_resp[-1].reachable_solution)
+        print(check_PO(s))
 
 ## works now
 def test_binhkorn_stepbystep():
@@ -1028,16 +1084,16 @@ def test_binhkorn_stepbystep():
     #steps_remaining = 1
     ## take a step back
     pref_agg_method="maxmin_cones"
-    testname="3C4BKMtest"
-    DMs = 5
+    testname="3C4BKC"
+    DMs = 3
 
     initial_response = nautili_init(problem)
     rps= {
-    "DM1": {"f_1": 10, "f_2": 25 }, # dm1 and dm2 prefer f1
-    "DM2": {"f_1": 10, "f_2": 25 }, # dm1 and dm2 prefer f1
-    "DM3": {"f_1": 10, "f_2": 25 }, # dm1 and dm2 prefer f1
-    "DM4": {"f_1": 10, "f_2": 25 }, # dm1 and dm2 prefer f1
-    "DM5": {"f_1": 50, "f_2": 3},
+    "DM1": {"f_1": 1, "f_2": 3 },
+    "DM2": {"f_1": 5, "f_2": 1 },
+    "DM3": {"f_1": 50, "f_2": 30},
+    #"DM4": {"f_1": 10, "f_2": 25 }, # dm1 and dm2 prefer f1
+    #"DM5": {"f_1": 50, "f_2": 3},
     #"DM4": {"f_1": 0.3, "f_2": 0.3, },
     #"DM5": {"f_1": 23, "f_2": 35, },
     }
@@ -1048,20 +1104,15 @@ def test_binhkorn_stepbystep():
         [initial_response], # Note that this is a list of NAUTILUS_Response objects
         pref_agg_method=pref_agg_method, # used pref agg method
     )
-    #print(all_resp)
-    #print(all_resp[-1].reference_points)
-    #print(all_resp[-1].group_improvement_direction)
-    #print(all_resp[-1].navigation_point)
-    #print("reachable solution:", all_resp[-1].reachable_solution)
 
-    #print("I am here")
     ## DMs change prefs at step 3
     rps2= {
-    "DM1": {"f_1": 10, "f_2": 25 }, # dm1 and dm2 prefer f1
-    "DM2": {"f_1": 10, "f_2": 25 }, # dm1 and dm2 prefer f1
-    "DM3": {"f_1": 10, "f_2": 25 }, # dm1 and dm2 prefer f1
-    "DM4": {"f_1": 10, "f_2": 25 }, # dm1 and dm2 prefer f1
-    "DM5": {"f_1": 50, "f_2": 13},
+    "DM1": {"f_1": 1, "f_2": 3 },
+    "DM2": {"f_1": 5, "f_2": 1 },
+    "DM3": {"f_1": 30, "f_2": 20},
+
+    #"DM4": {"f_1": 10, "f_2": 25 }, # dm1 and dm2 prefer f1
+    #"DM5": {"f_1": 50, "f_2": 13},
     #"DM4": {"f_1": 3, "f_2": 3, },
     #"DM5": {"f_1": 23, "f_2": 25, },
     }
@@ -1193,8 +1244,6 @@ if __name__=="__main__":
     #test_binhkorn_stepbystep()
     #test_binhkorn()
 
-    
-    
     p1 = {
     "DM1": {"f_1": 0.1, "f_2": 0.1, "f_3": 0.1}, 
     "DM2": {"f_1": 0.6, "f_2": 0.6, "f_3": 0.6},
@@ -1207,10 +1256,15 @@ if __name__=="__main__":
     "DM3": {"f_1": 0.6, "f_2": 0.7, "f_3": 0.7},
     "DM4": {"f_1": 0.15, "f_2": 0.65, "f_3": 0.65},
     }
-    test_dltz2_stepat3(p1, p2)
+
     
+    #pref_agg_methods=["mean", "maxmin","maxmin_cones", "eq_mean", "eq_maxmin", "eq_maxmin_cones"]
+    pref_agg_methods=[ "maxmin","maxmin_cones"]
+    DMs = 4
+    test_dltz2_stepat3(p1, p2, pref_agg_methods, DMs, "c1test")
     """
-    problem = dtlz5(10,3)
+    
+    problem = dtlz2(10,3)
     nadir = get_nadir_dict(problem)
     ideal = get_ideal_dict(problem)
     total_steps = 3
@@ -1246,5 +1300,5 @@ if __name__=="__main__":
     print(check_PO(s))
  
 
-    visualize_3d("dtlz5test", all_resp, DMs)
+    visualize_3d("dtlz2test", all_resp, DMs)
     """
