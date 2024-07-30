@@ -647,7 +647,7 @@ def dtlz2(n_variables: int, n_objectives: int) -> Problem:
                 func=f_m_expr,
                 maximize=False,
                 ideal=0,
-                nadir=2,  # Assuming the range of g and the trigonometric functions
+                nadir=1, 
                 is_convex=False,
                 is_linear=False,
                 is_twice_differentiable=True,
