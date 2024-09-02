@@ -70,8 +70,7 @@ def find_GRP(prefs, cip, k, q, ideal, nadir, pref_agg_method):
             all_s_m = [maxmin_cones_criteria(cip, prefs[j,:], X[:k]) for j in range(q)]
             #print(all_s_m)
             s_m = -np.max(all_s_m)
-            return -1*s_m # convert for scipy minimize or not? Again sometimes acts more like expected with -1* sometimes without.
-            #return s_m
+            return s_m # convert for scipy minimize or not? Again sometimes acts more like expected with -1* sometimes without.
 
     solution = minimize(fx,
         X,
