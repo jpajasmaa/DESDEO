@@ -13,11 +13,12 @@ import matplotlib.pyplot as plt
 from pymoo.problems import get_problem
 from pymoo.util.plotting import plot
 
+import plotly
 import plotly.express as px
     
 import pandas as pd
 
-import plotly.io as pio   
+import plotly.io as pio 
 pio.kaleido.scope.mathjax = None
 
 
@@ -93,7 +94,6 @@ def test_add_group_stom_diff(problem: Problem, GRP: dict[str, float], prefs: lis
     #create_solver = guess_best_solver(problem_w_group_sf)
     #group_solver = create_solver(problem_w_group_sf)
     group_solver = PyomoIpoptSolver(problem_w_group_sf)
-
     res_group = group_solver.solve(group_sf)
     gxs = res_group.optimal_variables
     gfs = res_group.optimal_objectives
@@ -122,19 +122,39 @@ def test_group_scalas(problem: Problem, rps: list[dict[str, float]] , pa: str):
     #cip = np.array(np.amax(rp_arr, axis=0))
     print(cip)
 
+    ind_sols = []
+    # TODO: find PO for each DM RP, for now only for asf, plotting mess 
+    for rp in range(len(rp_arr)):
+        # should convert numpy array (rp) of dm to dict.
+        dm_rp = numpy_array_to_objective_dict(problem, rp_arr[rp]) 
+        p, target = add_asf_diff(problem, f"target{rp}", dm_rp)
+
+        # for 1 RP
+        solver = PyomoIpoptSolver(p)
+        res = solver.solve(target)
+        xs = res.optimal_variables
+        fs = res.optimal_objectives
+        #print(fs)
+        ind_sols.append(fs)
+
+    # TODO: give ind_sols to group scalas. Can use existing stuff, but do not remove the functionality of GRP so just repeat and comment.
+
     # find GRP, returns np.array
     grp2 = find_GRP(rp_arr, cip, k, q, ideal, nadir, pa)
     # make dict from the GPR array
     GRP = {"f_1": grp2[0], "f_2": grp2[1]}
 
-    asf, group_asf_sol = test_add_group_asf_diff(problem, GRP, all_prefs)
-    guess, group_guess_sol = test_add_group_guess_diff(problem, GRP, all_prefs)
-    stom, group_stom_sol = test_add_group_stom_diff(problem, GRP, all_prefs)
+    asf, group_asf_sol = test_add_group_asf_diff(problem, GRP, all_prefs) #just ignore GRP for now..s
+    asf2, group_asf_sol2 = test_add_group_asf_diff(problem, GRP, ind_sols)
+    #guess, group_guess_sol = test_add_group_guess_diff(problem, GRP, all_prefs)
+    #stom, group_stom_sol = test_add_group_stom_diff(problem, GRP, all_prefs)
 
-    solutions = [asf, group_asf_sol, guess, group_guess_sol, stom, group_stom_sol]
+    solutions = [group_asf_sol,  group_asf_sol2, ind_sols[0], ind_sols[1], ind_sols[2]] # TODO: add all
+    #solutions = [asf, group_asf_sol, guess, group_guess_sol, stom, group_stom_sol, ind_sols[0], ind_sols[1], ind_sols[2]] # TODO: add all
 
     keys = ["f_1", "f_2"]
-    namelist = ["asf", "g_asf", "guess", "g_guess", "stom", "g_stom"]
+    namelist = ["g_asf", "g_asf2", "indsol1", "indsol2", "indsol3"]
+    # namelist = ["asf", "g_asf", "guess", "g_guess", "stom", "g_stom", "indsol1", "indsol2", "indsol3"]
    
     all_solutions = {
         "f_1": [s["f_1"] for s in solutions],
@@ -170,6 +190,8 @@ def test_group_scalas(problem: Problem, rps: list[dict[str, float]] , pa: str):
     #fig.add_scatter(all_solutions, x="f_1", y="f_2", mode="markers", name="ASF",showlegend=True)
     #fig.add_traces(all_solutions)
     fig.update_traces(marker=dict(size=15))
+    fig.write_image("e1.pdf", width=600, height=600)
+    fig.write_html("e1.html")
     fig.show()  
 
 
@@ -447,13 +469,36 @@ def agg_rps_test_eq(problem: Problem, rps: list[dict[str, float]], cip):
 
     all_prefs = rps # !! is assumed to be list or smh in test_add_group_asf_diff jne
     # convert all_prefs to numpy array for find_GRP or find GRP should handle dictionaries.. which makes more sense TODO
-    #rp_arr = np.array([[col["f_1"], col["f_2"]] for col in rps])
+    rp_arr = np.array([[col["f_1"], col["f_2"]] for col in rps])
     #cip = np.array(np.amax(rp_arr, axis=0))
     print(cip)
 
     # EQ VARIANTS
     # SOLVE FOR ALL DMS
-    converted_prefs = {}
+
+    converted_prefs = []
+    # TODO: find PO for each DM RP, for now only for asf, plotting mess 
+    for rp in range(len(rp_arr)):
+        dm_rp = cip - rp_arr[rp] # convert to improvement direction
+        # should convert numpy array (rp) of dm to dict.
+        dm_rp = numpy_array_to_objective_dict(problem, dm_rp) 
+        #p, target = add_asf_diff(problem, f"target{rp}", dm_rp)
+        p, target = add_asf_generic_diff( # use nondiff as default like in nautili
+            problem,
+            symbol=f"asf{rp}",
+            reference_point=cip_dict,
+            weights=dm_rp,
+            reference_point_aug=cip_dict,
+         )
+        # for 1 RP
+        solver = PyomoIpoptSolver(p)
+        res = solver.solve(target)
+        xs = res.optimal_variables
+        fs = res.optimal_objectives
+        #print(fs)
+        converted_prefs.append(fs)
+
+    """
     for d in all_prefs:
 
         problem_w_asf, target = add_asf_generic_diff( # use nondiff as default like in nautili
@@ -469,8 +514,8 @@ def agg_rps_test_eq(problem: Problem, rps: list[dict[str, float]], cip):
         fs = res.optimal_objectives
         print(fs)
         converted_prefs.merge(fs) 
+    """
 
-    print("here")
     print(converted_prefs)
 
     conv_rp_arr = np.array([[col["f_1"], col["f_2"]] for col in converted_prefs])
@@ -494,7 +539,6 @@ def agg_rps_test_eq(problem: Problem, rps: list[dict[str, float]], cip):
     """
 
     # TODO: MEAN
-
 
     problem_w_asf, target = add_asf_generic_diff( # use nondiff as default like in nautili
         problem,
@@ -558,11 +602,11 @@ def agg_rps_test_eq(problem: Problem, rps: list[dict[str, float]], cip):
     # plot RPs
     for i in range(len(rp_arr)):
         fig.add_scatter(x=[rp_arr[i][0]], y=[rp_arr[i][1]], mode="markers", name=f"DM{i+1}_RP",showlegend=True, marker=dict(size=10, symbol="x"))
-        fig.add_scatter(x=[conv_rp_arr[i][0]], y=[rp_arr[i][1]], mode="markers", name=f"converted DM{i+1}_RP",showlegend=True, marker=dict(size=15, symbol="X"))
+        fig.add_scatter(x=[conv_rp_arr[i][0]], y=[conv_rp_arr[i][1]], mode="markers", name=f"converted DM{i+1}_RP",showlegend=True, marker=dict(size=15, symbol="hexagram"))
 
     # PLOT GRP 
-    fig.add_scatter(x=[grpmm[0]], y=[grpmm[1]], mode="markers", name="GRP_mm",showlegend=True, marker=dict(size=15, symbol="diamond-tall")) 
-    fig.add_scatter(x=[grpcones[0]], y=[grpcones[1]], mode="markers", name="GRP-cones",showlegend=True, marker=dict(size=15, symbol="diamond-wide")) 
+    fig.add_scatter(x=[grpmm[0]], y=[grpmm[1]], mode="markers", name="PO-GRP_mm",showlegend=True, marker=dict(size=15, symbol="diamond-tall")) 
+    fig.add_scatter(x=[grpcones[0]], y=[grpcones[1]], mode="markers", name="PO-GRP-cones",showlegend=True, marker=dict(size=15, symbol="diamond-wide")) 
     #fig.update_traces(marker=dict(size=15, symbol="x"))
     #fig.update_traces(marker=dict(size=15, symbol="star"))
     #fig.update_traces(marker=dict(size=15))
@@ -579,9 +623,9 @@ def agg_rps_test_eq(problem: Problem, rps: list[dict[str, float]], cip):
 
     #lines to show the polyhedron
     #fig.add_scatter(x=[0.2, 0.45, 0.55, 0.2], y=[0.4, 0.4, 0.1, 0.4], mode="lines", line=dict(color="#808080"), name="valid_area", showlegend=True)
-    fig.add_scatter(x=create_line_path(rp_arr[:,0]), y=create_line_path(rp_arr[:, 1]), mode="lines", line=dict(color="#808080"), name="valid_area", showlegend=True)
+    fig.add_scatter(x=create_line_path(conv_rp_arr[:,0]), y=create_line_path(conv_rp_arr[:, 1]), mode="lines", line=dict(color="#808080"), name="valid_area", showlegend=True)
     
-    fig.write_image("/home/jp/tyot/mop/papers/prefagg_concept/experiment_pics/misc/zdt2dms.pdf", width=600, height=600)
+    fig.write_image("eq_example_optdm1.pdf", width=600, height=600)
     
     fig.show()  
 
@@ -598,12 +642,12 @@ if __name__ == "__main__":
     #test_maxmin()
     n_variables = 30
     n_objectives = 2
-    problem = zdt2(n_variables)
+    problem = zdt1(n_variables)
 
     reference_points = [
-        {"f_1": 0.8, "f_2": 0.4}, 
-        {"f_1": 0.3, "f_2": 0.6},
-        {"f_1": 0.5, "f_2": 0.8},
+        {"f_1": 0.1, "f_2": 0.1}, 
+        {"f_1": 0.45, "f_2": 0.5},
+        {"f_1": 0.5, "f_2": 0.45},
     ]
     # zdt3 gets local optimal for here if moving cip from nadir sometimes
     cip = np.array([1, 1])
