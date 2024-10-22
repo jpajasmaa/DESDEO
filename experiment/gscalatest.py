@@ -17,8 +17,11 @@ import plotly.express as px
     
 import pandas as pd
 
+import plotly.io as pio   
+pio.kaleido.scope.mathjax = None
 
-def test_add_group_asf_diff(problem: Problem,GRP: dict[str, float], prefs: list[dict[str, float]]):
+
+def test_add_group_asf_diff(problem: Problem, GRP: dict[str, float], prefs: list[dict[str, float]]):
     p, target = add_asf_diff(problem, "target", GRP)
     problem_w_group_sf, group_sf = add_group_asf_diff(problem, "group_sf", prefs)
 
@@ -102,19 +105,22 @@ def test_add_group_stom_diff(problem: Problem, GRP: dict[str, float], prefs: lis
 
     return fs, gfs
 
-def plot2d(problem: Problem, rps: list[dict[str, float]] , pa: str):
+def test_group_scalas(problem: Problem, rps: list[dict[str, float]] , pa: str):
 
     nadir = objective_dict_to_numpy_array(problem, get_nadir_dict(problem))
     ideal = objective_dict_to_numpy_array(problem, get_ideal_dict(problem))
 
     # for maxmins
     cip = nadir
+    #cip = {"f_1": np.max(rps["f_1"]), "f_2": np.max(rps["f_2"])}
     k = len(ideal)
     q = len(rps)
 
     all_prefs = rps # !! is assumed to be list or smh in test_add_group_asf_diff jne
     # convert all_prefs to numpy array for find_GRP or find GRP should handle dictionaries.. which makes more sense TODO
     rp_arr = np.array([[col["f_1"], col["f_2"]] for col in rps])
+    #cip = np.array(np.amax(rp_arr, axis=0))
+    print(cip)
 
     # find GRP, returns np.array
     grp2 = find_GRP(rp_arr, cip, k, q, ideal, nadir, pa)
@@ -136,7 +142,6 @@ def plot2d(problem: Problem, rps: list[dict[str, float]] , pa: str):
         "names": namelist,
     }
    
-
     all_solutions = pd.DataFrame(all_solutions, columns= ["f_1", "f_2", "names"])
 
     problem = get_problem("zdt1")
@@ -280,6 +285,310 @@ def test_maxmin():
     #fig.savefig("gscalares/maxmin.png")
     plt.show()
 
+# TODO: only works iwth maxmin ja maxmin-cones. MAke another with eq variants
+def agg_rps_test_mm(problem: Problem, rps: list[dict[str, float]], cip):
+
+    nadir = objective_dict_to_numpy_array(problem, get_nadir_dict(problem))
+    ideal = objective_dict_to_numpy_array(problem, get_ideal_dict(problem))
+
+    #cip_dict = get_nadir_dict(problem)
+    # for maxmins
+    #cip = nadir
+
+    cip = cip
+    cip_dict = {"f_1":cip[0], "f_2": cip[1]}
+    
+    k = len(ideal)
+    q = len(rps)
+
+    all_prefs = rps # !! is assumed to be list or smh in test_add_group_asf_diff jne
+    # convert all_prefs to numpy array for find_GRP or find GRP should handle dictionaries.. which makes more sense TODO
+    rp_arr = np.array([[col["f_1"], col["f_2"]] for col in rps])
+    #cip = np.array(np.amax(rp_arr, axis=0))
+    print(cip)
+
+    # find GRP, returns np.array
+    grpmm = find_GRP(rp_arr, cip, k, q, ideal, nadir, "maxmin")
+    #improvmenet direction
+    GRP = cip - grpmm
+    # make dict from the GPR array
+    GRP = {"f_1": GRP[0], "f_2": GRP[1]}
+
+    # find GRP, returns np.array
+    grpcones = find_GRP(rp_arr, cip, k, q, ideal, nadir, "maxmin_cones")
+    #improvmenet direction
+    GRP_cones = cip - grpcones
+    # make dict from the GPR array
+    GRP_cones = {"f_1": GRP_cones[0], "f_2": GRP_cones[1]}
+
+    #mean_PO = 
+
+    #     reference_point: dict[str, float],
+    # weights: dict[str, float],
+    # reference_point_aug: dict[str, float] | None = None,
+    # weights_aug: dict[str, float] | None = None,
+
+    """
+    SOLVING
+    """
+
+    # TODO: MEAN
+
+
+    problem_w_asf, target = add_asf_generic_diff( # use nondiff as default like in nautili
+        problem,
+        symbol="asf",
+        reference_point=cip_dict,
+        weights=GRP,
+        reference_point_aug=cip_dict,
+    )
+    solver = PyomoIpoptSolver(problem_w_asf)
+    res = solver.solve(target)
+    xs = res.optimal_variables
+    fs_mm = res.optimal_objectives
+    print("final solution from maxmin", fs_mm)
+
+    # solve with maxmincones
+    problem_w_asf2, target2 = add_asf_generic_diff( # use nondiff as default like in nautili
+        problem,
+        symbol="asf",
+        reference_point=cip_dict,
+        weights=GRP_cones,
+        reference_point_aug=cip_dict,
+    )
+    solver2 = PyomoIpoptSolver(problem_w_asf2)
+    res2 = solver2.solve(target2)
+    xs2 = res2.optimal_variables
+    fs_cones = res2.optimal_objectives
+    print("final solution from maxmin-cones", fs_cones)
+
+    # TODO: EQ VARIANTS !
+
+
+    # convert for numpy
+    #fs = objective_dict_to_numpy_array(problem, fs)
+    #asf, group_asf_sol = test_add_group_asf_diff(problem, GRP, all_prefs)
+    #guess, group_guess_sol = test_add_group_guess_diff(problem, GRP, all_prefs)
+    #stom, group_stom_sol = test_add_group_stom_diff(problem, GRP, all_prefs)
+
+    """
+    VISUALIZING
+    """
+
+    solutions = [fs_mm, fs_cones]
+
+    keys = ["f_1", "f_2"]
+    namelist = ["PO_mm", "PO_cones"]
+   
+    all_solutions = {
+        "f_1": [s["f_1"] for s in solutions],
+        "f_2": [s["f_2"] for s in solutions],
+        "names": namelist,
+    }
+   
+    all_solutions = pd.DataFrame(all_solutions, columns= ["f_1", "f_2", "names"])
+
+    problem_pymoo = get_problem(problem.name)
+    pf = problem_pymoo.pareto_front()
+
+    # Convert NumPy array to a list of dictionaries
+    PF = [dict(zip(keys, row)) for row in pf]   
+    # plot PF
+    if problem.name == "zdt3":
+        fig = px.scatter(PF, x="f_1", y="f_2")
+    else:
+        fig = px.line(PF, x="f_1", y="f_2")
+
+    # TODO: figure out the marker styles better
+    fig.add_scatter(x=[cip[0]], y=[cip[1]], mode="markers", name="CIP",showlegend=True, marker=dict(size=15, symbol="star"))
+    fig.add_scatter(x=[ideal[0]], y=[ideal[1]], mode="markers", name="ideal",showlegend=True, marker=dict(size=15, symbol="star")) 
+    #fig.update_traces(marker=dict(size=15, symbol="star"))
+
+    # plot RPs
+    for i in range(len(rp_arr)):
+        fig.add_scatter(x=[rp_arr[i][0]], y=[rp_arr[i][1]], mode="markers", name=f"DM{i+1}_RP",showlegend=True, marker=dict(size=15, symbol="x"))
+
+    # PLOT GRP 
+    fig.add_scatter(x=[grpmm[0]], y=[grpmm[1]], mode="markers", name="GRP_mm",showlegend=True, marker=dict(size=15, symbol="diamond-tall")) 
+    fig.add_scatter(x=[grpcones[0]], y=[grpcones[1]], mode="markers", name="GRP-cones",showlegend=True, marker=dict(size=15, symbol="diamond-wide")) 
+    #fig.update_traces(marker=dict(size=15, symbol="x"))
+    #fig.update_traces(marker=dict(size=15, symbol="star"))
+    #fig.update_traces(marker=dict(size=15))
+    # PLOT results
+    #fig.add_scatter(all_solutions,  x=all_solutions.f_1, y=all_solutions.f_2, mode="markers", name=all_solutions.names ,showlegend=True)
+    for i in range(len(namelist)):
+        fig.add_scatter(x=[all_solutions["f_1"][i]], y=[all_solutions["f_2"][i]], mode="markers", name=all_solutions.names[i] ,showlegend=True,  marker=dict(size=15, symbol="circle"))
+
+    #fig.add_scatter(all_solutions, x="f_1", y="f_2", mode="markers", name="ASF",showlegend=True)
+    #fig.add_scatter(all_solutions, x="f_1", y="f_2", mode="markers", name="ASF",showlegend=True)
+    #fig.add_traces(all_solutions)
+    #fig.update_traces(marker=dict(size=15))
+    #fig.update_traces(marker=dict(size=15, symbol="x"))
+
+    #lines to show the polyhedron
+    #fig.add_scatter(x=[0.2, 0.45, 0.55, 0.2], y=[0.4, 0.4, 0.1, 0.4], mode="lines", line=dict(color="#808080"), name="valid_area", showlegend=True)
+    fig.add_scatter(x=create_line_path(rp_arr[:,0]), y=create_line_path(rp_arr[:, 1]), mode="lines", line=dict(color="#808080"), name="valid_area", showlegend=True)
+    
+    fig.write_image("/home/jp/tyot/mop/papers/prefagg_concept/experiment_pics/misc/zdt2dms.pdf", width=600, height=600)
+    
+    fig.show()  
+
+
+def agg_rps_test_eq(problem: Problem, rps: list[dict[str, float]], cip):
+
+    nadir = objective_dict_to_numpy_array(problem, get_nadir_dict(problem))
+    ideal = objective_dict_to_numpy_array(problem, get_ideal_dict(problem))
+
+    cip = cip
+    cip_dict = {"f_1":cip[0], "f_2": cip[1]}
+    
+    k = len(ideal)
+    q = len(rps)
+
+    all_prefs = rps # !! is assumed to be list or smh in test_add_group_asf_diff jne
+    # convert all_prefs to numpy array for find_GRP or find GRP should handle dictionaries.. which makes more sense TODO
+    #rp_arr = np.array([[col["f_1"], col["f_2"]] for col in rps])
+    #cip = np.array(np.amax(rp_arr, axis=0))
+    print(cip)
+
+    # EQ VARIANTS
+    # SOLVE FOR ALL DMS
+    converted_prefs = {}
+    for d in all_prefs:
+
+        problem_w_asf, target = add_asf_generic_diff( # use nondiff as default like in nautili
+            problem,
+            symbol="asf",
+            reference_point=cip_dict,
+            weights=d,
+            reference_point_aug=cip_dict,
+         )
+        solver = PyomoIpoptSolver(problem_w_asf)
+        res = solver.solve(target)
+        xs = res.optimal_variables
+        fs = res.optimal_objectives
+        print(fs)
+        converted_prefs.merge(fs) 
+
+    print("here")
+    print(converted_prefs)
+
+    conv_rp_arr = np.array([[col["f_1"], col["f_2"]] for col in converted_prefs])
+
+    # find GRP, returns np.array
+    grpmm = find_GRP(conv_rp_arr, cip, k, q, ideal, nadir, "maxmin")
+    #improvmenet direction
+    GRP = cip - grpmm
+    # make dict from the GPR array
+    GRP = {"f_1": GRP[0], "f_2": GRP[1]}
+
+    # find GRP, returns np.array
+    grpcones = find_GRP(conv_rp_arr, cip, k, q, ideal, nadir, "maxmin_cones")
+    #improvmenet direction
+    GRP_cones = cip - grpcones
+    # make dict from the GPR array
+    GRP_cones = {"f_1": GRP_cones[0], "f_2": GRP_cones[1]}
+
+    """
+    SOLVING
+    """
+
+    # TODO: MEAN
+
+
+    problem_w_asf, target = add_asf_generic_diff( # use nondiff as default like in nautili
+        problem,
+        symbol="asf",
+        reference_point=cip_dict,
+        weights=GRP,
+        reference_point_aug=cip_dict,
+    )
+    solver = PyomoIpoptSolver(problem_w_asf)
+    res = solver.solve(target)
+    xs = res.optimal_variables
+    fs_mm = res.optimal_objectives
+    print("final solution from maxmin", fs_mm)
+
+    # solve with maxmincones
+    problem_w_asf2, target2 = add_asf_generic_diff( # use nondiff as default like in nautili
+        problem,
+        symbol="asf",
+        reference_point=cip_dict,
+        weights=GRP_cones,
+        reference_point_aug=cip_dict,
+    )
+    solver2 = PyomoIpoptSolver(problem_w_asf2)
+    res2 = solver2.solve(target2)
+    xs2 = res2.optimal_variables
+    fs_cones = res2.optimal_objectives
+
+    """
+    VISUALIZING
+    """
+
+    solutions = [fs_mm, fs_cones]
+
+    keys = ["f_1", "f_2"]
+    namelist = ["PO_mm", "PO_cones"]
+   
+    all_solutions = {
+        "f_1": [s["f_1"] for s in solutions],
+        "f_2": [s["f_2"] for s in solutions],
+        "names": namelist,
+    }
+   
+    all_solutions = pd.DataFrame(all_solutions, columns= ["f_1", "f_2", "names"])
+
+    problem_pymoo = get_problem(problem.name)
+    pf = problem_pymoo.pareto_front()
+
+    # Convert NumPy array to a list of dictionaries
+    PF = [dict(zip(keys, row)) for row in pf]   
+    # plot PF
+    if problem.name == "zdt3":
+        fig = px.scatter(PF, x="f_1", y="f_2")
+    else:
+        fig = px.line(PF, x="f_1", y="f_2")
+
+    # TODO: figure out the marker styles better
+    fig.add_scatter(x=[cip[0]], y=[cip[1]], mode="markers", name="CIP",showlegend=True, marker=dict(size=15, symbol="star"))
+    fig.add_scatter(x=[ideal[0]], y=[ideal[1]], mode="markers", name="ideal",showlegend=True, marker=dict(size=15, symbol="star")) 
+    #fig.update_traces(marker=dict(size=15, symbol="star"))
+
+    # plot RPs
+    for i in range(len(rp_arr)):
+        fig.add_scatter(x=[rp_arr[i][0]], y=[rp_arr[i][1]], mode="markers", name=f"DM{i+1}_RP",showlegend=True, marker=dict(size=10, symbol="x"))
+        fig.add_scatter(x=[conv_rp_arr[i][0]], y=[rp_arr[i][1]], mode="markers", name=f"converted DM{i+1}_RP",showlegend=True, marker=dict(size=15, symbol="X"))
+
+    # PLOT GRP 
+    fig.add_scatter(x=[grpmm[0]], y=[grpmm[1]], mode="markers", name="GRP_mm",showlegend=True, marker=dict(size=15, symbol="diamond-tall")) 
+    fig.add_scatter(x=[grpcones[0]], y=[grpcones[1]], mode="markers", name="GRP-cones",showlegend=True, marker=dict(size=15, symbol="diamond-wide")) 
+    #fig.update_traces(marker=dict(size=15, symbol="x"))
+    #fig.update_traces(marker=dict(size=15, symbol="star"))
+    #fig.update_traces(marker=dict(size=15))
+    # PLOT results
+    #fig.add_scatter(all_solutions,  x=all_solutions.f_1, y=all_solutions.f_2, mode="markers", name=all_solutions.names ,showlegend=True)
+    for i in range(len(namelist)):
+        fig.add_scatter(x=[all_solutions["f_1"][i]], y=[all_solutions["f_2"][i]], mode="markers", name=all_solutions.names[i] ,showlegend=True,  marker=dict(size=15, symbol="circle"))
+
+    #fig.add_scatter(all_solutions, x="f_1", y="f_2", mode="markers", name="ASF",showlegend=True)
+    #fig.add_scatter(all_solutions, x="f_1", y="f_2", mode="markers", name="ASF",showlegend=True)
+    #fig.add_traces(all_solutions)
+    #fig.update_traces(marker=dict(size=15))
+    #fig.update_traces(marker=dict(size=15, symbol="x"))
+
+    #lines to show the polyhedron
+    #fig.add_scatter(x=[0.2, 0.45, 0.55, 0.2], y=[0.4, 0.4, 0.1, 0.4], mode="lines", line=dict(color="#808080"), name="valid_area", showlegend=True)
+    fig.add_scatter(x=create_line_path(rp_arr[:,0]), y=create_line_path(rp_arr[:, 1]), mode="lines", line=dict(color="#808080"), name="valid_area", showlegend=True)
+    
+    fig.write_image("/home/jp/tyot/mop/papers/prefagg_concept/experiment_pics/misc/zdt2dms.pdf", width=600, height=600)
+    
+    fig.show()  
+
+def create_line_path(arr):
+    return np.append(arr, arr[0])
+
+
 
 if __name__ == "__main__":
 
@@ -289,15 +598,22 @@ if __name__ == "__main__":
     #test_maxmin()
     n_variables = 30
     n_objectives = 2
-    problem = zdt1(n_variables)
+    problem = zdt2(n_variables)
 
     reference_points = [
-        {"f_1": 0.7, "f_2": 0.35}, 
-        {"f_1": 0.6, "f_2": 0.5},
-        {"f_1": 0.63, "f_2": 0.8},
+        {"f_1": 0.8, "f_2": 0.4}, 
+        {"f_1": 0.3, "f_2": 0.6},
+        {"f_1": 0.5, "f_2": 0.8},
     ]
-
+    # zdt3 gets local optimal for here if moving cip from nadir sometimes
+    cip = np.array([1, 1])
     pa = "maxmin"
 
-    plot2d(problem, reference_points, pa)
+    #test_group_scalas(problem, reference_points, pa)
+
+    # agg_rps_test
+    # agg_rps_test_mm(problem, reference_points, cip)
+
+    # TODO:
+    agg_rps_test_eq(problem, reference_points, cip)
 

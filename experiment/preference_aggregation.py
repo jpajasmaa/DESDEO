@@ -7,55 +7,62 @@ from desdeo.problem import (
     numpy_array_to_objective_dict,
     objective_dict_to_numpy_array,
 )
-# Let's say X_train is your input dataframe
-from sklearn.preprocessing import MinMaxScaler
-from sklearn.preprocessing import Normalizer
 
+def find_GRP(
+    rps: np.ndarray, 
+    cip: np.ndarray, 
+    k: int, 
+    q: int, 
+    ideal: np.ndarray, 
+    nadir: np.ndarray, 
+    pref_agg_method:str
+    ) -> np.ndarray:   
+    """
+    Finds a group reference point by forming a subproblem optimizing the given fairness criteria.
 
-"""
-Finds a group reference point by forming a subproblem optimizing the given criteria.
-    prefs: RPs
-    cip: current iteration point
-    k: number of objective functions
-    q: number of DMs
-    ideal: the ideal of the problem
-    nadir: the nadir of the problem
-"""
-def find_GRP(prefs, cip, k, q, ideal, nadir, pref_agg_method):
-    # set the required stuff for scipy opt minimize
-    agg_pref = []     
-    # X = [R1, R2, R3, W1, W2, W3, W4, ALPHA]
+    Args:
+        rps (np.ndarray): the reference points from the DMs
+        cip (np.ndarray): current iteration point
+        k (int): the number of objective functions
+        q (int): the number of DMs
+        ideal (np.ndarray): the ideal vector of the problem
+        nadir (np.ndarray): the nadir vector of the problem
+    
+    Returns: 
+        np.ndarray : the group reference point
+    """
     bnds = []
-    # bounds for objective functions
+    # bounds for objective functions, bounded by ideal and current iteration point.
     for i in range(k):
         bnds.append((ideal[i],cip[i]))
 
-    # weight bounds for DMs
+    # weight bounds for DMs. Can be between 0 and 1.
     for i in range(k, k+q):
         bnds.append((0,1))
 
     # create X of first iteration guess
+    # X = [RPs.., DM weights.., ALPHA]
     X = np.zeros(k+q) 
     # Fill first guess for GRP by taking the mean of the RPs
     for i in range(k):
-        X[i] = np.mean(prefs[:,i]) 
+        X[i] = np.mean(rps[:,i]) 
 
     # Calculate the weights for DMs
     for qk in range(q):
         X[k+qk] = 1/q
 
     # constraints for feasible space
-    def feas_space_const(X, k, q, i, prefs): #X!!
-        return lambda X: sum([X[k+j]*prefs[j,i] for j in range(q)]) - X[i]
+    def feas_space_const(X, k, q, i, rps):
+        return lambda X: sum([X[k+j]*rps[j,i] for j in range(q)]) - X[i]
 
     # Create constraints for each objective function
     Cons = []
     for i in range(k):
-        Cons.append({'type':'eq', 'fun' : feas_space_const(X, k, q, i, prefs)})
+        Cons.append({'type':'eq', 'fun' : feas_space_const(X, k, q, i, rps)})
 
-    # Convex constraint
+    # Convex constraint, sum should be 1.
+    # sum_{r=1}^4(lambda_r) - 1 = 0
     def convex_constr(X):
-        # sum_{r=1}^4(lambda_r) - 1 = 0
         return sum(X[k:k+q]) - 1
 
     conv ={'type':'eq', 'fun':convex_constr}
@@ -64,14 +71,17 @@ def find_GRP(prefs, cip, k, q, ideal, nadir, pref_agg_method):
     # The s_m(R) for all DMs
     if pref_agg_method == "maxmin" or pref_agg_method == "eq_maxmin":
         def fx(X):
-            return -1*np.min([maxmin_crit(prefs[j,:], cip, X[:k]) for j in range(q)])
+            return -1*np.min([maxmin_criterion(rps[j,:], cip, X[:k]) for j in range(q)])
     if pref_agg_method == "maxmin_cones" or pref_agg_method == "eq_maxmin_cones":
         def fx(X):
-            all_s_m = [maxmin_cones_criteria(cip, prefs[j,:], X[:k]) for j in range(q)]
+            #all_s_m = [-maxmin_cones_criterion(cip, rps[j,:], X[:k]) for j in range(q)]
             #print(all_s_m)
-            s_m = -np.max(all_s_m)
-            return s_m # convert for scipy minimize or not? Again sometimes acts more like expected with -1* sometimes without.
-
+            #s_m = np.max(all_s_m)
+            # TODO: these are equivalent.. not sure if it matters which to use.. in otherwords, which is closest to the og formulation i guess
+            all_s_m = [maxmin_cones_criterion(cip, rps[j,:], X[:k]) for j in range(q)]
+            s_m = -1*np.min(all_s_m)
+            return s_m
+      
     solution = minimize(fx,
         X,
         bounds = bnds,
@@ -82,23 +92,28 @@ def find_GRP(prefs, cip, k, q, ideal, nadir, pref_agg_method):
 
     # Decision variables (solutions)
     print(solution.x)
-    agg_pref.append(solution.x[0:k])
-    return agg_pref[0]
+    group_RP = solution.x[0:k]
+    return group_RP
 
 
-def aggregatev2(
+def aggregate(
     problem: Problem,
     pref_agg_method: str,
     reference_points: dict[str, dict[str, float]],
-    nav_point_arr=list[float],
-):
-    """Aggregates maxmin.
+    nav_point_arr=np.ndarray,
+) -> np.ndarray:
+    """Function to aggregate the preferecnes. Connects to find_GRP and handles conversions 
+    from dicts to np.ndarrays and using max_multiplier to convert the GRP to the true objective space.
 
     Args:
-        pref_agg_method: the string depicting what preference aggregation method to use
+        problem (Problem): the problem being solved.
+        pref_agg_method (str): the string depicting what preference aggregation method to use
+        reference_points: (dict[str, dict[str, float]]): the reference points from the decision makers.
+            The key is the objective function's symbol and the value is the aspired objective value.
+        nav_point_arr (np.ndarray): the current navigation point in true objective space.
 
     Returns:
-        group improvemnet direction
+        np.ndarray : the group reference point in true objective space
     """
     # get problem information ideal, nadir and number of objectives (k) and number of DMs (q)
     group_reference_point = None
@@ -111,13 +126,12 @@ def aggregatev2(
     nadir = objective_dict_to_numpy_array(problem, nad_dict)
 
     rp_a = {}
-    # TODO: normalize to [0,1]?? and make sure its converted for minimization properly.
     for key, p in reference_points.items():
         rp_a[key] = list(np.array(list(p.values())) * np.array(max_multiplier))
     rp_arr = np.array(list(rp_a.values()))
 
     group_reference_point = find_GRP(rp_arr, nav_point_arr, k, q, ideal, nadir, pref_agg_method)
-    print("group RP", group_reference_point)  # nav_point_arr - group_pref
+    print("group RP", group_reference_point) 
 
     return group_reference_point * max_multiplier  # GRP is in the true objective space
 
@@ -125,14 +139,14 @@ def aggregatev2(
 # p = r1 DM's suggested point,
 # c = r0, current iteration point
 # r = R, suggested group point. 
-def maxmin_crit(p, c, r):
+def maxmin_criterion(p, c, r):
     return np.sum((p - c)*r)
 
 
 # c = r0, current iteration point
 # p = r1 DM's suggested point,
 # r = R, suggested group point. 
-def maxmin_cones_criteria(c, p, r):
+def maxmin_cones_criterion(c, p, r):
     return eval_RP(c, p, r)
 
 
@@ -142,7 +156,6 @@ def eval_RP(R0, R1, P, a=0.5):
     D = R1 - R0
     # normalize the direction vector D
     #D = D_og/np.sqrt(np.sum(D_og**2))
-
     # constant of hyperplane going through P
     cv = np.matmul(D, P)
     # express as linear combination between R0 and R1
@@ -167,4 +180,4 @@ def eval_RP(R0, R1, P, a=0.5):
     #print("eval_values\r\n", eval_value)
     eval_value2 = eval_value[np.isfinite(eval_value)][0]
     #print(eval_value2)
-    return eval_value2 #* (-1) # TODO: note this !! check if it workds but WHY?
+    return eval_value2
