@@ -62,6 +62,16 @@ dmUser2 = db_models.User(
 )
 db.add(dmUser2)
 
+dmUser3 = db_models.User(
+    username="dm3",
+    password_hash=get_password_hash("test"),
+    role=UserRole.DM,
+    privilages=[],
+    user_group="",
+)
+db.add(dmUser3)
+
+
 problem = binh_and_korn()
 
 problem_in_db = db_models.Problem(

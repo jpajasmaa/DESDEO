@@ -288,23 +288,6 @@ def init_nimbus(
             lower_bounds[i] = ideal[problem.objectives[i].symbol]
             upper_bounds[i] = nadir[problem.objectives[i].symbol]
 
-    # return FakeNIMBUSResponse(message="NIMBUS initialized.")
-    resp = NIMBUSFullResponse(
-        objective_symbols=[obj.symbol for obj in problem.objectives],
-        objective_long_names=[obj.name for obj in problem.objectives],
-        units=[obj.unit for obj in problem.objectives],
-        is_maximized=[obj.maximize for obj in problem.objectives],
-        lower_bounds=lower_bounds,
-        upper_bounds=upper_bounds,
-        previous_preference=current_solution.objectives,
-        current_solutions={sol.id: sol.objectives for sol in solutions if sol.current},
-        to_vote=len([sol.id for sol in solutions if sol.to_vote and sol.current]) > 0,
-        saved_solutions={sol.id: sol.objectives for sol in solutions if sol.saved},
-        all_solutions={sol.id: sol.objectives for sol in solutions},
-        chosen_solutions={sol.id: sol.objectives for sol in solutions if sol.chosen}
-    )
-    print(resp)
-
     return NIMBUSFullResponse(
         objective_symbols=[obj.symbol for obj in problem.objectives],
         objective_long_names=[obj.name for obj in problem.objectives],

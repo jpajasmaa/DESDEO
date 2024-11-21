@@ -213,6 +213,10 @@ def solve_intermediate_solutions(  # noqa: PLR0913
     # compute the element-wise difference between each solution (in the decision space)
     solution_1_arr = tensor_variable_to_numpy_array(problem, solution_1)
     solution_2_arr = tensor_variable_to_numpy_array(problem, solution_2)
+    # incase we dont have tensors
+    # compute the element-wise difference between each solution (in the decision space)
+    #solution_1_arr = variable_dict_to_numpy_array(problem, solution_1)
+    #solution_2_arr = variable_dict_to_numpy_array(problem, solution_2)
     delta = solution_1_arr - solution_2_arr
 
     # the '2' is in the denominator because we want to calculate the steps
