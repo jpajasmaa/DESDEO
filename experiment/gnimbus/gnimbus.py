@@ -41,6 +41,105 @@ from desdeo.mcdm.nimbus import (
 from aggregate_classifications import aggregate_classifications
 
 
+def explain(problem, classifications, results: [SolverResults]):
+    """
+    # pseudocode
+    """
+    print(f"Pareto optimal solutions found: {[results[i].optimal_objectives for i in range(len(results))]}")
+
+    # TOO COMPLEX way to do simple thing
+    key_flag_dict = {"f_1": 0, "f_2": 0}  # number of objs
+    for i, dm in enumerate(classifications):
+        print(dm)
+        key_flag = 0  # t'mä nollaa ne josssai kohtaa
+        for key in dm:
+            # print(key, (value))
+            print(dm[key])
+            # take first the sign of the tuple
+            if dm[key][0] == ">=":
+                key_flag = 1
+        key_flag_dict[key] = key_flag
+
+    print(key_flag_dict)
+
+
+def majority_rule(votes: dict[str, int]):
+    from collections import Counter
+
+    counts = Counter(votes.values())
+    all_votes = sum(counts.values())
+    for vote, c in counts.items():
+        if c > all_votes // 2:
+            return vote
+    return None
+
+def plurality_rule(votes: dict[str, int]):
+    from collections import Counter
+
+    counts = Counter(votes.values())
+    max_votes = max(counts.values())
+    winners = [vote for vote, c in counts.items() if c == max_votes]
+
+    return winners
+
+def voting_procedure(problem: Problem, solutions, votes_idxs: dict[str, float]) -> SolverResults:
+    winner_idx = None
+
+    # call majority
+    winner_idx = majority_rule(votes_idxs)
+    if winner_idx is not None:
+        print("Majority winner", winner_idx)
+        return solutions[winner_idx]
+
+    # call plurality
+    winners = plurality_rule(votes_idxs)
+    # TODO: handle if there are three or more same number of votes
+    if len(winners) == 1:
+        print("Plurality winner", solutions[winners][0])
+        return solutions[winners[0]]  # need to unlist the winners list
+    if len(winners) == 2:
+        # if two same solutions with same number of votes, call intermediate
+        wsol1, wsol2 = solutions[winners[0]].optimal_variables, solutions[winners[1]].optimal_variables
+        print("Finding intermediate solution between", wsol1, wsol2)
+        return solve_intermediate_solutions(problem, wsol1, wsol2, num_desired=1)[0]
+    else:
+        print("TIE-breaking, select first solution (group nimbus scalarization)")
+        # TODO: go to tie-breaking rule
+    # TODO: make according to what GNIMBUS think is the best, for now let us select the first one
+        return solutions[0]  # need to unlist the winners list
+
+
+def agg_cardinal(classification_list, problem, current_objectives):
+    sums = {}
+    M = len(classification_list)
+
+    # TODO: make chatgpt code simpler xd
+    for record in classification_list:
+        for key, (operator, value) in record.items():
+            if value is not None:  # Only add non-None values
+                if key not in sums:
+                    sums[key] = 0.0
+                sums[key] += (current_objectives[key] - value) / M
+
+    # Convert the sums to a vector of sums (in key order)
+    result_vector = [sums[key] for key in sorted(sums.keys())]
+
+    return result_vector
+    """
+    R = []
+    for j in range(len(classification_list)):  # each c[i][j]
+        res = 0
+        for key, val in classification_list[j].items():
+
+            print(f"Key: {key}, Float value: {val}")
+            if val is not None:
+                res += current_objectives[key] - 
+
+
+            # R.append(classification_list[j])
+    # for key, (str_value, float_value) in classification_list.items():
+    """
+
 def dict_of_rps_to_list_of_rps(reference_points: dict[str, dict[str, float]]) -> list[dict[str, float]]:
     """
     Convert dict containing the DM key to an ordered list.
@@ -53,11 +152,29 @@ def list_of_rps_to_dict_of_rps(reference_points: list[dict[str, float]]) -> dict
     """
     return {f"DM{i+1}": rp for i, rp in enumerate(reference_points)}
 
+def combine_ord_card_prefs(problem, rps, ord_agg):
+    """
+
+    for obj in problem.objectives:
+        for i in classification_list:
+            if classification_list[i][obj.symbol] not in [0, 1, 2]:
+                agg_value = 0
+                agg = [reference_points[rp][obj.symbol] for rp in reference_points]
+                agg_value = np.sum(agg)/3  # number of DMs, taking mean value.
+
+                classification = {obj.symbol: str(classification_list[i][obj.symbol], agg_value)}
+
+            classification_list.append(classification)
+    """
+    pass
+
+
 def infer_ordinal_classifications(
     problem: Problem, current_objectives: dict[str, float], reference_points: dict[str, dict[str, float]]
 ) -> dict[str, tuple[str, float | None]]:
     """
     TODO: improve, currently only works proprely if DMs RPS are either near nadir, ideal or the current iteration point.
+    Returns lists for each DM containing value for each objective function with integers 0,1,2 for impair, keep the same and improve respectively.
     """
 
     if None in problem.get_ideal_point() or None in problem.get_nadir_point():
@@ -80,29 +197,40 @@ def infer_ordinal_classifications(
 
     # example = np.array([[2, 0, 1, 2], [1, 0, 2, 1], [2, 1, 0, 1]])
     classifications = []
+    print(current_objectives)
 
-    print("curr objs", current_objectives)
+    # print("curr objs", current_objectives)
     # get number of DMs here
     # TODO: this needs to be adapted for somehow handle cardinal information, e.g. just aggregate
     for rp in reference_points:
         class_for_dm = []
-        print("=====")
+        # print("=====")
         for obj in problem.objectives:
-            print("at 1", reference_points[rp])
-            print("at 2", reference_points[rp][obj.symbol])
-            if np.isclose(reference_points[rp][obj.symbol], obj.nadir):
+            # print("at 1", reference_points[rp])
+            # print("at 2", reference_points[rp][obj.symbol])
+            if np.isclose(reference_points[rp][obj.symbol], obj.nadir, atol=0.1):
                 # the objective is free to change
-                print("free to change")
+                # print("free to change")
                 class_for_dm.append(0)
-            elif np.isclose(reference_points[rp][obj.symbol], obj.ideal):
+            elif np.isclose(reference_points[rp][obj.symbol], obj.ideal, atol=0.1):
                 # the objective should improve
-                print("improvmeent needed")
+                # print("improvmeent needed")
                 class_for_dm.append(2)
-            elif np.isclose(reference_points[rp][obj.symbol], current_objectives[obj.symbol]):
+            elif np.isclose(reference_points[rp][obj.symbol], current_objectives[obj.symbol], atol=0.1):
                 # the objective should stay as it is
-                print("stay the same")
+                # print("stay the same")
                 class_for_dm.append(1)
-        print("at 3", class_for_dm)  # 0, 1, 2
+            else:  # TODO: very stupid aggre.lets stupidly aggregate here?
+                v = None
+                if current_objectives[obj.symbol] < reference_points[rp][obj.symbol] < obj.nadir:
+                    print(reference_points[rp][obj.symbol])
+                    v = 2
+                elif current_objectives[obj.symbol] > reference_points[rp][obj.symbol] > obj.ideal:
+                    print(reference_points[rp][obj.symbol])
+                    v = 0
+                class_for_dm.append(v)
+
+        # print("at 3", class_for_dm)  # 0, 1, 2
         classifications.append(class_for_dm)
         # classifications |= classification
 
@@ -336,10 +464,10 @@ def add_group_nimbusv2_sf_diff(  # noqa: PLR0913
                     con_expr = f"{_symbol}_min - {corrected_current_point[_symbol]}"
                     constraints.append(
                         Constraint(
-                            name=f"Stay at least as good constraint for {_symbol}",
+                            name=f"Stay as good constraint for {_symbol}",
                             symbol=f"{_symbol}_{i+1}_eq",
                             func=con_expr,
-                            cons_type=ConstraintTypeEnum.LTE,
+                            cons_type=ConstraintTypeEnum.LTE,  # OR EQ ?
                             is_linear=problem.is_linear,
                             is_convex=problem.is_convex,
                             is_twice_differentiable=problem.is_twice_differentiable,
@@ -403,9 +531,9 @@ def convert_to_nimbus_classification(problem: Problem, compromise_classification
         elif compromise_classification[i] == 2:
             # the objective should improve
             classification = {problem.objectives[i].symbol: ("<", None)}
-        else:
-            msg = f"Warning: GNIMBUS could not figure out the classification for objective {problem.objectives[i].symbol}."
-            raise NimbusError(msg)
+        # else:
+        #    msg = f"Warning: GNIMBUS could not figure out the classification for objective {problem.objectives[i].symbol}."
+        #    raise NimbusError(msg)
 
         classifications |= classification
     return classifications
@@ -487,20 +615,29 @@ def solve_sub_problems(  # noqa: PLR0913
 
     solutions = []
     classification_list = []
-    if decision_phase:
+
+    """ IGNORE group classification stuff for now
         # HERE the reference points have to be fit for "ordinal"
         classification_list = infer_ordinal_classifications(problem, current_objectives, reference_points)
-        print("ALL classificaitons", classification_list)
+        # print("ALL classificaitons:", classification_list)
 
         # aggregate to compromise classification
-        compromise_classification = aggregate_classifications(classification_list)["compromise"][0]  # take first, TODO: update to take more
-        print("compromise", compromise_classification)
+        compromise_classifications = aggregate_classifications(classification_list)["compromise"]  # take first, TODO: update to take more
+        print("All top group classifications:", compromise_classifications)
+        compromise_classification = compromise_classifications[0]
+        print("compromise:", compromise_classification)
 
         classification_list = convert_to_nimbus_classification(problem, compromise_classification)
+        # print("NIMBUS classi", classification_list)
 
         print("NIMBUS classi", classification_list)
+    """
 
-        gnimbus_scala = add_nimbus_sf_diff if problem.is_twice_differentiable else add_nimbus_sf_nondiff
+    if decision_phase:
+        for dm_rp in reference_points:
+            print("RPS", reference_points[dm_rp])
+            classification_list.append(infer_classifications(problem, current_objectives, reference_points[dm_rp]))
+        gnimbus_scala = add_group_nimbusv2_sf_diff  # if problem.is_twice_differentiableelse add_group_nimbusv2 # non-diff gnimbus
         add_nimbus_sf = gnimbus_scala
 
         problem_w_nimbus, nimbus_target = add_nimbus_sf(
@@ -513,6 +650,11 @@ def solve_sub_problems(  # noqa: PLR0913
             nimbus_solver = init_solver(problem_w_nimbus)
 
         solutions.append(nimbus_solver.solve(nimbus_target))
+
+        " if wanting more solutions"
+        # TODO: maxmin-cones
+
+        # TODO: agg prefes use asf or smh.
 
         return solutions
 

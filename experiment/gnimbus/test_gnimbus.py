@@ -1,15 +1,139 @@
 """Tests related to the GNIMBUS method."""
 
+from aggregate_classifications import aggregate_classifications
+from desdeo.tools import IpoptOptions, PyomoIpoptSolver, add_asf_diff
+from desdeo.problem import dtlz2, nimbus_test_problem, zdt1, zdt2
 import numpy as np
 import numpy.testing as npt
 import pytest
 
 # from desdeo.mcdm.gnimbus import infer_classifications, solve_intermediate_solutions, solve_sub_problems
-from gnimbus import infer_classifications, infer_ordinal_classifications, solve_intermediate_solutions, solve_sub_problems, convert_to_nimbus_classification, add_group_nimbusv2_sf_diff, list_of_rps_to_dict_of_rps, dict_of_rps_to_list_of_rps
-from desdeo.problem import dtlz2, nimbus_test_problem, zdt1, zdt2
-from desdeo.tools import IpoptOptions, PyomoIpoptSolver, add_asf_diff
+from gnimbus import (explain, voting_procedure, infer_classifications, agg_cardinal, infer_ordinal_classifications,
+                     solve_intermediate_solutions, solve_sub_problems, convert_to_nimbus_classification, add_group_nimbusv2_sf_diff,
+                     list_of_rps_to_dict_of_rps, dict_of_rps_to_list_of_rps)
 
-from aggregate_classifications import aggregate_classifications
+
+@pytest.mark.gnimbus
+def test_voting_procedure():
+
+    problem = dtlz2(8, 3)
+
+    solver_options = IpoptOptions()
+    # get some initial solution
+    initial_rp = {
+        "f_1": 0.4, "f_2": 0.5, "f_3": 0.8
+    }
+    problem_w_sf, target = add_asf_diff(problem, "target", initial_rp)
+    solver = PyomoIpoptSolver(problem_w_sf, solver_options)
+    initial_result = solver.solve(target)
+
+    # f1: 0.385, f2: 0.485, f3: 0.776
+    initial_fs = initial_result.optimal_objectives
+
+    print(initial_fs)
+    # let f1 worsen until 0.6, keep f2, improve f3 until 0.6
+    # irst_rp = {"f_1": 0.6, "f_2": initial_fs["f_2"], "f_3": 0.6}
+    dms_rps = {
+        "DM1": {"f_1": 0.35, "f_2": initial_fs["f_2"], "f_3": 1},  # improve f_1, keep f_2 same, impair f_3
+        "DM2": {"f_1": 0.3, "f_2": 0.8, "f_3": 0.5},  # improve f_1 to 0.3, impair f_2, improve f_3 to 0.5
+        "DM3": {"f_1": 0.5, "f_2": 0.6, "f_3": 0.0},  # impair f_1 to 0.5, impair f_2 to 0.6, improve f_3
+    }
+
+    num_desired = 3
+    solution_results = solve_sub_problems(
+        problem, initial_fs, dms_rps, num_desired, False, create_solver=PyomoIpoptSolver, solver_options=solver_options
+    )
+    # TODO: remove duplicates
+    print()
+    print(solution_results)
+    print()
+    # remove solutions without votes
+    # TODO:DO I actually even need this?
+    # voted_solutions = [s for i, s in enumerate(solution_results) if i not in list(votes_idxs.values())]
+    # assert len(solution_results) != len(voted_solutions)
+
+    voted_solutions = solution_results
+
+    # TEST MAJORITY WINS
+    # make different votes
+    votes_idxs = {
+        "DM1": 1,
+        "DM2": 2,
+        "DM3": 2
+    }
+    res = voting_procedure(problem, voted_solutions, votes_idxs)
+    assert res == solution_results[2]
+    next_current_solution = res.optimal_objectives
+    print(next_current_solution)
+
+    # TEST PLULARITY WINS
+    # make different votes
+    votes_idxs = {
+        "DM1": 1,
+        "DM2": 0,
+        "DM3": 0,
+        "DM4": 3,
+        "DM5": 2
+
+    }
+    res = voting_procedure(problem, voted_solutions, votes_idxs)
+    print("here", res)
+    assert res == solution_results[0]
+    next_current_solution = res.optimal_objectives
+    print(next_current_solution)
+
+    # TEST intermediate
+    votes_idxs = {
+        "DM1": 1,
+        "DM2": 1,
+        "DM3": 2,
+        "DM4": 2
+    }
+    res = voting_procedure(problem, voted_solutions, votes_idxs)
+    # assert res == solution_results[2] does not apply as we generate a new one.
+    next_current_solution = res.optimal_objectives
+    print(next_current_solution)
+    # TEST according to gnimbus WINS
+    votes_idxs = {
+        "DM1": 1,
+        "DM2": 0,
+        "DM3": 2
+    }
+    res = voting_procedure(problem, voted_solutions, votes_idxs)
+    print(res)
+    print(solution_results[0])
+    assert res == solution_results[0]  # for now tie-breaking rule is taking the first one. Error what?
+    next_current_solution = res.optimal_objectives
+    print(next_current_solution)
+
+    # assert 0 == 1
+
+
+@pytest.mark.nimbus
+def test_agg_cardinal():
+    reference_points = [
+        {"f_1": ("<=", 0.25), "f_2": (">=", 0.8), "f_3": (">", 1)},
+        {"f_1": ("=>", 0.5), "f_2": ("<=", 0.2), "f_3": ("<", 0)},
+        # {"f_1": ("0", None), "f_2": ("<=", 0.4)},
+    ]
+    """
+    classifications = {
+        "f_1": ("<", None),
+        "f_2": ("<=", 42.1),
+        "f_3": (">=", 22.2),
+        "f_4": ("0", None)
+        }
+    """
+    problem = dtlz2(8, 3)
+
+    current_point = {"f_1": 0.4, "f_2": 0.3, "f_3": 0.5}
+
+    # for i in range(len(reference_points)):
+    # for DM i
+    res = agg_cardinal(reference_points, problem, current_point)
+    print(res)
+    # assert 0 == 1
+
 
 @pytest.mark.gnimbus
 def test_aggregate_classifications():
@@ -75,6 +199,42 @@ def test_convert_to_nimbus_classification():
     classif = convert_to_nimbus_classification(problem, compromise_classification)
     print("classic", classif)
     assert isinstance(classif, dict)
+    # TODO: should work until this.
+    # assert 0 == 1
+
+@pytest.mark.skip
+@pytest.mark.nimbus
+# TODO: this is not working right now
+def test_convert_to_nimbus_classification_aggregation():
+    example = np.array([[2, 0, 1], [1, 0, 2], [2, 1, 0]])
+    compromise_classification = aggregate_classifications(example)["compromise"][0]  # get the compromise classif vector and only the first one here.
+    print("compromise class:", compromise_classification)  # results look resonable [2,1,0]
+
+    classification_list = compromise_classification
+    problem = dtlz2(8, 3)
+
+    print("classic", classification_list)
+    # TESTABLE PART
+    reference_points = [
+        {"f_1": ("<=", 0.3), "f_2": ("0", None)},
+        {"f_1": ("=>", 0.9), "f_2": ("<", None)},
+        {"f_1": ("0", None), "f_2": ("<=", 0.4)},
+    ]
+    for obj in problem.objectives:
+        for i in classification_list:
+            if classification_list[i][obj.symbol] not in [0, 1, 2]:
+                agg_value = 0
+                agg = [reference_points[rp][obj.symbol] for rp in reference_points]
+                agg_value = np.sum(agg)/3  # number of DMs, taking mean value.
+
+                classification = {obj.symbol: str(classification_list[i][obj.symbol], agg_value)}
+
+            classification_list.append(classification)
+
+    classification_list = convert_to_nimbus_classification(problem, compromise_classification)
+
+    print("classic", classification_list)
+    assert isinstance(classification_list, dict)
     # TODO: should work until this.
     # assert 0 == 1
 
@@ -182,24 +342,31 @@ def test_solve_sub_problems():
     solver = PyomoIpoptSolver(problem_w_sf, solver_options)
     initial_result = solver.solve(target)
 
-    # f1: 0.4355, f2: 0.3355, f3: 0.8355
+    # f1: 0.385, f2: 0.485, f3: 0.776
     initial_fs = initial_result.optimal_objectives
 
+    print(initial_fs)
     # let f1 worsen until 0.6, keep f2, improve f3 until 0.6
     # irst_rp = {"f_1": 0.6, "f_2": initial_fs["f_2"], "f_3": 0.6}
     dms_rps = {
-        "DM1": {"f_1": 0.0, "f_2": 0.5, "f_3": 1},
-        "DM2": {"f_1": 0.3, "f_2": 1, "f_3": 0.5},
-        "DM3": {"f_1": 0.5, "f_2": 0.6, "f_3": 0.0},
+        "DM1": {"f_1": 0.0, "f_2": initial_fs["f_2"], "f_3": 1},  # improve f_1, keep f_2 same, impair f_3
+        "DM2": {"f_1": 0.3, "f_2": 1, "f_3": 0.5},  # improve f_1 to 0.3, impair f_2, improve f_3 to 0.5
+        "DM3": {"f_1": 0.5, "f_2": 0.6, "f_3": 0.0},  # impair f_1 to 0.5, impair f_2 to 0.6, improve f_3
     }
 
     num_desired = 4
     solutions = solve_sub_problems(
-        problem, initial_fs, dms_rps, num_desired, decision_phase=False, create_solver=PyomoIpoptSolver, solver_options=solver_options
+        problem, initial_fs, dms_rps, num_desired, False, create_solver=PyomoIpoptSolver, solver_options=solver_options
     )
 
     # TODO: WORks until here because missing nimbus scala
     assert len(solutions) == num_desired
+    print(solutions[0].optimal_objectives)
+    print(solutions[1].optimal_objectives)
+    print(solutions[2].optimal_objectives)
+    print(solutions[3].optimal_objectives)
+
+    # assert 0 == 1
 
     """ lets ignore these for now because there are things to fix with the group scalarizaiton fucntions too.
     # check that the solutions are Pareto optimal
@@ -270,6 +437,11 @@ def test_2solve_sub_problems_decision_phase():
     }
     # let f1 worsen until 0.6, keep f2, improve f3 until 0.6
     # irst_rp = {"f_1": 0.6, "f_2": initial_fs["f_2"], "f_3": 0.6}
+    dms_rps = {
+        "DM1": {"f_1": 0.0, "f_2": 0.8, "f_3": 1},
+        "DM2": {"f_1": 0.0, "f_2": 1, "f_3": 0.3},
+        "DM3": {"f_1": 0.5, "f_2": 1, "f_3": 0.0},
+    }
 
     classifications_for_all_DMs = [
         {"f_1": ("<=", 0.3), "f_2": ("0", None)},
@@ -278,11 +450,13 @@ def test_2solve_sub_problems_decision_phase():
     ]
     num_desired = 1
     solutions = solve_sub_problems(
-        problem, initial_fs, dms_rps, num_desired, decision_phase=True, create_solver=PyomoIpoptSolver, solver_options=solver_options
+        problem, initial_fs, dms_rps, num_desired, True, create_solver=PyomoIpoptSolver, solver_options=solver_options
     )
 
+    print(solutions[0].optimal_objectives)
     # TODO: WORks until here because missing nimbus scala
     assert len(solutions) == num_desired
+    # assert 0 == 1
 
     """ lets ignore these for now because there are things to fix with the group scalarizaiton fucntions too.
     # check that the solutions are Pareto optimal
@@ -314,3 +488,96 @@ def test_2solve_sub_problems_decision_phase():
         # f3 should have improved
         assert fs["f_3"] < initial_fs["f_3"]
     """
+
+@pytest.mark.skip
+@pytest.mark.nimbus
+@pytest.mark.slow
+def test_forest_problem():
+    """Test that the scalarization problems in GNIMBUS are solved as expected."""
+
+    from desdeo.problem.testproblems import forest_problem, forest_problem_discrete
+
+    from desdeo.tools.utils import guess_best_solver
+
+    from desdeo.tools import ProximalSolver, GurobipySolver
+
+    problem = forest_problem_discrete()
+
+    # get some initial solution
+    initial_rp = {
+        "stock": 2000, "harvest_value": 30500, "npv": 75000
+    }
+    problem_w_sf, target = add_asf_diff(problem, "target", initial_rp)
+    # solver = PyomoIpoptSolver(problem_w_sf, solver_options)
+    # solver = guess_best_solver(problem)
+    solver = ProximalSolver(problem)
+    print(solver)
+    print(target)
+    initial_result = solver.solve("stock")
+
+    # TODO to figrue out how this meess works
+
+    print(initial_result)
+    # f1: 0.4355, f2: 0.3355, f3: 0.8355
+    initial_fs = initial_result.optimal_objectives
+
+    DM_rps = {
+        "DM1": {
+            "stock": 2800,
+            "harvest_value": 30000,
+            "npv": 80000,
+        },
+        "DM2": {
+            "stock": 3000,
+            "harvest_value": 25200.5,
+            "npv": 76500,
+        },
+        "DM3": {
+            "stock": 2900,
+            "harvest_value": 50005,
+            "npv": 90000,
+        },
+        "DM4": {
+            "stock": 3100,
+            "harvest_value": 22000,
+            "npv": 90000,
+        },
+        "DM5": {
+            "stock": 3200,
+            "harvest_value": 29000,
+            "npv": 76000,
+        },
+    }
+
+
+# TODO: only simple not realistic test case to test stuff
+    initial_rp = {"f_1": 0.5, "f_2": 0.5, "f_3": 0.5}
+
+# Simple case wheere only ordinal information
+    dms_rps = {
+        "DM1": {"f_1": 0.0, "f_2": initial_fs["f_2"], "f_3": 1},
+        "DM2": {"f_1": 0.0, "f_2": 1, "f_3": initial_fs["f_3"]},
+        "DM3": {"f_1": initial_fs["f_1"], "f_2": 1, "f_3": 0.0},
+    }
+# let f1 worsen until 0.6, keep f2, improve f3 until 0.6
+# irst_rp = {"f_1": 0.6, "f_2": initial_fs["f_2"], "f_3": 0.6}
+    dms_rps = {
+        "DM1": {"f_1": 0.0, "f_2": 0.8, "f_3": 1},
+        "DM2": {"f_1": 0.0, "f_2": 1, "f_3": 0.3},
+        "DM3": {"f_1": 0.5, "f_2": 1, "f_3": 0.0},
+    }
+
+    classifications_for_all_DMs = [
+        {"f_1": ("<=", 0.3), "f_2": ("0", None)},
+        {"f_1": ("=>", 0.9), "f_2": ("<", None)},
+        {"f_1": ("0", None), "f_2": ("<=", 0.4)},
+    ]
+    num_desired = 1
+    solutions = solve_sub_problems(
+        problem, initial_fs, dms_rps, num_desired, True, create_solver=PyomoIpoptSolver, solver_options=solver_options
+    )
+
+    print(solutions[0].optimal_objectives)
+# TODO: WORks until here because missing nimbus scala
+    assert len(solutions) == num_desired
+# assert 0 == 1
