@@ -8,7 +8,9 @@ from desdeo.problem import (
     objective_dict_to_numpy_array,
 )
 
-def find_GRP(
+# TODO: THIS DOES NOT WORK PROPERLY
+# def find_GRP_old(
+def find_GRP2(
     rps: np.ndarray,
     cip: np.ndarray,
     k: int,
@@ -28,7 +30,7 @@ def find_GRP(
         ideal (np.ndarray): the ideal vector of the problem
         nadir (np.ndarray): the nadir vector of the problem
 
-    Returns: 
+    Returns:
         np.ndarray : the group reference point
     """
     bnds = []
@@ -75,20 +77,27 @@ def find_GRP(
     if pref_agg_method == "maxmin" or pref_agg_method == "eq_maxmin":
         def fx(X):
             # TODO: recheck, if -1* should be inside maxmin terms or not!
+            # max S. For scipy we need to convert to minimization.
             maxmin_terms = [maxmin_criterion(rps[j, :], cip, X[:k]) for j in range(q)]
-            return -1*np.min(maxmin_terms)  # + rho * np.sum(maxmin_terms)
+            worst_off = np.min(maxmin_terms)
+            to_maximize = -1*worst_off
+            return to_maximize
+            # return -1*np.min(maxmin_terms)  # + rho * np.sum(maxmin_terms) # was min
     if pref_agg_method == "maxmin_ext" or pref_agg_method == "eq_maxmin_ext":
         def fx(X):
             maxmin_terms = [maxmin_criterion(rps[j, :], cip, X[:k]) for j in range(q)]
-            return -1*np.min(maxmin_terms) + rho * np.sum(maxmin_terms)
+            return -1 * (np.min(maxmin_terms) + rho * np.sum(maxmin_terms))
     if pref_agg_method == "maxmin_cones" or pref_agg_method == "eq_maxmin_cones":
         def fx(X):
-            # all_s_m = [-maxmin_cones_criterion(cip, rps[j,:], X[:k]) for j in range(q)]
-            # print(all_s_m)
-            # s_m = np.max(all_s_m)
             # TODO: these are equivalent.. not sure if it matters which to use.. in otherwords, which is closest to the og formulation i guess
             all_s_m = [maxmin_cones_criterion(cip, rps[j, :], X[:k]) for j in range(q)]
-            s_m = -1*np.min(all_s_m)
+            s_m = -1*np.min(all_s_m)  # was min
+            return s_m
+    if pref_agg_method == "maxmin_cones_ext" or pref_agg_method == "eq_maxmin_cones":
+        def fx(X):
+            # TODO: these are equivalent.. not sure if it matters which to use.. in otherwords, which is closest to the og formulation i guess
+            all_s_m = [maxmin_cones_criterion(cip, rps[j, :], X[:k]) for j in range(q)]
+            s_m = -1 * (np.min(all_s_m) + rho * np.sum(all_s_m))
             return s_m
 
     solution = minimize(fx,
@@ -107,9 +116,8 @@ def find_GRP(
     group_RP = solution.x[0:k]
     return group_RP
 
-# Literally nothing changes fro the results.. i suppose we sometimes do not get the iterations out error which is good i suppose
 # THIS is the version with separate aplha parameter to optimize. To handle the discontinuity on min()
-def find_GRP2(
+def find_GRP(
     rps: np.ndarray,
     cip: np.ndarray,
     k: int,
@@ -129,7 +137,7 @@ def find_GRP2(
         ideal (np.ndarray): the ideal vector of the problem
         nadir (np.ndarray): the nadir vector of the problem
 
-    Returns: 
+    Returns:
         np.ndarray : the group reference point
     """
 
@@ -179,6 +187,10 @@ def find_GRP2(
         s_m = -1*np.min(all_s_m)
         return lambda X: X[alpha] - np.min(all_s_m)
 
+    def DMconstr_cones_ext(X, q, k, rps, cip):
+        all_s_m = [maxmin_cones_criterion(cip, rps[j, :], X[:k]) for j in range(q)]
+        s_m = -1*np.min(all_s_m)
+        return lambda X: X[alpha] - (np.min(all_s_m) - rho * np.sum(all_s_m))
     # constraints for feasible space
 
     def feas_space_const(X, k, q, i, rps):
@@ -191,6 +203,8 @@ def find_GRP2(
 
     if pref_agg_method == "maxmin_cones" or pref_agg_method == "eq_maxmin_cones":
         Cons.append({'type': 'ineq', 'fun': DMconstr_cones(X, q, k, rps, cip)})
+    if pref_agg_method == "maxmin_cones_ext" or pref_agg_method == "eq_maxmin_cones_ext":
+        Cons.append({'type': 'ineq', 'fun': DMconstr_cones_ext(X, q, k, rps, cip)})
     if pref_agg_method == "maxmin_ext" or pref_agg_method == "eq_maxmin_ext":
         Cons.append({'type': 'ineq', 'fun': DMconstr_ext(X, q, k, rps, cip)})
     else:
@@ -209,13 +223,13 @@ def find_GRP2(
     # The s_m(R) for all DMs
     # TODO: standardization for maxmin (especially if not solving zdt1 and zdt2 only)
     if pref_agg_method == "maxmin" or pref_agg_method == "eq_maxmin":
-        """
+        """ Have to convert to minimization for scipy.optimize. Hence Maximize min S_m(x) =>
         def fx(X):
-            return -1*X[alpha]
+            return -1*X[alpha] -1*np.min(maxmin_terms)
         """
         def fx(X):
             maxmin_terms = [maxmin_criterion(rps[j, :], cip, X[:k]) for j in range(q)]
-            return -1*X[alpha] - 1*np.min(maxmin_terms)  # + rho * np.sum(maxmin_terms)
+            return -1*X[alpha] - np.min(maxmin_terms)  # + rho * np.sum(maxmin_terms)
     if pref_agg_method == "maxmin_ext" or pref_agg_method == "eq_maxmin_ext":
         def fx(X):
             """
@@ -223,7 +237,7 @@ def find_GRP2(
             """
         def fx(X):
             maxmin_terms = [maxmin_criterion(rps[j, :], cip, X[:k]) for j in range(q)]
-            return -1*X[alpha] - 1*np.min(maxmin_terms) - rho * np.sum(maxmin_terms)
+            return -1*X[alpha] - (np.min(maxmin_terms) + rho * np.sum(maxmin_terms))
     if pref_agg_method == "maxmin_cones" or pref_agg_method == "eq_maxmin_cones":
         """
         def fx(X):
@@ -232,8 +246,18 @@ def find_GRP2(
         def fx(X):
             # TODO: these are equivalent.. not sure if it matters which to use.. in otherwords, which is closest to the og formulation i guess
             all_s_m = [maxmin_cones_criterion(cip, rps[j, :], X[:k]) for j in range(q)]
-            s_m = -1*np.min(all_s_m)
+            s_m = -np.min(all_s_m)
             return -1*X[alpha] + s_m
+    if pref_agg_method == "maxmin_cones_ext" or pref_agg_method == "eq_maxmin_cones_ext":
+        """
+        def fx(X):
+            return -1*X[alpha]
+        """
+        def fx(X):
+            # TODO: these are equivalent.. not sure if it matters which to use.. in otherwords, which is closest to the og formulation i guess
+            all_s_m = [maxmin_cones_criterion(cip, rps[j, :], X[:k]) for j in range(q)]
+            s_m = -np.min(all_s_m)
+            return -1*X[alpha] + s_m - rho * np.sum(all_s_m)
 
     solution = minimize(fx,
                         X,
@@ -258,7 +282,7 @@ def aggregate(
     reference_points: dict[str, dict[str, float]],
     nav_point_arr=np.ndarray,
 ) -> np.ndarray:
-    """Function to aggregate the preferecnes. Connects to find_GRP and handles conversions 
+    """Function to aggregate the preferences. Connects to find_GRP and handles conversions
     from dicts to np.ndarrays and using max_multiplier to convert the GRP to the true objective space.
 
     Args:
@@ -308,7 +332,7 @@ def maxmin_cones_criterion(c, p, r):
 
 
 # given a search direction from old CIP RO to new suggested point R1, evaluate point P using a cone model
-def eval_RP(R0, R1, P, a=0.5):
+def eval_RP(R0, R1, P, a=0.1):
     # calc dir vector.
     D = R1 - R0
     # normalize the direction vector D
@@ -335,6 +359,8 @@ def eval_RP(R0, R1, P, a=0.5):
     # print("eval_list",eval_value)
     # return the first finite component.
     # print("eval_values\r\n", eval_value)
+    if any(abs(eval_value - eval_value[0] > 1e-5)):
+        print("this should not happen")
     eval_value2 = eval_value[np.isfinite(eval_value)][0]
     # print(eval_value2)
     return eval_value2
