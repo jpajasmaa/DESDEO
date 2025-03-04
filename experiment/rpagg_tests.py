@@ -22,7 +22,11 @@ import pandas as pd
 import plotly.io as pio
 pio.kaleido.scope.mathjax = None
 
-# TODO: only works iwth maxmin ja maxmin-cones. MAke another with eq variants
+
+def agg_test(problem: Problem, rps: list[dict[str, float]], cip, name, solver=None, solver_options=None):
+
+    pass
+
 def agg_rps_test_mm(problem: Problem, rps: list[dict[str, float]], cip, name, solver=None, solver_options=None):
 
     nadir = objective_dict_to_numpy_array(problem, get_nadir_dict(problem))
@@ -45,27 +49,27 @@ def agg_rps_test_mm(problem: Problem, rps: list[dict[str, float]], cip, name, so
     print(cip)
 
     # find GRP, returns np.array
-    grpmm = find_GRP(rp_arr, cip, k, q, ideal, nadir, "maxmin")
+    grpmm = find_GRP(rp_arr, cip, k, q, ideal, rp_arr, "maxmin")
     # improvmenet direction
     GRP = cip - grpmm
     # make dict from the GPR array
     GRP = {"f_1": GRP[0], "f_2": GRP[1]}
 
     # find GRP_ext, returns np.array
-    grpmm_ext = find_GRP(rp_arr, cip, k, q, ideal, nadir, "maxmin_ext")
+    grpmm_ext = find_GRP(rp_arr, cip, k, q, ideal, rp_arr, "maxmin_ext")
     # improvmenet direction
     GRP_ext = cip - grpmm_ext
     # make dict from the GPR array
     GRP_ext = {"f_1": GRP_ext[0], "f_2": GRP_ext[1]}
 
     # find GRP, returns np.array
-    grpcones = find_GRP(rp_arr, cip, k, q, ideal, nadir, "maxmin_cones")
+    grpcones = find_GRP(rp_arr, cip, k, q, ideal, rp_arr, "maxmin_cones")
     # improvmenet direction
     GRP_cones = cip - grpcones
     # make dict from the GPR array
     GRP_cones = {"f_1": GRP_cones[0], "f_2": GRP_cones[1]}
 
-    grpcones_ext = find_GRP(rp_arr, cip, k, q, ideal, nadir, "maxmin_cones_ext")
+    grpcones_ext = find_GRP(rp_arr, cip, k, q, ideal, rp_arr, "maxmin_cones_ext")
     # improvmenet direction
     GRP_cones_ext = cip - grpcones_ext
     # make dict from the GPR array
@@ -322,9 +326,9 @@ def agg_rps_test_mm(problem: Problem, rps: list[dict[str, float]], cip, name, so
     fig.add_scatter(x=create_line_path(rp_arr[:, 0]), y=create_line_path(rp_arr[:, 1]),
                     mode="lines", line=dict(color="#808080"), name="valid_area", showlegend=True)
     # FOR saving as pdf
-    # fig.update_layout(autosize=False, width=800, height=800)
-    # fig.write_image(f"/home/jp/tyot/mop/papers/prefagg_concept/experiment_pics/paperpics/{name}.pdf", width=600, height=600)
-    # fig.write_html(f"/home/jp/tyot/mop/papers/prefagg_concept/experiment_pics/paperpics/htmls/{name}.html")
+    fig.update_layout(autosize=False, width=800, height=800)
+    fig.write_image(f"/home/jp/tyot/mop/papers/prefagg_concept/experiment_pics/paperpics/{name}.pdf", width=800, height=800)
+    fig.write_html(f"/home/jp/tyot/mop/papers/prefagg_concept/experiment_pics/paperpics/htmls/{name}.html")
 
     fig.show()
 
@@ -366,7 +370,6 @@ def agg_rps_test_eq(problem: Problem, rps: list[dict[str, float]], cip, name):
         # for 1 RP
         solver = PyomoIpoptSolver(p)
         res = solver.solve(target)
-        xs = res.optimal_variables
         fs = res.optimal_objectives
         # print(fs)
         converted_prefs.append(fs)
@@ -395,35 +398,40 @@ def agg_rps_test_eq(problem: Problem, rps: list[dict[str, float]], cip, name):
 
     # TODO: send also the og rps
     # find GRP, returns np.array
-    grpmm = find_GRP(conv_rp_arr, cip, k, q, ideal, nadir, "maxmin")
+    grpmm = find_GRP(conv_rp_arr, cip, k, q, ideal, rp_arr, "eq_maxmin")
     # improvmenet direction
     GRP = cip - grpmm
     # make dict from the GPR array
     GRP = {"f_1": GRP[0], "f_2": GRP[1]}
+    print(f"maxmin {GRP}")
 
     # find GRP_ext, returns np.array
-    grpmm_ext = find_GRP(conv_rp_arr, cip, k, q, ideal, nadir, "maxmin_ext")
+    grpmm_ext = find_GRP(conv_rp_arr, cip, k, q, ideal, rp_arr, "eq_maxmin_ext")
     # improvmenet direction
     GRP_ext = cip - grpmm_ext
     # make dict from the GPR array
     GRP_ext = {"f_1": GRP_ext[0], "f_2": GRP_ext[1]}
+    print(f"maxmin ext {GRP_ext}")
 
     # find GRP, returns np.array
-    grpcones = find_GRP(conv_rp_arr, cip, k, q, ideal, nadir, "maxmin_cones")
+    grpcones = find_GRP(conv_rp_arr, cip, k, q, ideal, rp_arr, "eq_maxmin_cones")
     # improvmenet direction
     GRP_cones = cip - grpcones
     # make dict from the GPR array
     GRP_cones = {"f_1": GRP_cones[0], "f_2": GRP_cones[1]}
+    print(f"maxmin cones {GRP_cones}")
 
     # find GRP, returns np.array
-    grpcones_ext = find_GRP(conv_rp_arr, cip, k, q, ideal, nadir, "maxmin_cones_ext")
+    grpcones_ext = find_GRP(conv_rp_arr, cip, k, q, ideal, rp_arr, "eq_maxmin_cones_ext")
     # improvmenet direction
     GRP_cones_ext = cip - grpcones_ext
     # make dict from the GPR array
     GRP_cones_ext = {"f_1": GRP_cones_ext[0], "f_2": GRP_cones_ext[1]}
+    print(f"maxmin cones ext {GRP_cones_ext}")
 
     grpmean = cip - np.mean(conv_rp_arr, axis=0)
     GRPmean = {"f_1": grpmean[0], "f_2": grpmean[1]}
+    print(f"mean {GRPmean}")
 
     """
     SOLVING
@@ -438,7 +446,6 @@ def agg_rps_test_eq(problem: Problem, rps: list[dict[str, float]], cip, name):
     )
     solver5 = PyomoIpoptSolver(problem_w_asf5)
     res5 = solver5.solve(target5)
-    xs = res5.optimal_variables
     fs_mean = res5.optimal_objectives
     print("final solution from mean", fs_mean)
 
@@ -451,7 +458,6 @@ def agg_rps_test_eq(problem: Problem, rps: list[dict[str, float]], cip, name):
     )
     solver = PyomoIpoptSolver(problem_w_asf)
     res = solver.solve(target)
-    xs = res.optimal_variables
     fs_mm = res.optimal_objectives
     print("final solution from maxmin", fs_mm)
 
@@ -464,7 +470,6 @@ def agg_rps_test_eq(problem: Problem, rps: list[dict[str, float]], cip, name):
     )
     solver4 = PyomoIpoptSolver(problem_w_asf4)
     res4 = solver4.solve(target4)
-    xs4 = res4.optimal_variables
     fs_mm_ext = res4.optimal_objectives
     print("final solution from maxmin ext", fs_mm_ext)
 
@@ -478,7 +483,6 @@ def agg_rps_test_eq(problem: Problem, rps: list[dict[str, float]], cip, name):
     )
     solver2 = PyomoIpoptSolver(problem_w_asf2)
     res2 = solver2.solve(target2)
-    xs2 = res2.optimal_variables
     fs_cones = res2.optimal_objectives
     print("final solution from maxmin cones", fs_cones)
 
@@ -491,8 +495,7 @@ def agg_rps_test_eq(problem: Problem, rps: list[dict[str, float]], cip, name):
         reference_point_aug=cip_dict,
     )
     solver22 = PyomoIpoptSolver(problem_w_asf22)
-    res22 = solver2.solve(target22)
-    xs22 = res22.optimal_variables
+    res22 = solver22.solve(target22)
     fs_cones_ext = res22.optimal_objectives
     print("final solution from maxmin cones ext", fs_cones_ext)
     """
@@ -531,7 +534,7 @@ def agg_rps_test_eq(problem: Problem, rps: list[dict[str, float]], cip, name):
     # plot RPs
     for i in range(len(rp_arr)):
         # fig.add_scatter(x=[rp_arr[i][0]], y=[rp_arr[i][1]], mode="markers", name=f"DM{i+1}_RP", showlegend=True, marker=dict(size=10, symbol="x"))
-        fig.add_scatter(x=[conv_rp_arr[i][0]], y=[conv_rp_arr[i][1]], mode="markers", name=f"converted DM{
+        fig.add_scatter(x=[rp_arr[i][0]], y=[rp_arr[i][1]], mode="markers", name=f"DM{
                         i+1}_RP", showlegend=True, marker=dict(size=15, symbol="x"))
 
     # PLOT GRP
@@ -558,12 +561,13 @@ def agg_rps_test_eq(problem: Problem, rps: list[dict[str, float]], cip, name):
 
     # lines to show the polyhedron
     # fig.add_scatter(x=[0.2, 0.45, 0.55, 0.2], y=[0.4, 0.4, 0.1, 0.4], mode="lines", line=dict(color="#808080"), name="valid_area", showlegend=True)
-    fig.add_scatter(x=create_line_path(conv_rp_arr[:, 0]), y=create_line_path(conv_rp_arr[:, 1]),
+    fig.add_scatter(x=create_line_path(rp_arr[:, 0]), y=create_line_path(rp_arr[:, 1]),
                     mode="lines", line=dict(color="#808080"), name="valid_area", showlegend=True)
 
     # FOR saving as pdf
     fig.update_layout(autosize=False, width=800, height=800)
     fig.write_image(f"/home/jp/tyot/mop/papers/prefagg_concept/experiment_pics/misc/{name}.pdf", width=800, height=800)
+    fig.write_html(f"/home/jp/tyot/mop/papers/prefagg_concept/experiment_pics/paperpics/htmls/{name}.html")
 
     fig.show()
 
@@ -970,8 +974,8 @@ def experiment2_test(case_name):
     # eq_example_optdm1
     # verticaldms
     reference_points = [
-        {"f_1": 0.9, "f_2": 0.},
         {"f_1": 0.9, "f_2": 0.11},
+        {"f_1": 0.9, "f_2": 0.},
         {"f_1": 0.39, "f_2": 0.5},
         {"f_1": 0.0, "f_2": 0.9},
     ]
@@ -980,6 +984,28 @@ def experiment2_test(case_name):
 
     # agg_rps_test
     agg_rps_test_eq(problem, reference_points, cip, case_name)
+
+def experiment3_test(case_name):
+   # test_maxmin()
+    n_variables = 30
+    n_objectives = 3
+    # ZDT3 has issues with something, maybe normalization i dunno
+    # problem = zdt1(n_variables)
+    problem = zdt2(n_variables)
+
+    # eq_example_optdm1
+    # verticaldms
+    reference_points = [
+        {"f_1": 0.9, "f_2": 0.11},
+        {"f_1": 0.9, "f_2": 0.},
+        {"f_1": 0.39, "f_2": 0.5},
+        {"f_1": 0.0, "f_2": 0.9},
+    ]
+    # TODO: NOTE, LETS WRITE, LETS ASSUME AT SOME LATER ITERATION I, WE HAVE CIP AT 0.7,0.7
+    cip = np.array([1, 1])
+
+    # agg_rps_test
+    agg_rps_test_mm(problem, reference_points, cip, case_name)
 
 def experiment2_test_dtlz2(case_name):
    # test_maxmin()
@@ -1216,10 +1242,53 @@ def exp_cip2(case_name):
     # agg_rps_test
     agg_rps_test_mm(problem, reference_points, cip, case_name)
 
+def experiment_new(case_name):
+
+    from desdeo.problem.testproblems import re22
+
+    n_variables = 30
+    n_objectives = 2
+    # ZDT3 has issues with something, maybe normalization i dunno
+    problem = zdt1(n_variables)
+    nadir = objective_dict_to_numpy_array(problem, get_nadir_dict(problem))
+    ideal = objective_dict_to_numpy_array(problem, get_ideal_dict(problem))
+    # eq_example_optdm1
+    reference_points = [
+        {"f_1": 0.2, "f_2": 0.4},
+        {"f_1": 0.45, "f_2": 0.4},
+        {"f_1": 0.55, "f_2": 0.1},
+    ]
+    cip = np.array([0.8, 0.5])
+    q = 3
+    from preference_aggregation import subproblem
+
+    rp_arr = np.array([[col["f_1"], col["f_2"]] for col in reference_points])
+    # rp_arr = objective_dict_to_numpy_array(problem, reference_points)
+    sp = subproblem(rp_arr, cip, n_objectives, q, ideal)
+    print(sp)
+    from desdeo.tools import ScipyMinimizeSolver, GurobipySolver
+
+    solver = ScipyMinimizeSolver(sp)
+    # solver2 = PyomoIpoptSolver(sp)
+    # gr_solver = GurobipySolver(sp)
+
+    results = solver.solve("f_1")
+    # results2 = solver2.solve("f_1")
+    # results2 = gr_solver.solve("f_1")
+    print("======================")
+    print("RESULLTS:  ", results)
+    # print("RESULLTS:  ", results2)
+    print("======================")
+
+    # agg_rps_test
+    # agg_rps_test_mm(problem, reference_points, cip, case_name)
+
 
 if __name__ == "__main__":
 
-    experiment_optDM2("eo3")
+    # experiment_new("testing")
+
+    # experiment_optDM2("eo3")
     # experiment_optDMb("eo2")
     # experiment_zdt3("ezdt3") # does not work
 
@@ -1250,5 +1319,6 @@ if __name__ == "__main__":
     # Below dtlz2 does not work for some reason.
     # experiment2_test("test")
 
-    # experiment2_test("test")
+    experiment2_test("test")
+    experiment3_test("test")
     # experiment2_("")

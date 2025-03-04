@@ -4,7 +4,7 @@ import numpy.testing as npt
 import pytest
 # from fixtures import dtlz2_5x_3f_data_based  # noqa: F401
 
-from preference_aggregation import find_GRP, find_GRP2, maxmin_criterion, maxmin_cones_criterion, aggregate, not_normalized_maxmin_criterion
+from preference_aggregation import find_GRP, find_GRP_simple, find_GRP_old, maxmin_criterion, maxmin_cones_criterion, aggregate, not_normalized_maxmin_criterion
 
 from desdeo.tools.scalarization import add_asf_diff, add_guess_sf_diff, add_stom_sf_diff, add_asf_generic_diff
 
@@ -97,31 +97,17 @@ def test_find_GRP():
     nadir = objective_dict_to_numpy_array(problem, get_nadir_dict(problem))
     ideal = objective_dict_to_numpy_array(problem, get_ideal_dict(problem))
 
-    prefs = {
-        "DM1": {"f_1": 0.5, "f_2": 0.5},
-        "DM2": {"f_1": 1., "f_2": 0},
-        "DM3": {"f_1": 1, "f_2": 1},
-    }
-    # rp = {"f_1": 0.5, "f_2": 0.6 }
-    # rp1 = {"f_1": 0.9, "f_2": 0.6, }
-    # rp2 = {"f_1": 0.55, "f_2": 0.6, }
-    # rp3 = {"f_1": 0.0, "f_2": 0.1, }
-    rp1 = {"f_1": 0.5, "f_2": 0.5}
-    rp2 = {"f_1": 0., "f_2": 1.}
-    rp3 = {"f_1": 1., "f_2": 1.0}
-    # rps in lists
-    # rp_np =  [0.5, 0.6]
-    rp1_np = [0.5, 0.5]
-    rp2_np = [0., 1]
-    rp3_np = [1, 1.0]
+    rp1_np = [0.6, 0.4]
+    rp2_np = [0.1, .1]
+    rp3_np = [0.4, 0.6]
+
+    result = [0.1, 0.1]
 
     cip = np.array([1., 1.])
 
     k = 2
     q = 3
     pa = "maxmin"
-
-    # grp = [rp1, rp2, rp3]
     all_rps = np.array([rp1_np, rp2_np, rp3_np])
     print(all_rps)
     GRP = find_GRP(all_rps, cip, k, q, ideal, nadir, pa)
@@ -129,7 +115,31 @@ def test_find_GRP():
 
     assert len(GRP) == 2
     assert not np.isnan(GRP).any()  # "GRP should consist of real numbers."
-    # assert type(all_resp[0]) is NAUTILI_Response
+    assert np.allclose(GRP, np.array([0.1, 0.1]))
+
+    pa = "maxmin_ext"
+    GRP = find_GRP(all_rps, cip, k, q, ideal, nadir, pa)
+    print("MAXMIN ext GRP", GRP)
+
+    assert len(GRP) == 2
+    assert not np.isnan(GRP).any()
+    assert np.allclose(GRP, np.array([0.1, 0.1]))
+
+    pa = "maxmin_cones"
+    GRP = find_GRP(all_rps, cip, k, q, ideal, nadir, pa)
+    print("MAXMIN cones GRP", GRP)
+
+    assert len(GRP) == 2
+    assert not np.isnan(GRP).any()
+    assert np.allclose(GRP, np.array([0.1, 0.1]))
+
+    pa = "maxmin_cones_ext"
+    GRP = find_GRP(all_rps, cip, k, q, ideal, nadir, pa)
+    print("MAXMIN cones ext GRP", GRP)
+
+    assert len(GRP) == 2
+    assert not np.isnan(GRP).any()
+    assert np.allclose(GRP, np.array([0.1, 0.1]))
 
 # @pytest.mark.skip
 @pytest.mark.pref_agg
@@ -214,18 +224,18 @@ def test_maxmin_cones_same_scales():
     # assert not np.isnan(GRP).any()  # "GRP should consist of real numbers."
 
     R = [.573, 0.533]  # DM1 should be max happy, DM2-3 also kind of.
-    values = [maxmin_cones_criterion(cip, all_rps[j, :], R) for j in range(q)]
+    values = [maxmin_cones_criterion(all_rps[j, :], cip, R) for j in range(q)]
     print("rudolf code values", values)
 
     R = [.5, .8]  # testing that if GRP would be at DM1's point, he would have max value and others not
-    values = [maxmin_cones_criterion(cip, all_rps[j, :], R) for j in range(q)]  # should be [-1, -1, 0]
+    values = [maxmin_cones_criterion(all_rps[j, :], cip, R) for j in range(q)]  # should be [-1, -1, 0]
     print("values", values)
     assert np.isclose(values[0], 1)  # should be 1 for DM that has RP at the same point as suggested.
     assert values[1] < 1
     assert values[2] < 1
 
     R = [.3, .6]  # DM2 and DM1 should be max happy.
-    values = [maxmin_cones_criterion(cip, all_rps[j, :], R) for j in range(q)]  # should be [0, x, x]
+    values = [maxmin_cones_criterion(all_rps[j, :], cip, R) for j in range(q)]  # should be [0, x, x]
 
     print("values", values)
     assert values[0] > 1
@@ -233,7 +243,7 @@ def test_maxmin_cones_same_scales():
     assert values[2] < 1
 
     R = [.8, 0.4]  # DM3 and DM1 should be max happy.
-    values = [maxmin_cones_criterion(cip, all_rps[j, :], R) for j in range(q)]
+    values = [maxmin_cones_criterion(all_rps[j, :], cip, R) for j in range(q)]
 
     print("values", values)
     assert values[0] < 1
@@ -273,18 +283,18 @@ def test_maxmin_cones_extended():
     # assert not np.isnan(GRP).any()  # "GRP should consist of real numbers."
 
     R = [.573, 0.533]  # DM1 should be max happy, DM2-3 also kind of.
-    values = [maxmin_cones_criterion(cip, all_rps[j, :], R) for j in range(q)]
+    values = [maxmin_cones_criterion(all_rps[j, :], cip, R) for j in range(q)]
     print("rudolf code values", values)
 
     R = [.5, .8]  # testing that if GRP would be at DM1's point, he would have max value and others not
-    values = [maxmin_cones_criterion(cip, all_rps[j, :], R) for j in range(q)]  # should be [-1, -1, 0]
+    values = [maxmin_cones_criterion(all_rps[j, :], cip, R) for j in range(q)]  # should be [-1, -1, 0]
     print("values", values)
     assert np.isclose(values[0], 1)  # should be 1 for DM that has RP at the same point as suggested.
     assert values[1] < 1
     assert values[2] < 1
 
     R = [.3, .6]  # DM2 and DM1 should be max happy.
-    values = [maxmin_cones_criterion(cip, all_rps[j, :], R) for j in range(q)]  # should be [0, x, x]
+    values = [maxmin_cones_criterion(all_rps[j, :], cip, R) for j in range(q)]  # should be [0, x, x]
 
     print("values", values)
     assert values[0] > 1
@@ -292,7 +302,7 @@ def test_maxmin_cones_extended():
     assert values[2] < 1
 
     R = [.8, 0.4]  # DM3 and DM1 should be max happy.
-    values = [maxmin_cones_criterion(cip, all_rps[j, :], R) for j in range(q)]
+    values = [maxmin_cones_criterion(all_rps[j, :], cip, R) for j in range(q)]
 
     print("values", values)
     assert values[0] < 1
@@ -440,7 +450,7 @@ def test_maxmin_PO_same_scales():
 
     # grp = [rp1, rp2, rp3]
     # print(all_rps)
-    GRP = find_GRP(all_rps, cip, k, q, ideal, nadir, pa)
+    GRP = find_GRP(all_rps, cip, k, q, ideal, rp_arr, pa)
     print("MAXMIN GRP", GRP)
     assert len(GRP) == n_objectives
     assert not np.isnan(GRP).any()  # "GRP should consist of real numbers."
@@ -626,7 +636,7 @@ def test_maxmin_cones_S():
     # maxmin addtiive is minimizing Sm, and we are maximinzing S. so max S min Sm. -> maxmin.
     # scipy needs in minimization so, we should -1* S min Sm, right?
     P = all_rps[0, :]  # testing that if GRP would be at DM1's point, he would have max value and others not
-    values = [maxmin_cones_criterion(cip, all_rps[j, :], P) for j in range(q)]  # Eli täältä puuttuisi - ?
+    values = [maxmin_cones_criterion(all_rps[j, :], cip, P) for j in range(q)]  # Eli täältä puuttuisi - ?
     print(values)
     assert values[0] == 1
     assert values[1] < 1
@@ -636,7 +646,7 @@ def test_maxmin_cones_S():
     # max S min Sm -> -1* S min Sm.
 
     P = all_rps[1, :]  # testing that if GRP would be at DM1's point, he would have max value and others not
-    values = [maxmin_cones_criterion(cip, all_rps[j, :], P) for j in range(q)]  # Eli täältä puuttuisi - ?
+    values = [maxmin_cones_criterion(all_rps[j, :], cip, P) for j in range(q)]  # Eli täältä puuttuisi - ?
 
     print("values", values)
     assert values[0] < 1
@@ -645,7 +655,7 @@ def test_maxmin_cones_S():
 
     # P = all_rps[2, :]  # testing that if GRP would be at DM1's point, he would have max value and others not
     P = [0, 0]  # testing that at ideal, all would have over 1 values
-    values = [maxmin_cones_criterion(cip, all_rps[j, :], P) for j in range(q)]  # Eli täältä puuttuisi - ?
+    values = [maxmin_cones_criterion(all_rps[j, :], cip, P) for j in range(q)]  # Eli täältä puuttuisi - ?
     print("values", values)
     assert values[0] > 1
     assert values[1] > 1
