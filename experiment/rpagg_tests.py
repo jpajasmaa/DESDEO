@@ -326,7 +326,7 @@ def agg_rps_test_mm(problem: Problem, rps: list[dict[str, float]], cip, name, so
     fig.add_scatter(x=create_line_path(rp_arr[:, 0]), y=create_line_path(rp_arr[:, 1]),
                     mode="lines", line=dict(color="#808080"), name="valid_area", showlegend=True)
     # FOR saving as pdf
-    fig.update_layout(autosize=False, width=800, height=800)
+    fig.update_layout(autosize=False, width=800, height=800, title=f"{name}")
     fig.write_image(f"/home/jp/tyot/mop/papers/prefagg_concept/experiment_pics/paperpics/{name}.pdf", width=800, height=800)
     fig.write_html(f"/home/jp/tyot/mop/papers/prefagg_concept/experiment_pics/paperpics/htmls/{name}.html")
 
@@ -563,9 +563,11 @@ def agg_rps_test_eq(problem: Problem, rps: list[dict[str, float]], cip, name):
     # fig.add_scatter(x=[0.2, 0.45, 0.55, 0.2], y=[0.4, 0.4, 0.1, 0.4], mode="lines", line=dict(color="#808080"), name="valid_area", showlegend=True)
     fig.add_scatter(x=create_line_path(rp_arr[:, 0]), y=create_line_path(rp_arr[:, 1]),
                     mode="lines", line=dict(color="#808080"), name="valid_area", showlegend=True)
+    # fig.add_scatter(x=create_line_path(conv_rp_arr[:, 0]), y=create_line_path(conv_rp_arr[:, 1]),
+    #                mode="lines", line=dict(color="#803080"), name="valid_area", showlegend=True)
 
     # FOR saving as pdf
-    fig.update_layout(autosize=False, width=800, height=800)
+    fig.update_layout(autosize=False, width=800, height=800, title=f"{name}")
     fig.write_image(f"/home/jp/tyot/mop/papers/prefagg_concept/experiment_pics/misc/{name}.pdf", width=800, height=800)
     fig.write_html(f"/home/jp/tyot/mop/papers/prefagg_concept/experiment_pics/paperpics/htmls/{name}.html")
 
@@ -1097,6 +1099,23 @@ def exp_optdm1_2(case_name):
     # agg_rps_test
     agg_rps_test_mm(problem, reference_points, cip, case_name)
 
+def exp2_optdm1(case_name):
+    n_variables = 30
+    n_objectives = 2
+    # ZDT3 has issues with something, maybe normalization i dunno
+    problem = zdt2(n_variables)
+
+    # eq_example_optdm1
+    reference_points = [
+        {"f_1": 0.1, "f_2": 0.8},
+        {"f_1": 0.9, "f_2": 0.7},
+        {"f_1": 0.7, "f_2": 0.8},
+    ]
+    cip = np.array([1, 1])
+
+    # agg_rps_test
+    agg_rps_test_eq(problem, reference_points, cip, case_name)
+
 def exp_vertdms(case_name):
    # test_maxmin()
     n_variables = 30
@@ -1244,7 +1263,9 @@ def exp_cip2(case_name):
 
 def experiment_new(case_name):
 
-    from desdeo.problem.testproblems import re22
+    from desdeo.problem.testproblems import re22, river_pollution_problem
+
+    # sp = river_pollution_problem()
 
     n_variables = 30
     n_objectives = 2
@@ -1253,31 +1274,46 @@ def experiment_new(case_name):
     nadir = objective_dict_to_numpy_array(problem, get_nadir_dict(problem))
     ideal = objective_dict_to_numpy_array(problem, get_ideal_dict(problem))
     # eq_example_optdm1
+    """
     reference_points = [
         {"f_1": 0.2, "f_2": 0.4},
         {"f_1": 0.45, "f_2": 0.4},
         {"f_1": 0.55, "f_2": 0.1},
     ]
     cip = np.array([0.8, 0.5])
+    """
+    reference_points = [
+        {"f_1": 0.7, "f_2": 0.3},
+        {"f_1": 0.1, "f_2": 0.7},
+        {"f_1": 0.7, "f_2": 0.7},
+    ]
+
+    cip = np.array([1, 1])
     q = 3
-    from preference_aggregation import subproblem
+    from preference_aggregation import subproblem, subproblem2, simple_test_problem2
+
+    # sp = simple_test_problem2()
 
     rp_arr = np.array([[col["f_1"], col["f_2"]] for col in reference_points])
     # rp_arr = objective_dict_to_numpy_array(problem, reference_points)
-    sp = subproblem(rp_arr, cip, n_objectives, q, ideal)
+    sp = subproblem2(rp_arr, cip, n_objectives, q, ideal)
     print(sp)
-    from desdeo.tools import ScipyMinimizeSolver, GurobipySolver
+    from desdeo.tools import ScipyMinimizeSolver, GurobipySolver, NevergradGenericSolver
 
-    solver = ScipyMinimizeSolver(sp)
-    # solver2 = PyomoIpoptSolver(sp)
+    # solver = ScipyMinimizeSolver(sp)
+    solver2 = PyomoIpoptSolver(sp)
+    solver3 = NevergradGenericSolver(sp)
+
     # gr_solver = GurobipySolver(sp)
 
-    results = solver.solve("f_1")
-    # results2 = solver2.solve("f_1")
-    # results2 = gr_solver.solve("f_1")
+    # results = solver.solve("f_1")
+    results2 = solver2.solve("f_1")
+    results3 = solver3.solve("f_1")
+    # results3 = gr_solver.solve("f_1")
     print("======================")
-    print("RESULLTS:  ", results)
-    # print("RESULLTS:  ", results2)
+    # print("RESULLTS:  ", results)
+    print("RESULLTS:  ", results2)
+    print("RESULLTS:  ", results3)
     print("======================")
 
     # agg_rps_test
@@ -1288,28 +1324,30 @@ if __name__ == "__main__":
 
     # experiment_new("testing")
 
-    # experiment_optDM2("eo3")
-    # experiment_optDMb("eo2")
-    # experiment_zdt3("ezdt3") # does not work
-
-    # experiment1_solution_process1("e1s1")
-    # experiment1_solution_process2("e1s2")
-    # experiment1_solution_process3("e1s3")
-    # experiment1_pessmistic1("e1p1")
-    # experiment1_zdt2("zdt2example")
-    # exp_optdm1("optdm1")
     # exp_optdm1_2("eo1")
-    # exp_vertdms("verticaldms")
+    """
+    experiment_optDM2("eo3")
+    experiment_optDMb("eo2")
 
-    # exp_change1("change1")
-    # exp_change2("change2")
-    # exp_change3("change3")
+    experiment1_solution_process1("e1s1")
+    experiment1_solution_process2("e1s2")
+    experiment1_solution_process3("e1s3")
+    experiment1_pessmistic1("e1p1")
+    experiment1_zdt2("zdt2example")
+    exp_optdm1("optdm1")
+    exp_optdm1_2("eo1")
+    exp_vertdms("verticaldms")
 
-    # exp_shapePF("shape1")
-    # exp_shapePF2("shape2")
+    exp_change1("change1")
+    exp_change2("change2")
+    exp_change3("change3")
 
-    # exp_cip1("cip1")
-    # exp_cip2("cip2")
+    exp_shapePF("shape1")
+    exp_shapePF2("shape2")
+
+    exp_cip1("cip1")
+    exp_cip2("cip2")
+    """
 
     # EQ variants
     # experiment2_solution_process1("e2s1")
@@ -1318,7 +1356,9 @@ if __name__ == "__main__":
 
     # Below dtlz2 does not work for some reason.
     # experiment2_test("test")
+    # experiment_zdt3("ezdt3")  # does not work
 
-    experiment2_test("test")
-    experiment3_test("test")
+    exp2_optdm1("e2o1")
+    # experiment2_test("test")
+    # experiment3_test("test")
     # experiment2_("")

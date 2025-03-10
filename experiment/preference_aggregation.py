@@ -370,7 +370,8 @@ def find_GRP(
     bnds = []
     # bounds for objective functions, bounded by ideal and current iteration point.
     for i in range(k):
-        bnds.append((ideal[i], cip[i]))
+        # bnds.append((ideal[i], cip[i]))
+        bnds.append((ideal[i], 5))
 
     # weight bounds for DMs. Can be between 0 and 1.
     for i in range(k, k+q):
@@ -428,6 +429,7 @@ def find_GRP(
         else:
             Cons.append({'type': 'eq', 'fun': feas_space_const(X, k, q, i, rps)})
 
+    # rps = original_rps
     if pref_agg_method == "maxmin_cones" or pref_agg_method == "eq_maxmin_cones":
         Cons.append({'type': 'ineq', 'fun': DMconstr_cones(X, q, k, rps, cip)})
     if pref_agg_method == "maxmin_cones_ext" or pref_agg_method == "eq_maxmin_cones_ext":
@@ -436,9 +438,9 @@ def find_GRP(
         Cons.append({'type': 'ineq', 'fun': DMconstr_ext(X, q, k, rps, cip)})
     else:
         Cons.append({'type': 'ineq', 'fun': DMconstr_mm(X, q, k, rps, cip)})
-
     # Convex constraint, sum should be 1.
     # sum_{r=1}^4(lambda_r) - 1 = 0
+
     def convex_constr(X):
         return sum(X[k:k+q]) - 1
 
@@ -446,7 +448,7 @@ def find_GRP(
     Cons.append(conv)
 
     # rho = 0.0001
-
+    # rps = original_rps
     # The s_m(R) for all DMs
     # TODO: standardization for maxmin (especially if not solving zdt1 and zdt2 only)
     if pref_agg_method == "maxmin" or pref_agg_method == "eq_maxmin":
@@ -457,10 +459,12 @@ def find_GRP(
         def Sm(X):
             maxmin_terms = [maxmin_criterion(rps[j, :], cip, X[:k]) for j in range(q)]
             return -1*X[alpha] - np.min(maxmin_terms)  # + rho * np.sum(maxmin_terms)
+            # return - np.min(maxmin_terms)  # + rho * np.sum(maxmin_terms)
     if pref_agg_method == "maxmin_ext" or pref_agg_method == "eq_maxmin_ext":
         def Sm(X):
             maxmin_terms = [maxmin_criterion(rps[j, :], cip, X[:k]) for j in range(q)]
             return -1*X[alpha] - (np.min(maxmin_terms) + rho * np.sum(maxmin_terms))
+            # return - (np.min(maxmin_terms) + rho * np.sum(maxmin_terms))
     if pref_agg_method == "maxmin_cones" or pref_agg_method == "eq_maxmin_cones":
         """
         def fx(X):
@@ -469,8 +473,9 @@ def find_GRP(
         def Sm(X):
             # TODO: these are equivalent.. not sure if it matters which to use.. in otherwords, which is closest to the og formulation i guess
             all_s_m = [maxmin_cones_criterion(rps[j, :], cip, X[:k]) for j in range(q)]
-            s_m = -np.min(all_s_m)
-            return -1*X[alpha] + s_m
+            s_m = np.min(all_s_m)
+            return -1*X[alpha] - s_m
+            # return - s_m
     if pref_agg_method == "maxmin_cones_ext" or pref_agg_method == "eq_maxmin_cones_ext":
         """
         def fx(X):
@@ -479,15 +484,18 @@ def find_GRP(
         def Sm(X):
             # TODO: these are equivalent.. not sure if it matters which to use.. in otherwords, which is closest to the og formulation i guess
             all_s_m = [maxmin_cones_criterion(rps[j, :], cip, X[:k]) for j in range(q)]
-            s_m = -np.min(all_s_m)
-            return -1*X[alpha] + s_m - rho * np.sum(all_s_m)
+            s_m = np.min(all_s_m)
+            return -1*X[alpha] - s_m + rho * np.sum(all_s_m)
+            # return - (s_m + rho * np.sum(all_s_m))
 
     solution = minimize(fun=Sm,
                         x0=X,
                         bounds=bnds,
                         constraints=Cons,
                         method='SLSQP',
-                        options={'ftol': 1e-20, 'maxiter': 20000, 'disp': True}
+                        options={'ftol': 1e-20, 'maxiter': 20000,
+                                 'eps': 1e-10,
+                                 'disp': True}
                         )
 
     # Decision variables (solutions)
@@ -504,15 +512,17 @@ def not_normalized_maxmin_criterion(p, c, r):
     return np.sum((p - c)*r)
 
 
-# c = r0, current iteration point
-# p = r1 DM's suggested point,
+# p = r0, current iteration point
+# c = r1 DM's suggested point,
 # r = R, suggested group point.
-def maxmin_cones_criterion(p, c, r):
+def maxmin_cones_criterion(c, p, r):
     return eval_RP(c, p, r)
 
 
-# given a search direction from old CIP RO to new suggested point R1, evaluate point P using a cone model
-def eval_RP(R0, R1, P, a=0.1):
+# given a search direction from old CIP RO
+# to new suggested point R1,
+# evaluate point P using a cone model
+def eval_RP(R1, R0, P, a=0.5):
     # calc dir vector.
     D = R1 - R0
     # normalize the direction vector D
@@ -650,7 +660,7 @@ def subproblem(rps, cip, k, q, ideal) -> Problem:
             Constraint(
                 name=f"Feasible space constraint for objective {i}",
                 symbol=f"fs_{i}",
-                cons_type=ConstraintTypeEnum.LTE,  # should be EQ, does not work
+                cons_type=ConstraintTypeEnum.EQ,  # should be EQ, does not work
                 func=f"( w_0*dm_0_q_{i} + w_1*dm_1_q_{i} +  w_2*dm_2_q_{i} )  - x_{i}",
                 is_linear=True,
                 is_convex=True,
@@ -684,10 +694,35 @@ def subproblem(rps, cip, k, q, ideal) -> Problem:
             symbol="dm1",
             cons_type=ConstraintTypeEnum.LTE,
             # func=f"(w_{m}) - 1",
-            func=f"a - {min_term}",
-            # is_linear=True,
+            # func=f"a - {dm1_expr}",
+            func=f"a- {dm1_expr} ",
+            is_linear=True,
             # is_convex=True,
-            # is_twice_differentiable=True,
+            is_twice_differentiable=True,
+        )
+    )
+    constraints.append(
+        Constraint(
+            name="DM1 const",
+            symbol="dm2",
+            cons_type=ConstraintTypeEnum.LTE,
+            # func=f"(w_{m}) - 1",
+            func=f" a- {dm2_expr}",
+            is_linear=True,
+            # is_convex=True,
+            is_twice_differentiable=True,
+        )
+    )
+    constraints.append(
+        Constraint(
+            name="DM1 const",
+            symbol="dm3",
+            cons_type=ConstraintTypeEnum.LTE,
+            # func=f"(w_{m}) - 1",
+            func=f"a- {dm3_expr} ",
+            is_linear=True,
+            # is_convex=True,
+            is_twice_differentiable=True,
         )
     )
     # value_for_dm_i = f" (dm_{m}_q_{i} - p_{i}) * x_{i} ) "
@@ -713,7 +748,8 @@ def subproblem(rps, cip, k, q, ideal) -> Problem:
     # maxmin_fairness = f" - a + Max(({dm1_expr}),({dm2_expr}), ({dm3_expr}) )"
     # maxmin_fairness = f" - a + {min_term}"
     # maxmin_fairness = f"a - {min_term}"
-    maxmin_fairness = f"a - {min_term}"
+    # maxmin_fairness = "a"
+    maxmin_fairness = "Min((dm_0_q_0 - p_0) * x_0 + (dm_0_q_1 - p_1) * x_1, (dm_1_q_0 - p_0) * x_0 + (dm_1_q_1 - p_1) * x_1, (dm_2_q_0 - p_0) * x_0 + (dm_2_q_1 - p_1) * x_1)"
 
     # func=f"Max(({x_1_eprs}) * x_3 - 7.735 * (({x_1_eprs})**2 / x_2) - 180, 0) + Max(4 - x_3 / x_2, 0)",
 
@@ -723,8 +759,8 @@ def subproblem(rps, cip, k, q, ideal) -> Problem:
             symbol="f_1",
             func=maxmin_fairness,
             objective_type=ObjectiveTypeEnum.analytical,
-            is_linear=True,
-            is_convex=True,
+            # is_linear=True,
+            # is_convex=True,
             is_twice_differentiable=True,
             maximize=True,
         )
@@ -738,4 +774,163 @@ def subproblem(rps, cip, k, q, ideal) -> Problem:
         # constraints=[feasible_const, convex_const],
         constraints=constraints,
         objectives=objective,
+    )
+
+
+def subproblem2(rps, cip, k, q, ideal) -> Problem:
+    # variables for the amount of objectives (k) in the original problem
+    # bounds come from the ideal and nadir of the original problem
+    # initial value is the mean.
+
+    variables = []
+    for i in range(k):
+        variables.append(
+            Variable(name=f"x_{i}", symbol=f"x_{i}", variable_type="real", lowerbound=ideal[i], upperbound=cip[i], initial_value=np.mean(rps[:, i])),
+        )
+
+    # need variables for DMs' weights
+    for i in range(q):
+        variables.append(
+            Variable(name=f"w_{i}", symbol=f"w_{i}", variable_type="real", lowerbound=0, upperbound=1, initial_value=1/q),
+        )
+    # the DMs' rps are constants and cip
+    constants = []
+    for i in range(k):
+        constants.append(
+            Constant(name=f"cip_{i}", symbol=f"p_{i}", value=cip[i])
+        )
+    for m in range(q):
+        for i in range(k):
+            constants.append(
+                Constant(name=f"dm_{m}_rp_{i}", symbol=f"dm_{m}_q_{i}", value=rps[m, i])
+            )
+
+    # feasible_const = []
+    constraints = []
+    """
+    for i in range(k):
+        for m in range(q):
+            con = (
+                Constraint(
+                    name=f"Feasible space constraint for objective {i}",
+                    symbol=f"fs_{i}",
+                    cons_type=ConstraintTypeEnum.EQ,
+                    func=f"Sum(w_{i}*dm_{m}_q_{i}) - x_{i}",
+                    is_linear=True,
+                    is_convex=True,
+                    is_twice_differentiable=True,
+                )
+            )
+        constraints.append(con)
+    """
+
+    for i in range(k):
+        con = (
+            Constraint(
+                name=f"Feasible space constraint for objective {i}",
+                symbol=f"fs_{i}",
+                cons_type=ConstraintTypeEnum.EQ,  # should be EQ, does not work
+                func=f"( w_0*dm_0_q_{i} + w_1*dm_1_q_{i} +  w_2*dm_2_q_{i} )  - x_{i}",
+                is_linear=True,
+                is_convex=True,
+                is_twice_differentiable=True,
+            )
+        )
+        constraints.append(con)
+
+    constraints.append(
+        Constraint(
+            name="Convexity constraint",
+            symbol="c_w",
+            cons_type=ConstraintTypeEnum.EQ,
+            # func=f"(w_{m}) - 1",
+            func="(w_0 + w_1 + w_2) - 1",
+            is_linear=True,
+            is_convex=True,
+            is_twice_differentiable=True,
+        )
+    )
+
+    dm1_expr = "" + " + ".join([f"(dm_{0}_q_{i} - p_{i}) * x_{i} " for i in range(k)])
+    dm2_expr = "" + " + ".join([f" (dm_{1}_q_{i} - p_{i}) * x_{i} " for i in range(k)])
+    dm3_expr = "" + " + ".join([f" (dm_{2}_q_{i} - p_{i}) * x_{i} " for i in range(k)])
+
+    min_term = f"Min(({dm1_expr}),({dm2_expr}), ({dm3_expr}) )"
+    # 'Min(((dm_0_q_0 - p_0) * x_0  + (dm_0_q_1 - p_1) * x_1 ),  ( (dm_1_q_0 - p_0) * x_0  + (dm_1_q_1 - p_1) * x_1 ), ( (dm_2_q_0 - p_0) * x_0  +  (dm_2_q_1 - p_1) * x_1 ) )'
+    # min_term = f"(({dm1_expr}))"
+    # maxmin_fairness = "Min( ((dm_0_q_0 - p_0) * x_0 + (dm_0_q_1 - p_1) * x_1 ), ((dm_1_q_0 - p_0) * x_0 + (dm_1_q_1 - p_1) * x_1), ((dm_2_q_0 - p_0) * x_0 + (dm_2_q_1 - p_1) * x_1))"
+
+    maxmin_fairness = f" {min_term}"
+
+    # func=f"Max(({x_1_eprs}) * x_3 - 7.735 * (({x_1_eprs})**2 / x_2) - 180, 0) + Max(4 - x_3 / x_2, 0)",
+
+    objective = [
+        Objective(
+            name="f_1",
+            symbol="f_1",
+            func=maxmin_fairness,
+            objective_type=ObjectiveTypeEnum.analytical,
+            # is_linear=True,
+            # is_convex=True,
+            is_twice_differentiable=True,
+            maximize=True,
+        )
+    ]
+
+    return Problem(
+        name="maxmin subproblem",
+        description="subproblem for aggregation of reference points according to maxmin fairness",
+        constants=constants,
+        variables=variables,
+        # constraints=[feasible_const, convex_const],
+        constraints=constraints,
+        objectives=objective,
+    )
+
+def simple_test_problem2() -> Problem:
+    """Defines a simple problem suitable for testing purposes."""
+    variables = [
+        Variable(name="x_1", symbol="x_1", variable_type="real", lowerbound=0, upperbound=10, initial_value=5),
+        Variable(name="x_2", symbol="x_2", variable_type="real", lowerbound=0, upperbound=10, initial_value=5),
+    ]
+
+    constants = [Constant(name="c", symbol="c", value=4.2)]
+
+    ff = f"x_1 + x_2"
+    ff2 = f"x_1 + x_2"
+
+    f_1 = "x_1 + x_2"
+    f_2 = "x_2**3"
+    f_3 = "x_1 + x_2"
+    f_4 = f"Max(Abs(x_1 - x_2), c, {ff}, {ff2})"  # c = 4.2
+    f_5 = "(-x_1) * (-x_2)"
+
+    objectives = [
+        Objective(name="f_1", symbol="f_1", func=f_1, maximize=False,
+                  is_twice_differentiable=True,
+                  ),  # min!
+        Objective(name="f_2", symbol="f_2", func=f_2, maximize=True,
+
+                  is_twice_differentiable=True,
+
+                  ),  # max!
+        Objective(name="f_3", symbol="f_3", func=f_3, maximize=True,
+
+                  is_twice_differentiable=True,
+                  ),  # max!
+        Objective(name="f_4", symbol="f_4", func=f_4, maximize=False,
+
+                  is_twice_differentiable=True,
+                  ),  # min!
+        Objective(name="f_5", symbol="f_5", func=f_5, maximize=True,
+                  is_twice_differentiable=True,
+                  ),  # max!
+    ]
+
+    return Problem(
+        name="Simple test problem.",
+        description="A simple problem for testing purposes.",
+        constants=constants,
+        variables=variables,
+        objectives=objectives,
     )

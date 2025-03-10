@@ -251,7 +251,7 @@ def test_maxmin_cones_same_scales():
     assert np.isclose(values[2], 1)  # should be 1 for DM that has RP at the same point as suggested.
 
 
-@pytest.mark.skip
+# @pytest.mark.skip
 @pytest.mark.pref_agg
 def test_maxmin_cones_extended():
     # TODO:
@@ -263,9 +263,9 @@ def test_maxmin_cones_extended():
     nadir = objective_dict_to_numpy_array(problem, get_nadir_dict(problem))
     ideal = objective_dict_to_numpy_array(problem, get_ideal_dict(problem))
 
-    rp1_np = [0.5, 0.8]
-    rp2_np = [0.3, 0.6]
-    rp3_np = [0.8, 0.4]
+    rp1_np = [0.1, 0.8]
+    rp2_np = [0.9, 0.7]
+    rp3_np = [0.7, 0.8]
     all_rps = np.array([rp1_np, rp2_np, rp3_np])
 
     cip = nadir
@@ -273,7 +273,7 @@ def test_maxmin_cones_extended():
 
     k = n_objectives
     q = 3
-    pa = "maxmin_cones"
+    pa = "maxmin_cones_ext"
 
     # grp = [rp1, rp2, rp3]
     # print(all_rps)
@@ -282,11 +282,12 @@ def test_maxmin_cones_extended():
     # assert len(GRP) == n_objectives
     # assert not np.isnan(GRP).any()  # "GRP should consist of real numbers."
 
-    R = [.573, 0.533]  # DM1 should be max happy, DM2-3 also kind of.
+    # R = [.573, 0.533]  # DM1 should be max happy, DM2-3 also kind of.
+    R = [0.616, 0.737]  # DM1 should be max happy, DM2-3 also kind of.
     values = [maxmin_cones_criterion(all_rps[j, :], cip, R) for j in range(q)]
     print("rudolf code values", values)
 
-    R = [.5, .8]  # testing that if GRP would be at DM1's point, he would have max value and others not
+    R = [.1, .8]  # testing that if GRP would be at DM1's point, he would have max value and others not
     values = [maxmin_cones_criterion(all_rps[j, :], cip, R) for j in range(q)]  # should be [-1, -1, 0]
     print("values", values)
     assert np.isclose(values[0], 1)  # should be 1 for DM that has RP at the same point as suggested.
@@ -411,9 +412,9 @@ def test_maxmin_PO_same_scales():
     cip = nadir
     cip_dict = {"f_1": cip[0], "f_2": cip[1]}
 
-    rp1_np = [0.5, 0.5]
-    rp2_np = [0., 0.9]
-    rp3_np = [0.9, 0]
+    rp1_np = [0.1, 0.8]
+    rp2_np = [0.9, 0.7]
+    rp3_np = [0.7, 0.8]
     rp_arr = np.array([rp1_np, rp2_np, rp3_np])
 
     # TODO: find projections of the RPs
