@@ -6,11 +6,13 @@ References:
 import numpy as np
 
 from desdeo.problem import (PolarsEvaluator, Problem, VariableType,
-                            variable_dict_to_numpy_array, Constraint,
+                            flatten_variable_dict, Constraint,
                             ConstraintTypeEnum, Variable, VariableTypeEnum, ScalarizationFunction
                             )
 from desdeo.tools.utils import (
-    get_corrected_ideal_and_nadir,
+    # get_corrected_ideal_and_nadir,
+    get_corrected_ideal,
+    get_corrected_nadir,
     get_corrected_reference_point,
 )
 from desdeo.tools.scalarization import objective_dict_has_all_symbols
@@ -34,11 +36,223 @@ from desdeo.tools import (
 )
 from desdeo.mcdm.nimbus import (
     # generate_starting_point,
+    solve_intermediate_solutions,
     infer_classifications,
     NimbusError
 )
 
 from aggregate_classifications import aggregate_classifications
+
+def add_group_nimbus_sfv2(  # noqa: PLR0913
+    problem: Problem,
+    symbol: str,
+    classifications_list: list[dict[str, tuple[str, float | None]]],
+    current_objective_vector: dict[str, float],
+    ideal: dict[str, float] | None = None,
+    nadir: dict[str, float] | None = None,
+    delta: float = 0.000001,
+    rho: float = 0.000001,
+) -> tuple[Problem, str]:
+    r"""Implements the multiple decision maker variant of the NIMBUS scalarization function.
+
+    The scalarization function is defined as follows:
+
+    \begin{align}
+        &\mbox{minimize} &&\max_{i\in I^<,j\in I^\leq,d} [w_{id}(f_{id}(\mathbf{x})-z^{ideal}_{id}),
+        w_{jd}(f_{jd}(\mathbf{x})-\hat{z}_{jd})] +
+        \rho \sum^k_{i=1} \sum^{n_d}_{d=1} w_{id}f_{id}(\mathbf{x}) \\
+        &\mbox{subject to} &&\mathbf{x} \in \mathbf{X},
+    \end{align}
+
+    where $w_{id} = \frac{1}{z^{nad}_{id} - z^{uto}_{id}}$, and $w_{jd} = \frac{1}{z^{nad}_{jd} - z^{uto}_{jd}}$.
+
+    The $I$-sets are related to the classifications given to each objective function value
+    in respect to  the current objective vector (e.g., by a decision maker). They
+    are as follows:
+
+    - $I^{<}$: values that should improve,
+    - $I^{\leq}$: values that should improve until a given aspiration level $\hat{z}_i$,
+    - $I^{=}$: values that are fine as they are,
+    - $I^{\geq}$: values that can be impaired until some reservation level $\varepsilon_i$, and
+    - $I^{\diamond}$: values that are allowed to change freely (not present explicitly in this scalarization function).
+
+    The aspiration levels and the reservation levels are supplied for each classification, when relevant, in
+    the argument `classifications` as follows:
+
+    ```python
+    classifications = {
+        "f_1": ("<", None),
+        "f_2": ("<=", 42.1),
+        "f_3": (">=", 22.2),
+        "f_4": ("0", None)
+        }
+    ```
+
+    Here, we have assumed four objective functions. The key of the dict is a function's symbol, and the tuple
+    consists of a pair where the left element is the classification (self explanatory, '0' is for objective values
+    that may change freely), the right element is either `None` or an aspiration or a reservation level
+    depending on the classification.
+
+    Args:
+        problem (Problem): the problem to be scalarized.
+        symbol (str): the symbol given to the scalarization function, i.e., target of the optimization.
+        classifications_list (list[dict[str, tuple[str, float  |  None]]]): a list of dicts, where the key is a symbol
+            of an objective function, and the value is a tuple with a classification and an aspiration
+            or a reservation level, or `None`, depending on the classification. See above for an
+            explanation.
+        current_objective_vector (dict[str, float]): the current objective vector that corresponds to
+            a Pareto optimal solution. The classifications are assumed to been given in respect to
+            this vector.
+        ideal (dict[str, float], optional): ideal point values. If not given, attempt will be made
+            to calculate ideal point from problem.
+        nadir (dict[str, float], optional): nadir point values. If not given, attempt will be made
+            to calculate nadir point from problem.
+        delta (float, optional): a small scalar used to define the utopian point. Defaults to 0.000001.
+        rho (float, optional): a small scalar used in the augmentation term. Defaults to 0.000001.
+
+    Raises:
+        ScalarizationError: any of the given classifications do not define a classification
+            for all the objective functions or any of the given classifications do not allow at
+            least one objective function value to improve and one to worsen.
+
+    Returns:
+        tuple[Problem, str]: a tuple with the copy of the problem with the added
+            scalarization and the symbol of the added scalarization.
+    """
+    # check that classifications have been provided for all objective functions
+    for classifications in classifications_list:
+        if not objective_dict_has_all_symbols(problem, classifications):
+            msg = (
+                f"The given classifications {classifications} do not define "
+                "a classification for all the objective functions."
+            )
+            raise ScalarizationError(msg)
+
+    # check if ideal point is specified
+    # if not specified, try to calculate corrected ideal point
+    if ideal is not None:
+        ideal_point = ideal
+    elif problem.get_ideal_point() is not None:
+        ideal_point = get_corrected_ideal(problem)
+    else:
+        msg = "Ideal point not defined!"
+        raise ScalarizationError(msg)
+
+    # check if nadir point is specified
+    # if not specified, try to calculate corrected nadir point
+    if nadir is not None:
+        nadir_point = nadir
+    elif problem.get_nadir_point() is not None:
+        nadir_point = get_corrected_nadir(problem)
+    else:
+        msg = "Nadir point not defined!"
+        raise ScalarizationError(msg)
+
+    corrected_current_point = get_corrected_reference_point(problem, current_objective_vector)
+
+    # calculate the weights
+    weights = {obj.symbol: 1 / (nadir_point[obj.symbol] - (ideal_point[obj.symbol] - delta)) for obj in problem.objectives}
+
+    # max term and constraints
+    max_args = []
+    constraints = []
+
+    for i in range(len(classifications_list)):
+        classifications = classifications_list[i]
+        for obj in problem.objectives:
+            _symbol = obj.symbol
+            match classifications[_symbol]:
+                case ("<", _):
+                    max_expr = f"{weights[_symbol]} * ({_symbol}_min - {ideal_point[_symbol]})"
+                    max_args.append(max_expr)
+
+                    con_expr = f"{_symbol}_min - {corrected_current_point[_symbol]}"
+                    constraints.append(
+                        Constraint(
+                            name=f"improvement constraint for {_symbol}",
+                            symbol=f"{_symbol}_{i+1}_lt",
+                            func=con_expr,
+                            cons_type=ConstraintTypeEnum.LTE,
+                            is_linear=problem.is_linear,
+                            is_convex=problem.is_convex,
+                            is_twice_differentiable=problem.is_twice_differentiable,
+                        )
+                    )
+                case ("<=", aspiration):
+                    # if obj is to be maximized, then the current aspiration value needs to be multiplied by -1
+                    max_expr = (
+                        f"{weights[_symbol]} * ({_symbol}_min - {aspiration * -1 if obj.maximize else aspiration})"
+                    )
+                    max_args.append(max_expr)
+
+                    con_expr = f"{_symbol}_min - {corrected_current_point[_symbol]}"
+                    constraints.append(
+                        Constraint(
+                            name=f"improvement until constraint for {_symbol}",
+                            symbol=f"{_symbol}_{i+1}_lte",
+                            func=con_expr,
+                            cons_type=ConstraintTypeEnum.LTE,
+                            is_linear=problem.is_linear,
+                            is_convex=problem.is_convex,
+                            is_twice_differentiable=problem.is_twice_differentiable,
+                        )
+                    )
+                case ("=", _):
+                    con_expr = f"{_symbol}_min - {corrected_current_point[_symbol]}"
+                    constraints.append(
+                        Constraint(
+                            name=f"Stay at least as good constraint for {_symbol}",
+                            symbol=f"{_symbol}_{i+1}_eq",
+                            func=con_expr,
+                            cons_type=ConstraintTypeEnum.LTE,
+                            is_linear=problem.is_linear,
+                            is_convex=problem.is_convex,
+                            is_twice_differentiable=problem.is_twice_differentiable,
+                        )
+                    )
+                case (">=", reservation):
+                    # if obj is to be maximized, then the current reservation value needs to be multiplied by -1
+                    con_expr = f"{_symbol}_min - {-1 * reservation if obj.maximize else reservation}"
+                    constraints.append(
+                        Constraint(
+                            name=f"Worsen until constraint for {_symbol}",
+                            symbol=f"{_symbol}_{i+1}_gte",
+                            func=con_expr,
+                            cons_type=ConstraintTypeEnum.LTE,
+                            is_linear=problem.is_linear,
+                            is_convex=problem.is_convex,
+                            is_twice_differentiable=problem.is_twice_differentiable,
+                        )
+                    )
+                case ("0", _):
+                    # not relevant for this scalarization
+                    pass
+                case (c, _):
+                    msg = (
+                        f"Warning! The classification {c} was supplied, but it is not supported."
+                        "Must be one of ['<', '<=', '0', '=', '>=']"
+                    )
+    max_expr = f"Max({','.join(max_args)})"
+
+    # form the augmentation term
+    aug_exprs = []
+    for _ in range(len(classifications_list)):
+        aug_expr = " + ".join([f"({weights[obj.symbol]} * {obj.symbol}_min)" for obj in problem.objectives])
+        aug_exprs.append(aug_expr)
+    aug_exprs = " + ".join(aug_exprs)
+
+    func = f"{max_expr} + {rho} * ({aug_exprs})"
+    scalarization = ScalarizationFunction(
+        name="NIMBUS scalarization objective function for multiple decision makers",
+        symbol=symbol,
+        func=func,
+        is_linear=problem.is_linear,
+        is_convex=problem.is_convex,
+        is_twice_differentiable=False,
+    )
+
+    _problem = problem.add_scalarization(scalarization)
+    return _problem.add_constraints(constraints), symbol
 
 
 def explain(problem, classifications, results: [SolverResults]):
@@ -62,6 +276,23 @@ def explain(problem, classifications, results: [SolverResults]):
 
     print(key_flag_dict)
 
+
+def find_boundaries(reference_points, objective_keys, maxormin):
+    """
+        Find bounds from the reference points and jth objective function
+    """
+    import pandas as pd
+    reference_points_list = dict_of_rps_to_list_of_rps(reference_points)
+    df = pd.DataFrame(reference_points_list)
+
+    bounds = []
+    for o in objective_keys:
+        if maxormin == "max":
+            bounds.append(max(df[o]))
+        if maxormin == "min":
+            bounds.append(min(df[o]))
+
+    return bounds
 
 def majority_rule(votes: dict[str, int]):
     from collections import Counter
@@ -95,7 +326,7 @@ def voting_procedure(problem: Problem, solutions, votes_idxs: dict[str, float]) 
     winners = plurality_rule(votes_idxs)
     # TODO: handle if there are three or more same number of votes
     if len(winners) == 1:
-        print("Plurality winner", solutions[winners][0])
+        print("Plurality winner", winners[0])
         return solutions[winners[0]]  # need to unlist the winners list
     if len(winners) == 2:
         # if two same solutions with same number of votes, call intermediate
@@ -133,7 +364,7 @@ def agg_cardinal(classification_list, problem, current_objectives):
 
             print(f"Key: {key}, Float value: {val}")
             if val is not None:
-                res += current_objectives[key] - 
+                res += current_objectives[key] -
 
 
             # R.append(classification_list[j])
@@ -372,7 +603,7 @@ def add_group_nimbusv2_sf_diff(  # noqa: PLR0913
     """
 
     # check ideal and nadir exist
-    ideal, nadir = get_corrected_ideal_and_nadir(problem)
+    ideal, nadir = get_corrected_ideal(problem), get_corrected_nadir(problem)
     corrected_current_point = get_corrected_reference_point(problem, current_objective_vector)
 
     # define the auxiliary variable
@@ -613,6 +844,8 @@ def solve_sub_problems(  # noqa: PLR0913
     init_solver = create_solver if create_solver is not None else guess_best_solver(problem)
     _solver_options = solver_options if solver_options is not None else None
 
+    print("CURRENT SOLVER", init_solver)
+
     solutions = []
     classification_list = []
 
@@ -637,7 +870,7 @@ def solve_sub_problems(  # noqa: PLR0913
         for dm_rp in reference_points:
             print("RPS", reference_points[dm_rp])
             classification_list.append(infer_classifications(problem, current_objectives, reference_points[dm_rp]))
-        gnimbus_scala = add_group_nimbusv2_sf_diff  # if problem.is_twice_differentiableelse add_group_nimbusv2 # non-diff gnimbus
+        gnimbus_scala = add_group_nimbusv2_sf_diff if problem.is_twice_differentiable else add_group_nimbus_sfv2  # non-diff gnimbus
         add_nimbus_sf = gnimbus_scala
 
         problem_w_nimbus, nimbus_target = add_nimbus_sf(
@@ -652,26 +885,84 @@ def solve_sub_problems(  # noqa: PLR0913
         solutions.append(nimbus_solver.solve(nimbus_target))
 
         " if wanting more solutions"
-        # TODO: maxmin-cones
+        # TODO: new idea
+        if False:
+            print("at new thingy")
+            obj_keys = [o.name for o in problem.objectives]
+            worser_bounds = find_boundaries(reference_points, obj_keys, "max")
+            better_bounds = find_boundaries(reference_points, obj_keys, "min")
 
-        # TODO: agg prefes use asf or smh.
+            rp_f1 = {"f_1": better_bounds[0], "f_2": worser_bounds[1], "f_3": worser_bounds[2]}
+            rp_f2 = {"f_1": worser_bounds[0], "f_2": better_bounds[1], "f_3": worser_bounds[2]}
+            rp_f3 = {"f_1": worser_bounds[0], "f_2": worser_bounds[1], "f_3": better_bounds[2]}
+
+            print(rp_f1)
+            print(rp_f2)
+            print(rp_f3)
+            # rp 1
+            classification = infer_classifications(problem, current_objectives, rp_f1)
+
+            gnimbus_scala = add_nimbus_sf_diff
+            add_nimbus_sf = gnimbus_scala
+
+            problem_w_nimbus, nimbus_target = add_nimbus_sf(
+                problem, "nimbus_sf", classification, current_objectives, **(scalarization_options or {})
+            )
+
+            if _solver_options:
+                nimbus_solver = init_solver(problem_w_nimbus, _solver_options)
+            else:
+                nimbus_solver = init_solver(problem_w_nimbus)
+
+            solutions.append(nimbus_solver.solve(nimbus_target))
+            # rp 1
+            classification = infer_classifications(problem, current_objectives, rp_f2)
+
+            gnimbus_scala = add_nimbus_sf_diff
+            add_nimbus_sf = gnimbus_scala
+
+            problem_w_nimbus, nimbus_target = add_nimbus_sf(
+                problem, "nimbus_sf", classification, current_objectives, **(scalarization_options or {})
+            )
+
+            if _solver_options:
+                nimbus_solver = init_solver(problem_w_nimbus, _solver_options)
+            else:
+                nimbus_solver = init_solver(problem_w_nimbus)
+
+            solutions.append(nimbus_solver.solve(nimbus_target))
+
+            # rp 1
+            classification = infer_classifications(problem, current_objectives, rp_f3)
+
+            gnimbus_scala = add_nimbus_sf_diff
+            add_nimbus_sf = gnimbus_scala
+
+            problem_w_nimbus, nimbus_target = add_nimbus_sf(
+                problem, "nimbus_sf", classification, current_objectives, **(scalarization_options or {})
+            )
+
+            if _solver_options:
+                nimbus_solver = init_solver(problem_w_nimbus, _solver_options)
+            else:
+                nimbus_solver = init_solver(problem_w_nimbus)
+
+            solutions.append(nimbus_solver.solve(nimbus_target))
 
         return solutions
 
     else:
-        # group scalas of stom, guess and asf need list of RPs
         reference_points_list = dict_of_rps_to_list_of_rps(reference_points)
 
         for dm_rp in reference_points:
-            print("RPS", reference_points[dm_rp])
             classification_list.append(infer_classifications(problem, current_objectives, reference_points[dm_rp]))
-        gnimbus_scala = add_group_nimbusv2_sf_diff  # if problem.is_twice_differentiableelse add_group_nimbusv2 # non-diff gnimbus
+            print("class", classification_list)
+            gnimbus_scala = add_group_nimbusv2_sf_diff if problem.is_twice_differentiable else add_group_nimbus_sfv2  # non-diff gnimbus
+            add_nimbus_sf = gnimbus_scala
 
-        add_nimbus_sf = gnimbus_scala
-
-        problem_w_nimbus, nimbus_target = add_nimbus_sf(
-            problem, "nimbus_sf", classification_list, current_objectives, **(scalarization_options or {})
-        )
+            problem_w_nimbus, nimbus_target = add_nimbus_sf(
+                problem, "nimbus_sf", classification_list, current_objectives, **(scalarization_options or {})
+            )
 
         if _solver_options:
             nimbus_solver = init_solver(problem_w_nimbus, _solver_options)
@@ -720,7 +1011,7 @@ def solve_sub_problems(  # noqa: PLR0913
         return solutions
 
 
-def solve_intermediate_solutions(  # noqa: PLR0913
+def solve_intermediate_solutions2(  # noqa: PLR0913
     problem: Problem,
     solution_1: dict[str, VariableType],
     solution_2: dict[str, VariableType],
@@ -728,6 +1019,8 @@ def solve_intermediate_solutions(  # noqa: PLR0913
     scalarization_options: dict | None = None,
     solver: BaseSolver | None = None,
     solver_options: SolverOptions | None = None,
+
+
 ) -> list[SolverResults]:
     """Generates a desired number of intermediate solutions between two given solutions.
 
@@ -768,8 +1061,8 @@ def solve_intermediate_solutions(  # noqa: PLR0913
     _solver_options = None if solver_options is None or solver is None else solver_options
 
     # compute the element-wise difference between each solution (in the decision space)
-    solution_1_arr = variable_dict_to_numpy_array(problem, solution_1)
-    solution_2_arr = variable_dict_to_numpy_array(problem, solution_2)
+    solution_1_arr = flatten_variable_dict(problem, solution_1)
+    solution_2_arr = flatten_variable_dict(problem, solution_2)
     delta = solution_1_arr - solution_2_arr
 
     # the '2' is in the denominator because we want to calculate the steps
@@ -786,6 +1079,7 @@ def solve_intermediate_solutions(  # noqa: PLR0913
 
     reference_points: list[dict[str, float]] = (
         evaluator.evaluate(xs).select([obj.symbol for obj in problem.objectives]).to_dicts()
+
     )
 
     # for each reference point, add and solve the ASF scalarization problem
@@ -798,11 +1092,11 @@ def solve_intermediate_solutions(  # noqa: PLR0913
         # depending on problem properties (either diff or non-diff)
         asf_problem, target = add_asf_diff(problem, "target", rp, **(scalarization_options or {}))
 
-    solver = init_solver(asf_problem, _solver_options)
+        solver = init_solver(asf_problem, _solver_options)
 
-    # solve and store results
-    result: SolverResults = solver.solve(target)
+        # solve and store results
+        result: SolverResults = solver.solve(target)
 
-    intermediate_solutions.append(result)
+        intermediate_solutions.append(result)
 
     return intermediate_solutions
