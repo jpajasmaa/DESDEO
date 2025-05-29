@@ -987,6 +987,7 @@ def solve_sub_problems(  # noqa: PLR0913
 
         for dm_rp in reference_points:
             # classification_list.append(infer_classifications(problem, current_objectives, reference_points[dm_rp]))
+            """
             classification = infer_classifications(problem, current_objectives, reference_points[dm_rp])
             print("class", classification_list)
             # gnimbus_scala = add_group_nimbusv2_sf_diff if problem.is_twice_differentiable else add_group_nimbus_sfv2  # non-diff gnimbus
@@ -1003,11 +1004,47 @@ def solve_sub_problems(  # noqa: PLR0913
                 nimbus_solver = init_solver(problem_w_nimbus)
 
             solutions.append(nimbus_solver.solve(nimbus_target))
+            """
+
+            # solve STOM
+            add_stom_sf = add_stom_sf_diff if problem.is_twice_differentiable else add_stom_sf_nondiff
+
+            problem_w_stom, stom_target = add_stom_sf(problem, "stom_sf", reference_points[dm_rp], **(scalarization_options or {}))
+            if _solver_options:
+                stom_solver = init_solver(problem_w_stom, _solver_options)
+            else:
+                stom_solver = init_solver(problem_w_stom)
+
+            solutions.append(stom_solver.solve(stom_target))
+
+                    # solve GUESS
+            add_guess_sf = add_guess_sf_diff if problem.is_twice_differentiable else add_guess_sf_nondiff
+
+            problem_w_guess, guess_target = add_guess_sf(
+                problem, "guess_sf", reference_points[dm_rp], **(scalarization_options or {})
+            )
+
+            if _solver_options:
+                guess_solver = init_solver(problem_w_guess, _solver_options)
+            else:
+                guess_solver = init_solver(problem_w_guess)
+
+            solutions.append(guess_solver.solve(guess_target))
 
         # solve STOM
         add_stom_sf = add_group_stom_sf_diff if problem.is_twice_differentiable else add_group_stom_sf
 
-        problem_w_stom, stom_target = add_stom_sf(problem, "stom_sf", reference_points_list, **(scalarization_options or {}))
+        d = 1e-06
+        ideal = problem.get_ideal_point()
+        nadir = problem.get_nadir_point()
+        delta = {
+            "Rev": d*(ideal["Rev"] - nadir["Rev"]) ,
+            "HA": d*(ideal["HA"] - nadir["HA"]),
+            "Carb":d*(ideal["Carb"] - nadir["Carb"]),
+            "DW":d*(ideal["DW"] - nadir["DW"]),
+        }
+ 
+        problem_w_stom, stom_target = add_stom_sf(problem, "stom_sf", reference_points_list, delta, **(scalarization_options or {}))
         if _solver_options:
             stom_solver = init_solver(problem_w_stom, _solver_options)
         else:
@@ -1018,7 +1055,7 @@ def solve_sub_problems(  # noqa: PLR0913
         # solve ASF
         add_asf = add_group_asf_diff if problem.is_twice_differentiable else add_group_asf
 
-        problem_w_asf, asf_target = add_asf(problem, "asf", reference_points_list, **(scalarization_options or {}))
+        problem_w_asf, asf_target = add_asf(problem, "asf", reference_points_list, delta, **(scalarization_options or {}))
 
         if _solver_options:
             asf_solver = init_solver(problem_w_asf, _solver_options)
@@ -1031,7 +1068,7 @@ def solve_sub_problems(  # noqa: PLR0913
         add_guess_sf = add_group_guess_sf_diff if problem.is_twice_differentiable else add_group_guess_sf
 
         problem_w_guess, guess_target = add_guess_sf(
-            problem, "guess_sf", reference_points_list, **(scalarization_options or {})
+            problem, "guess_sf", reference_points_list, delta, **(scalarization_options or {})
         )
 
         if _solver_options:
