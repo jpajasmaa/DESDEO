@@ -7,7 +7,8 @@ import numpy as np
 
 from desdeo.problem import (PolarsEvaluator, Problem, VariableType,
                             flatten_variable_dict, Constraint,
-                            ConstraintTypeEnum, Variable, VariableTypeEnum, ScalarizationFunction,
+                            ConstraintTypeEnum, Variable, VariableTypeEnum, 
+                            ScalarizationFunction,
                             objective_dict_to_numpy_array,
                             unflatten_variable_array,
                             )
@@ -25,12 +26,15 @@ from desdeo.tools import (
     SolverResults,
     add_group_asf_diff,
     add_group_asf,
+    add_group_asf_test,
     add_group_guess_sf_diff,
     add_group_guess_sf,
+    add_group_guess_test,
     add_group_nimbus_sf_diff,
     add_group_nimbus_sf,
     add_group_stom_sf_diff,
     add_group_stom_sf,
+    add_group_stom_test,
     guess_best_solver,
     add_asf_diff,
     ScalarizationError,
@@ -56,14 +60,17 @@ import polars as pl
 
 from aggregate_classifications import aggregate_classifications
 
+
+
+
 def add_group_nimbus_sfv2(  # noqa: PLR0913
     problem: Problem,
     symbol: str,
     classifications_list: list[dict[str, tuple[str, float | None]]],
     current_objective_vector: dict[str, float],
+    delta: dict[str, float] | float = 0.000001,
     ideal: dict[str, float] | None = None,
     nadir: dict[str, float] | None = None,
-    delta: float = 0.000001,
     rho: float = 0.000001,
 ) -> tuple[Problem, str]:
     r"""Implements the multiple decision maker variant of the NIMBUS scalarization function.
@@ -164,13 +171,51 @@ def add_group_nimbus_sfv2(  # noqa: PLR0913
     corrected_current_point = get_corrected_reference_point(problem, current_objective_vector)
 
     # calculate the weights
-    weights = {obj.symbol: 1 / (nadir_point[obj.symbol] - (ideal_point[obj.symbol] - delta)) for obj in problem.objectives}
+    weights = {obj.symbol: 1 / (nadir_point[obj.symbol] - (ideal_point[obj.symbol] - delta[obj.symbol])) for obj in problem.objectives}
 
     # max term and constraints
     max_args = []
     constraints = []
 
+
+    def find_min_max_values(data_list, keys):
+
+        max_values = {}
+        min_values = {}
+
+        for key in keys:
+            # We iterate through the list of dictionaries and collect only the non-None values
+            # for the current 'key'.
+            values = [d[key] for d in data_list if key in d and d[key] is not None]
+
+            if values:
+                max_values[key] = max(values)
+                min_values[key] = min(values)
+            else:
+                # If after checking all dictionaries, no valid (non-None) values are found,
+                # we mark it as "N/A".
+                max_values[key] = None
+                min_values[key] = None
+
+        return max_values, min_values
+
+# Example usage with your provided data:
+    data = [{'Rev': None}, {'HA': 190000}, {'Carb': 3800}, {'DW': None},
+            {'Rev': 190}, {'HA': None}, {'Carb': None}, {'DW': None},
+            {'Rev': 210}, {'HA': 17700}, {'Carb': 3900}, {'DW': None},
+            {'Rev': 200}, {'HA': None}, {'Carb': 3800}, {'DW': None}]
+
+    keys_to_analyze = ['Rev', 'HA', 'Carb', 'DW']
+
+    max_results, min_results = find_min_max_values(data, keys_to_analyze)
+
+    print("Maximum values:", max_results)
+    print("Minimum values:", min_results)
+
+    print(classifications_list)
+
     for i in range(len(classifications_list)):
+        # classifications = classifications_list[dm_class][i]
         classifications = classifications_list[i]
         for obj in problem.objectives:
             _symbol = obj.symbol
@@ -968,9 +1013,18 @@ def solve_sub_problems(  # noqa: PLR0913
             classification_list.append(infer_classifications(problem, current_objectives, reference_points[dm_rp]))
         gnimbus_scala = add_group_nimbusv2_sf_diff if problem.is_twice_differentiable else add_group_nimbus_sfv2  # non-diff gnimbus
         add_nimbus_sf = gnimbus_scala
-
+        d = 1e-8
+        ideal = problem.get_ideal_point()
+        nadir = problem.get_nadir_point()
+        delta = {
+            "Rev": d*(ideal["Rev"] - nadir["Rev"]) ,
+            "HA": d*(ideal["HA"] - nadir["HA"]),
+            "Carb":d*(ideal["Carb"] - nadir["Carb"]),
+            "DW":d*(ideal["DW"] - nadir["DW"]),
+        }
+        print("DELTA", delta)
         problem_w_nimbus, nimbus_target = add_nimbus_sf(
-            problem, "nimbus_sf", classification_list, current_objectives, **(scalarization_options or {})
+            problem, "nimbus_sf", classification_list, delta, current_objectives, **(scalarization_options or {})
         )
 
         if _solver_options:
@@ -987,7 +1041,7 @@ def solve_sub_problems(  # noqa: PLR0913
 
         for dm_rp in reference_points:
             # classification_list.append(infer_classifications(problem, current_objectives, reference_points[dm_rp]))
-            """
+            
             classification = infer_classifications(problem, current_objectives, reference_points[dm_rp])
             print("class", classification_list)
             # gnimbus_scala = add_group_nimbusv2_sf_diff if problem.is_twice_differentiable else add_group_nimbus_sfv2  # non-diff gnimbus
@@ -1004,8 +1058,8 @@ def solve_sub_problems(  # noqa: PLR0913
                 nimbus_solver = init_solver(problem_w_nimbus)
 
             solutions.append(nimbus_solver.solve(nimbus_target))
-            """
 
+            """
             # solve STOM
             add_stom_sf = add_stom_sf_diff if problem.is_twice_differentiable else add_stom_sf_nondiff
 
@@ -1031,20 +1085,55 @@ def solve_sub_problems(  # noqa: PLR0913
 
             solutions.append(guess_solver.solve(guess_target))
 
-        # solve STOM
-        add_stom_sf = add_group_stom_sf_diff if problem.is_twice_differentiable else add_group_stom_sf
-
-        d = 1e-06
+            """
+            
+        d = 1e-8
         ideal = problem.get_ideal_point()
         nadir = problem.get_nadir_point()
         delta = {
-            "Rev": d*(ideal["Rev"] - nadir["Rev"]) ,
+            "Rev": d*(ideal["Rev"] - nadir["Rev"]),
             "HA": d*(ideal["HA"] - nadir["HA"]),
             "Carb":d*(ideal["Carb"] - nadir["Carb"]),
             "DW":d*(ideal["DW"] - nadir["DW"]),
         }
- 
-        problem_w_stom, stom_target = add_stom_sf(problem, "stom_sf", reference_points_list, delta, **(scalarization_options or {}))
+        print("DELTA", delta)
+
+
+        #po_list = [solutions[0].optimal_objectives, solutions[1].optimal_objectives, solutions[2].optimal_objectives, solutions[3].optimal_objectives] # TODO: loop to number of DMs
+        po_list = [solutions[0].optimal_objectives, solutions[1].optimal_objectives, solutions[2].optimal_objectives, solutions[3].optimal_objectives] # TODO: loop to number of DMs
+        
+        print("PO list")
+        print("========================")
+        print("========================")
+        print("========================")
+        print(po_list)
+
+        # TODO: make better!
+        def find_min_max_values(po_list, problem):
+            max_values = {}
+            min_values = {}
+            for obj in problem.objectives:
+                obj = obj.symbol
+                values = [s[obj] for s in po_list]
+                max_values[obj] = max(values)
+                min_values[obj] = min(values)
+            return max_values, min_values
+
+        max_results, min_results = find_min_max_values(po_list, problem)
+        print("========================")
+        print("========================")
+        print("========================")
+        print("========================")
+        print("Maximum values:", max_results)
+        print("Minimum values:", min_results)
+
+        hard_constraints = min_results
+        aspirations = max_results
+
+        # solve STOM
+        add_stom_sf = add_group_stom_sf_diff if problem.is_twice_differentiable else add_group_stom_sf
+
+        problem_w_stom, stom_target = add_stom_sf(problem, "stom_sf", reference_points_list, hard_constraints, delta, **(scalarization_options or {}))
         if _solver_options:
             stom_solver = init_solver(problem_w_stom, _solver_options)
         else:
@@ -1055,7 +1144,7 @@ def solve_sub_problems(  # noqa: PLR0913
         # solve ASF
         add_asf = add_group_asf_diff if problem.is_twice_differentiable else add_group_asf
 
-        problem_w_asf, asf_target = add_asf(problem, "asf", reference_points_list, delta, **(scalarization_options or {}))
+        problem_w_asf, asf_target = add_asf(problem, "asf", reference_points_list, hard_constraints, delta, **(scalarization_options or {}))
 
         if _solver_options:
             asf_solver = init_solver(problem_w_asf, _solver_options)
@@ -1064,11 +1153,10 @@ def solve_sub_problems(  # noqa: PLR0913
 
         solutions.append(asf_solver.solve(asf_target))
 
-        # solve GUESS
         add_guess_sf = add_group_guess_sf_diff if problem.is_twice_differentiable else add_group_guess_sf
 
         problem_w_guess, guess_target = add_guess_sf(
-            problem, "guess_sf", reference_points_list, delta, **(scalarization_options or {})
+            problem, "guess_sf", reference_points_list, hard_constraints,delta, **(scalarization_options or {})
         )
 
         if _solver_options:
@@ -1077,5 +1165,44 @@ def solve_sub_problems(  # noqa: PLR0913
             guess_solver = init_solver(problem_w_guess)
 
         solutions.append(guess_solver.solve(guess_target))
+
+
+
+
+        add_stom_sf2 = add_group_stom_test 
+        # add_group_stom_sf_diff if problem.is_twice_differentiable else add_group_stom_sf
+
+        problem_g_stom, stomg_target = add_stom_sf2(problem, "stom_sf2",  aspirations, hard_constraints,  delta, **(scalarization_options or {}))
+        if _solver_options:
+            stomg_solver = init_solver(problem_g_stom, _solver_options)
+        else:
+            stomg_solver = init_solver(problem_g_stom)
+
+        solutions.append(stomg_solver.solve(stomg_target))
+
+        add_asf2 = add_group_asf_test
+        problem_g_asf, asfg_target = add_asf2(problem, "asf2", aspirations, hard_constraints, delta, **(scalarization_options or {}))
+        if _solver_options:
+            asfg_solver = init_solver(problem_g_asf, _solver_options)
+        else:
+            asfg_solver = init_solver(problem_g_asf)
+
+        solutions.append(asfg_solver.solve(asfg_target))
+
+
+        add_guess_sf2 = add_group_guess_test
+        #add_group_guess_sf_diff if problem.is_twice_differentiable else add_group_guess_sf
+
+        problem_g_guess, guess2_target = add_guess_sf2(
+            problem, "guess_sf", aspirations, hard_constraints, delta, **(scalarization_options or {})
+        )
+
+        if _solver_options:
+            guess2_solver = init_solver(problem_g_guess, _solver_options)
+        else:
+            guess2_solver = init_solver(problem_g_guess)
+
+        solutions.append(guess2_solver.solve(guess2_target))
+
 
         return solutions

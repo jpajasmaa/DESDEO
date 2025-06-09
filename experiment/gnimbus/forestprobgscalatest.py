@@ -98,7 +98,7 @@ def dmitry_forest_problem_discrete() -> Problem:
     Returns:
         Problem: A problem instance representing the forest problem.
     """
-    filename = "/home/jp/tyot/mop/desdeo/DESDEO/experiment/code/gnimbus/dmitry_forest_problem_non_dom_solns.csv"
+    filename = "/home/jp/devaus/tyot/desdeo/DESDEO/experiment/gnimbus/dmitry_forest_problem_non_dom_solns.csv"
 
 
     obj_names = ["Rev", "HA", "Carb", "DW"]
@@ -238,6 +238,9 @@ if __name__=="__main__":
     print("ideal: ", ideal)
     print("nadir: ", nadir)
 
+    current_iteration_solution = {'Rev': 197.33972895229667, 'HA': 17717.17996935636, 'Carb': 3956.467644670016, 'DW': 197.1054548192056}
+    initial_rp = current_iteration_solution
+
     initial_result = generate_starting_point(forest_problem, initial_rp )#, initial_rp)
     print(initial_result.optimal_objectives)
 
@@ -251,6 +254,71 @@ if __name__=="__main__":
 # stom -1%
 # '(Rev_min - -249.96656415420023) / (-247.46689752265823 - -249.96656415420023), (HA_min - -20225.257708201425) / (-20023.00513012941 - -20225.257708201425), (Carb_min - -4449.001445090009) / (-3800 - -4449.001445090009), (DW_min - -218.15314456691328) / (-81 - -218.15314456691328)'
 # ^  (-247.46689752265823 - -249.96656415420023) <- weight parth, these match the weights below as expected
+    """
+    reference_points = {
+    "DM1": { # Kaisa
+        "Rev": ideal["Rev"], # Revenue
+        "HA": ideal["HA"], # habitat availability
+        #"HA": 16000, # habitat availability
+        "Carb": 3800, # Carb ¤ Kaisa has <> meaning any value,  nadir["Carb"]. Moderator tried difffernet any values also.
+        "DW": nadir["DW"], # Deadwood
+    },
+    "DM2": { # Curro
+        "Rev": 190 , # Revenue
+        "HA": nadir["HA"], # habitat availability
+        "Carb": ideal["Carb"], # Carb
+        "DW": nadir["DW"], # Deadwood
+    },
+    "DM3": { # Babooshka
+        "Rev": 210 , # Revenue
+        "HA": 17700, # habitat availability
+        "Carb": 3900, # Carb
+        "DW": 185, # Deadwood
+    },
+    "DM4": { # Juho
+        "Rev": next_current_solution["Rev"], # Revenue
+        "HA": nadir["HA"], # habitat availability
+        "Carb": 3800, # Carb
+        "DW": nadir["DW"], # Deadwood
+        },
+    }
+    """
+
+    ## ITERATION 
+    reference_points = {
+        "DM1": { # Kaisa
+            "Rev": 100, # Revenue
+            #"HA": ideal["HA"], # habitat availability
+            "HA": 13000, # habitat availability
+            "Carb": 4200, # Carb ¤ Kaisa has <> meaning any value,  nadir["Carb"]. Moderator tried difffernet any values also.
+            "DW": 200, # Deadwood
+        },
+        "DM2": { # Curro
+            "Rev": 190 , # Revenue
+            "HA": 15555, # habitat availability
+            "Carb": 4200, # Carb
+            "DW": 90, # Deadwood
+        },
+        "DM3": { # Babooshka
+            "Rev": 210 , # Revenue
+            "HA": 17700, # habitat availability
+            "Carb": 3900, # Carb
+            "DW": 185, # Deadwood
+        },
+        "DM4": { # Juho
+            #"Rev": next_current_solution["Rev"], # Revenue
+            "Rev": 140,
+            #"HA": nadir["HA"], # habitat availability
+            "HA": 20000, # habitat availability
+            "Carb": 3000, # Carb
+            "DW": 150, # Deadwood
+        },
+    }
+
+    """
+     Index 4, Group Solution : {'Rev': 171.181039376697, 'HA': 19832.65805965584, 'Carb': 3931.738890520008, 'DW': 206.70471069411388}
+    Index 5, Group Solution : {'Rev': 185.00795720419808, 'HA': 18921.71534859025, 'Carb': 3963.136848090012, 'DW': 204.34781435387427}
+    Index 6, Group Solution : {'Rev': 187.91173977919792, 'HA': 18708.08749327525, 'Carb': 3962.4984909800073, 'DW': 200.39078114991452}
 
     # ITERATION 1
     reference_points = {
@@ -295,7 +363,7 @@ if __name__=="__main__":
             "DW": 210, # Deadwood
         },
     }
-
+    """
 
 
     num_desired = 4 
