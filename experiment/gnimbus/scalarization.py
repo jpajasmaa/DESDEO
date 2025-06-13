@@ -2620,7 +2620,6 @@ def add_group_guess_sf(
         is_twice_differentiable=False,
     )
     constraints = []
-
     for obj in problem.objectives:
         #expr = (f"({weights[obj.symbol]}) * ({obj.symbol}_min - {hard_constraints[obj.symbol]})")
         expr = (f"({obj.symbol}_min - {hard_constraints[obj.symbol]})")

@@ -68,6 +68,7 @@ def add_group_nimbus_sfv2(  # noqa: PLR0913
     symbol: str,
     classifications_list: list[dict[str, tuple[str, float | None]]],
     current_objective_vector: dict[str, float],
+    hard_constraints: dict[str, float],
     delta: dict[str, float] | float = 0.000001,
     ideal: dict[str, float] | None = None,
     nadir: dict[str, float] | None = None,
@@ -169,6 +170,7 @@ def add_group_nimbus_sfv2(  # noqa: PLR0913
         raise ScalarizationError(msg)
 
     corrected_current_point = get_corrected_reference_point(problem, current_objective_vector)
+    hard_constraints = get_corrected_reference_point(problem, hard_constraints)
 
     # calculate the weights
     weights = {obj.symbol: 1 / (nadir_point[obj.symbol] - (ideal_point[obj.symbol] - delta[obj.symbol])) for obj in problem.objectives}
@@ -176,41 +178,6 @@ def add_group_nimbus_sfv2(  # noqa: PLR0913
     # max term and constraints
     max_args = []
     constraints = []
-
-
-    def find_min_max_values(data_list, keys):
-
-        max_values = {}
-        min_values = {}
-
-        for key in keys:
-            # We iterate through the list of dictionaries and collect only the non-None values
-            # for the current 'key'.
-            values = [d[key] for d in data_list if key in d and d[key] is not None]
-
-            if values:
-                max_values[key] = max(values)
-                min_values[key] = min(values)
-            else:
-                # If after checking all dictionaries, no valid (non-None) values are found,
-                # we mark it as "N/A".
-                max_values[key] = None
-                min_values[key] = None
-
-        return max_values, min_values
-
-# Example usage with your provided data:
-    data = [{'Rev': None}, {'HA': 190000}, {'Carb': 3800}, {'DW': None},
-            {'Rev': 190}, {'HA': None}, {'Carb': None}, {'DW': None},
-            {'Rev': 210}, {'HA': 17700}, {'Carb': 3900}, {'DW': None},
-            {'Rev': 200}, {'HA': None}, {'Carb': 3800}, {'DW': None}]
-
-    keys_to_analyze = ['Rev', 'HA', 'Carb', 'DW']
-
-    max_results, min_results = find_min_max_values(data, keys_to_analyze)
-
-    print("Maximum values:", max_results)
-    print("Minimum values:", min_results)
 
     print(classifications_list)
 
@@ -256,6 +223,9 @@ def add_group_nimbus_sfv2(  # noqa: PLR0913
                         )
                     )
                 case ("=", _):
+                    # TODO: remove this
+                    pass
+                    """
                     con_expr = f"{_symbol}_min - {corrected_current_point[_symbol]}"
                     constraints.append(
                         Constraint(
@@ -268,9 +238,11 @@ def add_group_nimbus_sfv2(  # noqa: PLR0913
                             is_twice_differentiable=problem.is_twice_differentiable,
                         )
                     )
+                    """
                 case (">=", reservation):
                     # if obj is to be maximized, then the current reservation value needs to be multiplied by -1
-                    con_expr = f"{_symbol}_min - {-1 * reservation if obj.maximize else reservation}"
+                    con_expr = f"{_symbol}_min - {hard_constraints[_symbol]} "
+                    #con_expr = f"{_symbol}_min - {-1 * reservation if obj.maximize else reservation}"
                     constraints.append(
                         Constraint(
                             name=f"Worsen until constraint for {_symbol}",
@@ -1130,6 +1102,7 @@ def solve_sub_problems(  # noqa: PLR0913
         hard_constraints = min_results
         aspirations = max_results
 
+        """ SOLVING Group Scals with scaled delta, original RPs and hard_constraints """
         # solve STOM
         add_stom_sf = add_group_stom_sf_diff if problem.is_twice_differentiable else add_group_stom_sf
 
@@ -1168,6 +1141,7 @@ def solve_sub_problems(  # noqa: PLR0913
 
 
 
+        """ SOLVING Group Scals with scaled delta, agg. aspirations and hard_constraints """
 
         add_stom_sf2 = add_group_stom_test 
         # add_group_stom_sf_diff if problem.is_twice_differentiable else add_group_stom_sf
@@ -1204,5 +1178,45 @@ def solve_sub_problems(  # noqa: PLR0913
 
         solutions.append(guess2_solver.solve(guess2_target))
 
+
+        """ Group nimbus scalarization with delta and added hard_constraints  """
+        classification_list = []
+        for dm_rp in reference_points:
+            print("RPS", reference_points[dm_rp])
+            classification_list.append(infer_classifications(problem, current_objectives, reference_points[dm_rp]))
+        print(classification_list)
+        gnimbus_scala = add_group_nimbusv2_sf_diff if problem.is_twice_differentiable else add_group_nimbus_sfv2  # non-diff gnimbus
+        add_nimbus_sf = gnimbus_scala
+
+        problem_w_nimbus, nimbus_target = add_nimbus_sf(
+            problem, "nimbus_sf", classification_list, current_objectives, hard_constraints, delta, **(scalarization_options or {})
+        )
+
+        if _solver_options:
+            nimbus_solver = init_solver(problem_w_nimbus, _solver_options)  # type:ignore
+        else:
+            nimbus_solver = init_solver(problem_w_nimbus)
+
+        solutions.append(nimbus_solver.solve(nimbus_target))
+
+        # TODO: same results with different classifications explore why; is it only about the hard_constraints in this case? It should be?
+        classification_list2 = []
+        for i in range(len(po_list)):
+            classification_list2.append(infer_classifications(problem, current_objectives, po_list[i]))
+        print("===========================")
+        print(classification_list2)
+        gnimbus_scala = add_group_nimbusv2_sf_diff if problem.is_twice_differentiable else add_group_nimbus_sfv2  # non-diff gnimbus
+        add_nimbus_sf2 = gnimbus_scala
+
+        problem_w_nimbus2, nimbus_target2 = add_nimbus_sf2(
+            problem, "nimbus_sf", classification_list2, current_objectives, hard_constraints, delta, **(scalarization_options or {})
+        )
+
+        if _solver_options:
+            nimbus_solver2 = init_solver(problem_w_nimbus2, _solver_options)  # type:ignore
+        else:
+            nimbus_solver2 = init_solver(problem_w_nimbus2)
+
+        solutions.append(nimbus_solver2.solve(nimbus_target2))
 
         return solutions
