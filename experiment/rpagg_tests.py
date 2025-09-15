@@ -1,4 +1,5 @@
 from desdeo.problem import Problem, objective_dict_to_numpy_array, numpy_array_to_objective_dict, get_ideal_dict, get_nadir_dict
+from desdeo.tools.ng_solver_interfaces import NevergradGenericOptions
 from desdeo.tools.scalarization import add_asf_diff, add_guess_sf_diff, add_stom_sf_diff, add_asf_generic_diff, add_asf_generic_nondiff, add_guess_sf_nondiff
 import numpy as np
 
@@ -7,7 +8,7 @@ from desdeo.problem.testproblems import zdt1, zdt2, zdt3, dtlz2
 
 from desdeo.tools.utils import guess_best_solver, PyomoIpoptSolver, NevergradGenericSolver
 
-from preference_aggregation import find_GRP
+from preference_aggregation import find_GRP, maxmin_cones_criterion, maxmin_criterion
 
 
 import matplotlib.pyplot as plt
@@ -23,9 +24,521 @@ import plotly.io as pio
 pio.kaleido.scope.mathjax = None
 
 
-def agg_test(problem: Problem, rps: list[dict[str, float]], cip, name, solver=None, solver_options=None):
+pdf_path = "/home/jp/tyot/mop/papers/prefagg_concept/oldversion/experiment_pics/paperpics/pdfs/"
+html_path = "/home/jp/tyot/mop/papers/prefagg_concept/oldversion/experiment_pics/paperpics/htmls/"
+csv_path = "/home/jp/tyot/mop/papers/prefagg_concept/oldversion/exptables/"
 
-    pass
+def agg_test(problem: Problem, rps: list[dict[str, float]], cip, name, proj=False, solver=None, solver_options=None):
+    # nadir = objective_dict_to_numpy_array(problem, get_nadir_dict(problem))
+    ideal = objective_dict_to_numpy_array(problem, get_ideal_dict(problem))
+
+    k = len(ideal)
+    q = len(rps)
+
+    # TODO: make for any number of objs to work
+    # rp_arr = np.array([[col["f_1"], col["f_2"], col["f_3"], col["f_4"]] for col in rps])
+    rp_arr = np.array([[col["f_1"], col["f_2"]] for col in rps])
+
+    cip_dict = {"f_1": cip[0], "f_2": cip[1]}
+
+    print("CIP", cip)
+    print(ideal)
+    print(rps)
+
+    GRP = None
+    GRP_ext = None
+    GRP_cones = None
+    GRP_cones_ext = None
+
+    if proj:
+        converted_prefs = []
+        # TODO: find PO for each DM RP, for now only for asf, plotting mess
+        for rp in range(len(rp_arr)):
+            dm_rp = cip - rp_arr[rp]  # convert to improvement direction
+            # should convert numpy array (rp) of dm to dict.
+            dm_rp = numpy_array_to_objective_dict(problem, dm_rp)
+            # p, target = add_asf_diff(problem, f"target{rp}", dm_rp)
+            p, target = add_asf_generic_diff(  # use nondiff as default like in nautili
+                problem,
+                symbol=f"asf{rp}",
+                reference_point=cip_dict,
+                weights=dm_rp,
+                reference_point_aug=cip_dict,
+            )
+            # for 1 RP
+            solver = PyomoIpoptSolver(p)
+            res = solver.solve(target)
+            fs = res.optimal_objectives
+            # print(fs)
+            converted_prefs.append(fs)
+
+        print(converted_prefs)
+
+        conv_rp_arr = np.array([[col["f_1"], col["f_2"]] for col in converted_prefs])
+        # find GRP, returns np.array
+        grpmm, grpmm_s_values = find_GRP(conv_rp_arr, cip, k, q, ideal, rp_arr, "eq_maxmin")
+        print("blö", grpmm)
+        GRP = cip - grpmm
+
+        # find GRP_ext, returns np.array
+        # grpmm_ext = find_GRP(conv_rp_arr, cip, k, q, ideal, rp_arr, "eq_maxmin_ext")
+        # GRP_ext = cip - grpmm_ext
+
+        # find GRP, returns np.array
+        grpcones, grp_cones_s_values = find_GRP(conv_rp_arr, cip, k, q, ideal, rp_arr, "eq_maxmin_cones")
+        GRP_cones = cip-grpcones
+
+        # grpcones_ext = find_GRP(conv_rp_arr, cip, k, q, ideal, rp_arr, "eq_maxmin_cones_ext")
+        # GRP_cones_ext = cip - grpcones_ext
+
+        # meanGRP_arr = np.mean(conv_rp_arr, axis=0) # projected does not make sense as no constraints
+        meanGRP_arr = np.mean(rp_arr, axis=0)
+        print(meanGRP_arr)
+
+        # for plotting
+        # meanGRP_arr = cip - meanGRP_arr
+    else:
+        # find GRP, returns np.array
+        grpmm = find_GRP(rp_arr, cip, k, q, ideal, rp_arr, "maxmin")
+        GRP = grpmm
+
+        # find GRP_ext, returns np.array
+        grpmm_ext = find_GRP(rp_arr, cip, k, q, ideal, rp_arr, "maxmin_ext")
+        GRP_ext = grpmm_ext
+
+        # find GRP, returns np.array
+        grpcones = find_GRP(rp_arr, cip, k, q, ideal, rp_arr, "maxmin_cones")
+        GRP_cones = grpcones
+
+        grpcones_ext = find_GRP(rp_arr, cip, k, q, ideal, rp_arr, "maxmin_cones_ext")
+        GRP_cones_ext = grpcones_ext
+
+        # JUST "NORMAL" mean TODO: use nautili mean, DUNNO IF THIS IS CORRECT WHATEVER
+        imprs = []
+        for i in range(len(rp_arr)):
+            imprs.append(cip - rp_arr[i])
+        meanGRP_arr = np.mean(imprs, axis=0)
+        print(meanGRP_arr)
+
+        # for plotting
+        meanGRP_arr = cip - meanGRP_arr
+    # GRP_mean = {"f_1": meanGRP_arr[0], "f_2": meanGRP_arr[1]}
+
+    grp_name_list = ["GRP mean", "GRP mm", "GRP mm ext", "GRP cones", "GRP cones ext"]
+
+    # create a list of points
+    points = []
+    points.append(ideal)
+    points.append(cip)
+
+    for i in range(len(rp_arr)):
+        points.append(rp_arr[i])
+
+    points.append(meanGRP_arr)
+    points.append(GRP)
+    points.append(GRP_ext)
+    points.append(GRP_cones)
+    points.append(GRP_cones_ext)
+
+    column_names = []
+    column_names.append("ideal")
+    column_names.append("cip")
+
+    for i in range(len(rps)):
+        column_names.append(f"DM{i+1} RP")
+
+    for i in range(len(grp_name_list)):
+        column_names.append(grp_name_list[i])
+
+    print(points)
+    import pandas as pd
+    # TOOD: make for any number of objs
+    # df = pd.DataFrame(points, columns=["f_1", "f_2", "f_3", "f_4"])
+    df = pd.DataFrame(points, columns=["f_1", "f_2"])
+    # df = df.rename(columns={'0': "f_1", '1': "f_2"})
+    df.index = column_names
+
+    print(df)
+    # df.to_csv(f"/home/jp/tyot/mop/papers/prefagg_concept/exptables/{name}.csv")
+    # fig.write_image(f"/home/jp/tyot/mop/papers/prefagg_concept/experiment_pics/paperpics/{name}.pdf", width=800, height=800)
+
+    marker_size = 10
+
+    # TODO: figure out the marker styles better
+    # fig = px.scatter(df, x="f_1", y="f_2", color=column_names)
+
+    df_empty = {
+        "f_1": [0],
+        "f_2": [0],
+    }
+    fig = px.scatter(df_empty, x="f_1", y="f_2")
+
+    fig.add_scatter(x=[cip[0]], y=[cip[1]], mode="markers", name="CIP", showlegend=True, marker=dict(size=marker_size, symbol="star"))
+    fig.add_scatter(x=[ideal[0]], y=[ideal[1]], mode="markers", name="ideal", showlegend=True, marker=dict(size=marker_size, symbol="star"))
+    # fig.update_traces(marker=dict(size=15, symbol="star"))
+
+    # plot RPs
+    for i in range(len(rp_arr)):
+        fig.add_scatter(x=[rp_arr[i][0]], y=[rp_arr[i][1]], mode="markers", name=f"DM{i+1}_RP", showlegend=True, marker=dict(size=marker_size, symbol="circle"))
+
+    # PLOT GRP
+    fig.add_scatter(x=[meanGRP_arr[0]], y=[meanGRP_arr[1]], mode="markers", name="GRP_mean", showlegend=True, marker=dict(size=marker_size, symbol="square"))
+    # additive
+    fig.add_scatter(x=[grpmm_ext[0]], y=[grpmm_ext[1]], mode="markers", name="GRP_mm_ext", showlegend=True, marker=dict(size=marker_size, symbol="x"))
+    fig.add_scatter(x=[grpmm[0]], y=[grpmm[1]], mode="markers", name="GRP_mm", showlegend=True, marker=dict(size=marker_size, symbol="diamond-tall"))
+    # cones
+    fig.add_scatter(x=[grpcones_ext[0]], y=[grpcones_ext[1]], mode="markers", name="GRP-cones_ext",
+                    showlegend=True, marker=dict(size=15, symbol="cross"))
+    fig.add_scatter(x=[grpcones[0]], y=[grpcones[1]], mode="markers", name="GRP-cones", showlegend=True, marker=dict(size=marker_size, symbol="diamond-wide"))
+
+    # lines to show the polyhedron
+    fig.add_scatter(x=create_line_path(rp_arr[:, 0]), y=create_line_path(rp_arr[:, 1]),
+                    mode="lines", line=dict(color="#808080"), name="valid_area", showlegend=True)
+    # FOR saving as pdf
+    fig.update_layout(autosize=True, width=800, height=800, title=f"{name}")
+    """ for bottom right legend
+    fig.update_layout(legend=dict(
+        yanchor="bottom",
+        y=0.01,
+        xanchor="right",
+        x=0.99
+    ))
+    """
+    fig.update_layout(legend=dict(
+        yanchor="top",
+        y=0.99,
+        xanchor="left",
+        x=0.01
+    ))
+    # fig.update_xaxes(range=[0.5, 1.025])
+    # fig.update_yaxes(range=[0.5, 1.025])
+    # fig.update_layout(margin_r=300, legend_x=1.2, autosize=True, width=800, height=800, title=f"{name}")
+    fig.write_image(f"{pdf_path}{name}.pdf", width=800, height=800)
+    fig.write_html(f"{html_path}{name}.html")
+
+    fig.show()
+
+
+def list_of_dicts_to_array(list_of_dicts):
+    """
+    Converts a list of dictionaries to a NumPy array, handling an arbitrary number of columns.
+
+    Args:
+        list_of_dicts: A list of dictionaries, where each dictionary has keys like 'f_1', 'f_2', etc.
+
+    Returns:
+        A NumPy array representing the data.
+    """
+
+    if not list_of_dicts:
+        return np.array([])  # Handle empty list case
+
+    keys = sorted(list_of_dicts[0].keys())  # Get sorted keys (f_1, f_2, ...)
+    array_data = []
+
+    for item in list_of_dicts:
+        row = [item[key] for key in keys]
+        array_data.append(row)
+
+    return np.array(array_data)
+
+
+# TODO;: make a visu that only uses additive, cones and po cones, as they are the ones that are differnet.
+# MAybe version where it is to decide wheter use original rps or conv rps as constraints??
+def agg_test_only3(problem: Problem, rps: list[dict[str, float]], cip, name, proj=False, solver=None, solver_options=None):
+    # nadir = objective_dict_to_numpy_array(problem, get_nadir_dict(problem))
+    ideal = objective_dict_to_numpy_array(problem, get_ideal_dict(problem))
+
+    k = len(ideal)
+    q = len(rps)
+
+    # TODO: make for any number of objs to work
+    # rp_arr = np.array([[col["f_1"], col["f_2"]] for col in rps])
+    rp_arr = list_of_dicts_to_array(rps)
+    # cip_dict = {"f_1": cip[0], "f_2": cip[1]}
+    cip_dict = numpy_array_to_objective_dict(problem, cip)
+
+    print(ideal)
+
+    GRP = None
+    GRP_cones = None
+    # GRP_cones_PO = None
+
+    conv_rp_arr = None
+    if proj:
+        converted_prefs = []
+        # TODO: find PO for each DM RP, for now only for asf, plotting mess
+        for rp in range(len(rp_arr)):
+            dm_rp = cip - rp_arr[rp]  # convert to improvement direction
+            # should convert numpy array (rp) of dm to dict.
+            dm_rp = numpy_array_to_objective_dict(problem, dm_rp)
+            # p, target = add_asf_diff(problem, f"target{rp}", dm_rp)
+            p, target = add_asf_generic_diff(  # use nondiff as default like in nautili
+                problem,
+                symbol=f"asf{rp}",
+                reference_point=cip_dict,
+                weights=dm_rp,
+                reference_point_aug=cip_dict,
+            )
+            # for 1 RP
+            solver = PyomoIpoptSolver(p)
+            res = solver.solve(target)
+            fs = res.optimal_objectives
+            # print(fs)
+            converted_prefs.append(fs)
+
+        print(converted_prefs)
+
+        conv_rp_arr = np.array([[col["f_1"], col["f_2"]] for col in converted_prefs])
+        # find GRP, returns np.array
+        grpmm, add_s = find_GRP(conv_rp_arr, cip, k, q, ideal, rp_arr, "eq_maxmin")
+        GRP = cip - grpmm
+
+        # find GRP, returns np.array
+        grpcones, cones_s = find_GRP(conv_rp_arr, cip, k, q, ideal, rp_arr, "eq_maxmin_cones")
+        GRP_cones = cip - grpcones
+        # meanGRP_arr = np.mean(conv_rp_arr, axis=0) # projected does not make sense as no constraints
+        meanGRP_arr = np.mean(rp_arr, axis=0)
+        print(meanGRP_arr)
+
+        # for plotting
+        # meanGRP_arr = cip - meanGRP_arr
+    else:
+        # find GRP, returns np.array
+        grpmm, add_s = find_GRP(rp_arr, cip, k, q, ideal, rp_arr, "maxmin")
+        GRP = grpmm
+
+        # find GRP, returns np.array
+        grpcones, cones_s = find_GRP(rp_arr, cip, k, q, ideal, rp_arr, "maxmin_cones")
+        GRP_cones = grpcones
+
+        # JUST "NORMAL" mean TODO: use nautili mean, DUNNO IF THIS IS CORRECT WHATEVER
+        imprs = []
+        for i in range(len(rp_arr)):
+            imprs.append(cip - rp_arr[i])
+        meanGRP_arr = np.mean(imprs, axis=0)
+        print(meanGRP_arr)
+
+        # for plotting
+        meanGRP_arr = cip - meanGRP_arr
+    # GRP_mean = {"f_1": meanGRP_arr[0], "f_2": meanGRP_arr[1]}
+
+    grp_name_list = ["GRP mean", "GRP mm", "GRP cones"]
+
+    # create a list of points
+    points = []
+    points.append(ideal)
+    points.append(cip)
+
+    for i in range(len(rp_arr)):
+        points.append(rp_arr[i])
+    points.append(meanGRP_arr)
+    points.append(grpmm)
+    # points.append(GRP_ext)
+    points.append(grpcones)
+    # points.append(GRP_cones_ext)
+
+    column_names = []
+    column_names.append("ideal")
+    column_names.append("cip")
+
+    dm_indices = [f" DM{i+1} " for i in range(len(rps))]
+    print(dm_indices)
+    for i in range(len(rps)):
+        # column_names.append(f"DM{i+1} RP")
+        column_names.append(dm_indices[i])
+
+    for i in range(len(grp_name_list)):
+        column_names.append(grp_name_list[i])
+
+    print(points)
+    import pandas as pd
+
+    objective_columns = []
+    for obj in problem.objectives:
+        objective_columns.append(obj.symbol)
+    df = pd.DataFrame(points, columns=objective_columns)
+    df.index = column_names
+    print(df)
+    df.to_csv(f"{csv_path}{name}.csv")
+
+    s_df = pd.DataFrame({'add': add_s, 'cones': cones_s}, index=dm_indices)
+    s_df.to_csv(f"{csv_path}{name}_s_values.csv")
+    print(s_df)
+
+    marker_size = 15
+
+    # TODO: figure out the marker styles better
+    # fig = px.scatter(df, x="f_1", y="f_2", color=column_names)
+
+    if proj:
+        problem_pymoo = get_problem(problem.name)
+        # problem_pymoo = get_problem(problem.name, n_var=30, n_obj=2)
+        pf = problem_pymoo.pareto_front()
+
+        keys = ["f_1", "f_2"]
+        # Convert NumPy array to a list of dictionaries
+        PF = [dict(zip(keys, row)) for row in pf]
+        # plot PF
+        if problem.name == "zdt3":
+            fig = px.scatter(PF, x="f_1", y="f_2")
+        else:
+            fig = px.line(PF, x="f_1", y="f_2")
+
+    else:
+        df_empty = {
+            "f_1": [cip[0]],
+            "f_2": [cip[1]],
+        }
+        fig = px.scatter(df_empty, x="f_1", y="f_2")
+
+    fig.add_scatter(x=[cip[0]], y=[cip[1]], mode="markers", name="CIP", showlegend=True, marker=dict(size=marker_size, symbol="star"))
+    fig.add_scatter(x=[ideal[0]], y=[ideal[1]], mode="markers", name="ideal", showlegend=True, marker=dict(size=marker_size, symbol="star"))
+    # fig.update_traces(marker=dict(size=15, symbol="star"))
+
+    # plot RPs
+    for i in range(len(rp_arr)):
+        if proj:
+            fig.add_scatter(x=[conv_rp_arr[i][0]], y=[conv_rp_arr[i][1]], mode="markers", name=f"proj. DM{
+                            i+1}_RP", showlegend=True, marker=dict(size=10, symbol="circle"))
+        fig.add_scatter(x=[rp_arr[i][0]], y=[rp_arr[i][1]], mode="markers", name=f"DM{i+1}_RP", showlegend=True, marker=dict(size=marker_size, symbol="circle"))
+
+    # PLOT GRP
+    fig.add_scatter(x=[meanGRP_arr[0]], y=[meanGRP_arr[1]], mode="markers", name="GRP-mean", showlegend=True, marker=dict(size=marker_size, symbol="square"))
+    # additive
+    # fig.add_scatter(x=[grpmm_ext[0]], y=[grpmm_ext[1]], mode="markers", name="GRP_mm_ext", showlegend=True, marker=dict(size=marker_size, symbol="x"))
+    fig.add_scatter(x=[grpmm[0]], y=[grpmm[1]], mode="markers", name="GRP-add", showlegend=True, marker=dict(size=marker_size, symbol="x"))
+    # cones
+    # fig.add_scatter(x=[grpcones_ext[0]], y=[grpcones_ext[1]], mode="markers", name="GRP-cones_ext",
+    #                showlegend=True, marker=dict(size=15, symbol="cross"))
+    fig.add_scatter(x=[grpcones[0]], y=[grpcones[1]], mode="markers", name="GRP-cones", showlegend=True, marker=dict(size=marker_size, symbol="cross"))
+
+    # lines to show the polyhedron
+    fig.add_scatter(x=create_line_path(rp_arr[:, 0]), y=create_line_path(rp_arr[:, 1]),
+                    mode="lines", line=dict(color="#808080"), name="valid_area", showlegend=True)
+    # FOR saving as pdf
+    fig.update_layout(autosize=True, width=800, height=800, title=f"{name}")
+    fig.update_layout(legend=dict(
+        yanchor="bottom",
+        y=0.01,
+        xanchor="right",
+        x=0.99
+    ))
+    """
+    fig.update_layout(legend=dict(
+        yanchor="top",
+        y=0.99,
+        xanchor="left",
+        x=0.01
+    ))
+    """  # for bottom right legend
+    # fig.update_xaxes(range=[0.1, 0.8])
+    # fig.update_yaxes(range=[0.1, 0.8])
+    # fig.update_layout(margin_r=300, legend_x=1.2, autosize=True, width=800, height=800, title=f"{name}")
+    fig.write_image(f"{pdf_path}{name}.pdf", width=800, height=800)
+    fig.write_html(f"{html_path}{name}.html")
+
+    fig.show()
+
+
+def agg_test_old(problem: Problem, rps: list[dict[str, float]], cip, name, solver=None, solver_options=None):
+    # nadir = objective_dict_to_numpy_array(problem, get_nadir_dict(problem))
+    ideal = objective_dict_to_numpy_array(problem, get_ideal_dict(problem))
+
+    k = len(ideal)
+    q = len(rps)
+
+    rp_arr = np.array([[col["f_1"], col["f_2"]] for col in rps])
+
+    # find GRP, returns np.array
+    grpmm = find_GRP(rp_arr, cip, k, q, ideal, rp_arr, "maxmin")
+    # improvmenet direction
+    GRP = cip - grpmm
+    # make dict from the GPR array
+    GRP = {"f_1": GRP[0], "f_2": GRP[1]}
+
+    # find GRP_ext, returns np.array
+    grpmm_ext = find_GRP(rp_arr, cip, k, q, ideal, rp_arr, "maxmin_ext")
+    # improvmenet direction
+    GRP_ext = cip - grpmm_ext
+    # make dict from the GPR array
+    GRP_ext = {"f_1": GRP_ext[0], "f_2": GRP_ext[1]}
+
+    # find GRP, returns np.array
+    grpcones = find_GRP(rp_arr, cip, k, q, ideal, rp_arr, "maxmin_cones")
+    # improvmenet direction
+    GRP_cones = cip - grpcones
+    # make dict from the GPR array
+    GRP_cones = {"f_1": GRP_cones[0], "f_2": GRP_cones[1]}
+
+    grpcones_ext = find_GRP(rp_arr, cip, k, q, ideal, rp_arr, "maxmin_cones_ext")
+    # improvmenet direction
+    GRP_cones_ext = cip - grpcones_ext
+    # make dict from the GPR array
+    GRP_cones_ext = {"f_1": GRP_cones_ext[0], "f_2": GRP_cones_ext[1]}
+
+    # JUST "NORMAL" mean TODO: use nautili mean, DUNNO IF THIS IS CORRECT WHATEVER
+    imprs = []
+    for i in range(len(rp_arr)):
+        imprs.append(cip - rp_arr[i])
+    meanGRP_arr = np.mean(imprs, axis=0)
+    print(meanGRP_arr)
+
+    # for plotting
+    meanGRP_arr = cip - meanGRP_arr
+
+    df = {
+        "f_1": [0],
+        "f_2": [0],
+    }
+
+    marker_size = 10
+    # TODO: figure out the marker styles better
+    fig = px.scatter(df, x="f_1", y="f_2")
+    fig.add_scatter(x=[cip[0]], y=[cip[1]], mode="markers", name="CIP", showlegend=True, marker=dict(size=marker_size, symbol="star"))
+    fig.add_scatter(x=[ideal[0]], y=[ideal[1]], mode="markers", name="ideal", showlegend=True, marker=dict(size=marker_size, symbol="star"))
+    # fig.update_traces(marker=dict(size=15, symbol="star"))
+
+    # plot RPs
+    for i in range(len(rp_arr)):
+        fig.add_scatter(x=[rp_arr[i][0]], y=[rp_arr[i][1]], mode="markers", name=f"DM{i+1}_RP", showlegend=True, marker=dict(size=marker_size, symbol="circle"))
+
+    # PLOT GRP
+    fig.add_scatter(x=[meanGRP_arr[0]], y=[meanGRP_arr[1]], mode="markers", name="GRP_mean", showlegend=True, marker=dict(size=marker_size, symbol="square"))
+    # additive
+    fig.add_scatter(x=[grpmm_ext[0]], y=[grpmm_ext[1]], mode="markers", name="GRP_mm_ext", showlegend=True, marker=dict(size=marker_size, symbol="x"))
+    fig.add_scatter(x=[grpmm[0]], y=[grpmm[1]], mode="markers", name="GRP_mm", showlegend=True, marker=dict(size=marker_size, symbol="diamond-tall"))
+    # cones
+    fig.add_scatter(x=[grpcones_ext[0]], y=[grpcones_ext[1]], mode="markers", name="GRP-cones_ext",
+                    showlegend=True, marker=dict(size=15, symbol="cross"))
+    fig.add_scatter(x=[grpcones[0]], y=[grpcones[1]], mode="markers", name="GRP-cones", showlegend=True, marker=dict(size=marker_size, symbol="diamond-wide"))
+
+    # lines to show the polyhedron
+    fig.add_scatter(x=create_line_path(rp_arr[:, 0]), y=create_line_path(rp_arr[:, 1]),
+                    mode="lines", line=dict(color="#808080"), name="valid_area", showlegend=True)
+    # FOR saving as pdf
+    fig.update_layout(autosize=True, width=800, height=800, title=f"{name}")
+
+    """ for bottom right legend
+    fig.update_layout(legend=dict(
+        yanchor="bottom",
+        y=0.01,
+        xanchor="right",
+        x=0.99
+    ))
+    """
+    fig.update_layout(legend=dict(
+        yanchor="top",
+        y=0.99,
+        xanchor="left",
+        x=0.01
+    ))
+    # fig.update_layout(margin_r=300, legend_x=1.2, autosize=True, width=800, height=800, title=f"{name}")
+    # fig.write_image(f"/home/jp/tyot/mop/papers/prefagg_concept/experiment_pics/paperpics/{name}.pdf", width=800, height=800)
+    # fig.write_html(f"/home/jp/tyot/mop/papers/prefagg_concept/experiment_pics/paperpics/htmls/{name}.html")
+
+    # fig.show()
+
 
 def agg_rps_test_mm(problem: Problem, rps: list[dict[str, float]], cip, name, solver=None, solver_options=None):
 
@@ -265,7 +778,6 @@ def agg_rps_test_mm(problem: Problem, rps: list[dict[str, float]], cip, name, so
     """
     VISUALIZING
     """
-
     solutions = [fs_mean, fs_mm, fs_mm_ext, fs_cones, fs_cones_ext]
 
     keys = ["f_1", "f_2"]
@@ -327,8 +839,8 @@ def agg_rps_test_mm(problem: Problem, rps: list[dict[str, float]], cip, name, so
                     mode="lines", line=dict(color="#808080"), name="valid_area", showlegend=True)
     # FOR saving as pdf
     fig.update_layout(autosize=False, width=800, height=800, title=f"{name}")
-    fig.write_image(f"/home/jp/tyot/mop/papers/prefagg_concept/experiment_pics/paperpics/{name}.pdf", width=800, height=800)
-    fig.write_html(f"/home/jp/tyot/mop/papers/prefagg_concept/experiment_pics/paperpics/htmls/{name}.html")
+    fig.write_image(f"{pdf_path}{name}.pdf", width=800, height=800)
+    fig.write_html(f"{html_path}{name}.html")
 
     fig.show()
 
@@ -374,31 +886,13 @@ def agg_rps_test_eq(problem: Problem, rps: list[dict[str, float]], cip, name):
         # print(fs)
         converted_prefs.append(fs)
 
-    """
-    for d in all_prefs:
-
-        problem_w_asf, target = add_asf_generic_diff( # use nondiff as default like in nautili
-            problem,
-            symbol="asf",
-            reference_point=cip_dict,
-            weights=d,
-            reference_point_aug=cip_dict,
-         )
-        solver = PyomoIpoptSolver(problem_w_asf)
-        res = solver.solve(target)
-        xs = res.optimal_variables
-        fs = res.optimal_objectives
-        print(fs)
-        converted_prefs.merge(fs)
-    """
-
     print(converted_prefs)
 
     conv_rp_arr = np.array([[col["f_1"], col["f_2"]] for col in converted_prefs])
 
     # TODO: send also the og rps
     # find GRP, returns np.array
-    grpmm = find_GRP(conv_rp_arr, cip, k, q, ideal, rp_arr, "eq_maxmin")
+    grpmm, grpmm_s_values = find_GRP(conv_rp_arr, cip, k, q, ideal, rp_arr, "eq_maxmin")
     # improvmenet direction
     GRP = cip - grpmm
     # make dict from the GPR array
@@ -406,7 +900,7 @@ def agg_rps_test_eq(problem: Problem, rps: list[dict[str, float]], cip, name):
     print(f"maxmin {GRP}")
 
     # find GRP_ext, returns np.array
-    grpmm_ext = find_GRP(conv_rp_arr, cip, k, q, ideal, rp_arr, "eq_maxmin_ext")
+    grpmm_ext, grpext_s_values = find_GRP(conv_rp_arr, cip, k, q, ideal, rp_arr, "eq_maxmin_ext")
     # improvmenet direction
     GRP_ext = cip - grpmm_ext
     # make dict from the GPR array
@@ -414,7 +908,7 @@ def agg_rps_test_eq(problem: Problem, rps: list[dict[str, float]], cip, name):
     print(f"maxmin ext {GRP_ext}")
 
     # find GRP, returns np.array
-    grpcones = find_GRP(conv_rp_arr, cip, k, q, ideal, rp_arr, "eq_maxmin_cones")
+    grpcones, grp_cones_s_values = find_GRP(conv_rp_arr, cip, k, q, ideal, rp_arr, "eq_maxmin_cones")
     # improvmenet direction
     GRP_cones = cip - grpcones
     # make dict from the GPR array
@@ -422,16 +916,21 @@ def agg_rps_test_eq(problem: Problem, rps: list[dict[str, float]], cip, name):
     print(f"maxmin cones {GRP_cones}")
 
     # find GRP, returns np.array
-    grpcones_ext = find_GRP(conv_rp_arr, cip, k, q, ideal, rp_arr, "eq_maxmin_cones_ext")
+    grpcones_ext, grp_cones_ext_s_values = find_GRP(conv_rp_arr, cip, k, q, ideal, rp_arr, "eq_maxmin_cones_ext")
     # improvmenet direction
     GRP_cones_ext = cip - grpcones_ext
     # make dict from the GPR array
     GRP_cones_ext = {"f_1": GRP_cones_ext[0], "f_2": GRP_cones_ext[1]}
     print(f"maxmin cones ext {GRP_cones_ext}")
 
-    grpmean = cip - np.mean(conv_rp_arr, axis=0)
+    grpmean = np.mean(rp_arr, axis=0)
+    # grpmean = cip - np.mean(rp_arr, axis=0)
     GRPmean = {"f_1": grpmean[0], "f_2": grpmean[1]}
     print(f"mean {GRPmean}")
+
+    print("S VALUES")
+    print(grpmm_s_values)
+    print(grp_cones_s_values)
 
     """
     SOLVING
@@ -515,13 +1014,15 @@ def agg_rps_test_eq(problem: Problem, rps: list[dict[str, float]], cip, name):
 
     all_solutions = pd.DataFrame(all_solutions, columns=["f_1", "f_2", "names"])
 
-    problem_pymoo = get_problem(problem.name)
+    problem_pymoo = get_problem(problem.name, n_var=30, n_obj=2)
+
     pf = problem_pymoo.pareto_front()
 
     # Convert NumPy array to a list of dictionaries
     PF = [dict(zip(keys, row)) for row in pf]
+
     # plot PF
-    if problem.name == "zdt3":
+    if problem.name == "zdt3":  # or problem.name == "dtlz2":
         fig = px.scatter(PF, x="f_1", y="f_2")
     else:
         fig = px.line(PF, x="f_1", y="f_2")
@@ -533,24 +1034,26 @@ def agg_rps_test_eq(problem: Problem, rps: list[dict[str, float]], cip, name):
 
     # plot RPs
     for i in range(len(rp_arr)):
-        # fig.add_scatter(x=[rp_arr[i][0]], y=[rp_arr[i][1]], mode="markers", name=f"DM{i+1}_RP", showlegend=True, marker=dict(size=10, symbol="x"))
+        fig.add_scatter(x=[conv_rp_arr[i][0]], y=[conv_rp_arr[i][1]], mode="markers",
+                        name=f"proj. DM{i+1}_RP", showlegend=True, marker=dict(size=10, symbol="circle"))
         fig.add_scatter(x=[rp_arr[i][0]], y=[rp_arr[i][1]], mode="markers", name=f"DM{
-                        i+1}_RP", showlegend=True, marker=dict(size=15, symbol="x"))
+                        i+1}_RP", showlegend=True, marker=dict(size=10, symbol="circle"))
 
     # PLOT GRP
-    # fig.add_scatter(x=[grpmean[0]], y=[grpmean[1]], mode="markers", name="PO-GRP_mm", showlegend=True, marker=dict(size=15, symbol="pentagon"))
-    fig.add_scatter(x=[grpmm[0]], y=[grpmm[1]], mode="markers", name="PO-GRP_mm", showlegend=True, marker=dict(size=15, symbol="diamond-tall"))
-    fig.add_scatter(x=[grpmm_ext[0]], y=[grpmm_ext[1]], mode="markers", name="PO-GRP_mm_ext", showlegend=True, marker=dict(size=15, symbol="diamond-wide"))
+    fig.add_scatter(x=[grpmean[0]], y=[grpmean[1]], mode="markers", name="GRP-mean", showlegend=True, marker=dict(size=15, symbol="pentagon"))
+    # fig.add_scatter(x=[grpmm_ext[0]], y=[grpmm_ext[1]], mode="markers", name="PO-GRP_mm_ext", showlegend=True, marker=dict(size=15, symbol="cross"))
+    fig.add_scatter(x=[grpmm[0]], y=[grpmm[1]], mode="markers", name="PO-GRP_mm", showlegend=True, marker=dict(size=15, symbol="x"))
+    # fig.add_scatter(x=[grpcones_ext[0]], y=[grpcones_ext[1]], mode="markers", name="PO-GRP-cones_ext", showlegend=True, marker=dict(size=15, symbol="cross"))
     fig.add_scatter(x=[grpcones[0]], y=[grpcones[1]], mode="markers", name="PO-GRP-cones", showlegend=True, marker=dict(size=15, symbol="cross"))
-    fig.add_scatter(x=[grpcones_ext[0]], y=[grpcones_ext[1]], mode="markers", name="PO-GRP-cones_ext", showlegend=True, marker=dict(size=15, symbol="cross"))
+
     # fig.update_traces(marker=dict(size=15, symbol="x"))
     # fig.update_traces(marker=dict(size=15, symbol="star"))
     # fig.update_traces(marker=dict(size=15))
     # PLOT results
     # fig.add_scatter(all_solutions,  x=all_solutions.f_1, y=all_solutions.f_2, mode="markers", name=all_solutions.names ,showlegend=True)
-    for i in range(len(namelist)):
-        fig.add_scatter(x=[all_solutions["f_1"][i]], y=[all_solutions["f_2"][i]], mode="markers",
-                        name=all_solutions.names[i], showlegend=True, marker=dict(size=15, symbol="circle"))
+    # for i in range(len(namelist)):
+    # fig.add_scatter(x=[all_solutions["f_1"][i]], y=[all_solutions["f_2"][i]], mode="markers",
+    #                name=all_solutions.names[i], showlegend=True, marker=dict(size=15, symbol="circle"))
 
     # fig.add_scatter(all_solutions, x="f_1", y="f_2", mode="markers", name="ASF",showlegend=True)
     # fig.add_scatter(all_solutions, x="f_1", y="f_2", mode="markers", name="ASF",showlegend=True)
@@ -568,8 +1071,8 @@ def agg_rps_test_eq(problem: Problem, rps: list[dict[str, float]], cip, name):
 
     # FOR saving as pdf
     fig.update_layout(autosize=False, width=800, height=800, title=f"{name}")
-    fig.write_image(f"/home/jp/tyot/mop/papers/prefagg_concept/experiment_pics/misc/{name}.pdf", width=800, height=800)
-    fig.write_html(f"/home/jp/tyot/mop/papers/prefagg_concept/experiment_pics/paperpics/htmls/{name}.html")
+    fig.write_image(f"{pdf_path}{name}.pdf", width=800, height=800)
+    fig.write_html(f"{html_path}{name}.html")
 
     fig.show()
 
@@ -620,21 +1123,21 @@ def agg_rps_test_eq_3d(problem: Problem, rps: list[dict[str, float]], cip, name)
     conv_rp_arr = np.array([[col["f_1"], col["f_2"], col["f_3"]] for col in converted_prefs])
 
     # find GRP, returns np.array
-    grpmm = find_GRP(conv_rp_arr, cip, k, q, ideal, nadir, "maxmin")
+    grpmm, add_s = find_GRP(conv_rp_arr, cip, k, q, ideal, nadir, "maxmin")
     # improvmenet direction
     GRP = cip - grpmm
     # make dict from the GPR array
     GRP = {"f_1": GRP[0], "f_2": GRP[1], "f_3": GRP[2]}
 
     # find GRP_ext, returns np.array
-    grpmm_ext = find_GRP(conv_rp_arr, cip, k, q, ideal, nadir, "maxmin_ext")
+    grpmm_ext, add_s_ext = find_GRP(conv_rp_arr, cip, k, q, ideal, nadir, "maxmin_ext")
     # improvmenet direction
     GRP_ext = cip - grpmm_ext
     # make dict from the GPR array
     GRP_ext = {"f_1": GRP_ext[0], "f_2": GRP_ext[1], "f_3": GRP_ext[2]}
 
     # find GRP, returns np.array
-    grpcones = find_GRP(conv_rp_arr, cip, k, q, ideal, nadir, "maxmin_cones")
+    grpcones, cones_s = find_GRP(conv_rp_arr, cip, k, q, ideal, nadir, "maxmin_cones")
     # improvmenet direction
     GRP_cones = cip - grpcones
     # make dict from the GPR array
@@ -793,7 +1296,8 @@ def experiment_optDM1(case_name):
     cip = np.array([1, 1])
 
     # agg_rps_test
-    agg_rps_test_mm(problem, reference_points, cip, case_name)
+    agg_test(problem, reference_points, cip, case_name)
+    # agg_rps_test_mm(problem, reference_points, cip, case_name)
 
 def experiment_optDM2(case_name):
     n_variables = 30
@@ -810,24 +1314,8 @@ def experiment_optDM2(case_name):
     cip = np.array([1, 1])
 
     # agg_rps_test
-    agg_rps_test_mm(problem, reference_points, cip, case_name)
-
-def experiment_optDMb(case_name):
-    n_variables = 30
-    n_objectives = 2
-    # ZDT3 has issues with something, maybe normalization i dunno
-    problem = zdt2(n_variables)
-
-    # eq_example_optdm1
-    reference_points = [
-        {"f_1": 0.1, "f_2": 0.8},
-        {"f_1": 0.8, "f_2": 0.6},
-        {"f_1": 0.8, "f_2": 0.0},
-    ]
-    cip = np.array([1, 1])
-
-    # agg_rps_test
-    agg_rps_test_mm(problem, reference_points, cip, case_name)
+    agg_test(problem, reference_points, cip, case_name)
+    # agg_rps_test_mm(problem, reference_points, cip, case_name)
 
 
 def experiment_zdt3(case_name):
@@ -845,7 +1333,31 @@ def experiment_zdt3(case_name):
     cip = np.array([1, 1])
 
     # agg_rps_test
-    agg_rps_test_mm(problem, reference_points, cip, case_name)
+    agg_test(problem, reference_points, cip, case_name)
+    # agg_rps_test_mm(problem, reference_points, cip, case_name)
+
+def experiment_solution_process(case_name):
+    # n_variables = 30
+    # n_objectives = 2
+    # ZDT3 has issues with something, maybe normalization i dunno
+    # problem = zdt1(n_variables)
+    from desdeo.problem.testproblems import binh_and_korn, re22
+    # problem = binh_and_korn()
+    problem = re22()
+
+    # eq_example_optdm1
+    # verticaldms
+    reference_points = [
+        {"f_1": 0.7, "f_2": 0.5},
+        {"f_1": 0.2, "f_2": 0.8},
+        {"f_1": 0.8937, "f_2": 0.1063},  # 0.99
+    ]
+    cip = np.array([5, 2])
+
+    # agg_rps_test
+    agg_test_only3(problem, reference_points, cip, case_name)
+    # agg_rps_test_mm(problem, reference_points, cip, case_name)
+
 
 def experiment1_solution_process1(case_name):
    # test_maxmin()
@@ -857,14 +1369,15 @@ def experiment1_solution_process1(case_name):
     # eq_example_optdm1
     # verticaldms
     reference_points = [
-        {"f_1": 0.4, "f_2": 0.8},
-        {"f_1": 0.7, "f_2": 0.7},
-        {"f_1": 0.6, "f_2": 0.5},
+        {"f_1": 0.7, "f_2": 0.5},
+        {"f_1": 0.2, "f_2": 0.8},
+        {"f_1": 0.8937, "f_2": 0.1063},  # 0.99
     ]
     cip = np.array([1, 1])
 
     # agg_rps_test
-    agg_rps_test_mm(problem, reference_points, cip, case_name)
+    agg_test(problem, reference_points, cip, case_name)
+    # agg_rps_test_mm(problem, reference_points, cip, case_name)
 
 def experiment1_solution_process2(case_name):
    # test_maxmin()
@@ -884,7 +1397,8 @@ def experiment1_solution_process2(case_name):
     cip = np.array([0.7, .7])
 
     # agg_rps_test
-    agg_rps_test_mm(problem, reference_points, cip, case_name)
+    agg_test(problem, reference_points, cip, case_name)
+    # agg_rps_test_mm(problem, reference_points, cip, case_name)
 
 def experiment1_solution_process3(case_name):
    # test_maxmin()
@@ -904,6 +1418,7 @@ def experiment1_solution_process3(case_name):
     cip = np.array([0.6, .6])
 
     # agg_rps_test
+    # agg_test(problem, reference_points, cip, case_name)
     agg_rps_test_mm(problem, reference_points, cip, case_name)
 
 def experiment2_solution_process1(case_name):
@@ -923,9 +1438,10 @@ def experiment2_solution_process1(case_name):
     cip = np.array([1, 1])
 
     # agg_rps_test
+    agg_test_only3(problem, reference_points, cip, case_name, True)
     agg_rps_test_eq(problem, reference_points, cip, case_name)
 
-def experiment2_solution_process2(case_name):
+def experiment1_scaling(case_name):
    # test_maxmin()
     n_variables = 30
     n_objectives = 2
@@ -935,15 +1451,61 @@ def experiment2_solution_process2(case_name):
     # eq_example_optdm1
     # verticaldms
     reference_points = [
-        {"f_1": 0.4, "f_2": 0.5},
-        {"f_1": 0.6, "f_2": 0.6},
-        {"f_1": 0.6, "f_2": 0.3},
+        {"f_1": 0.1, "f_2": 0.95},
+        {"f_1": 0.5, "f_2": 0.83},
+        {"f_1": 0.99, "f_2": 0.65},
+        {"f_1": 0.6, "f_2": 0.75},
     ]
-    # TODO: NOTE, LETS WRITE, LETS ASSUME AT SOME LATER ITERATION I, WE HAVE CIP AT 0.7,0.7
-    cip = np.array([0.7, .7])
+    # rp3 f2 == rp4 f2, a > 90
+    # eli rp3 f2 < rp4 f2 että mahd. a < 90
+    cip = np.array([1, 1])
 
     # agg_rps_test
-    agg_rps_test_eq(problem, reference_points, cip, case_name)
+    agg_test_only3(problem, reference_points, cip, case_name, False)
+    # agg_rps_test_eq(problem, reference_points, cip, case_name)
+
+def experiment2_scaling(case_name):
+   # test_maxmin()
+    n_variables = 30
+    n_objectives = 2
+    # ZDT3 has issues with something, maybe normalization i dunno
+    # problem = zdt1(n_variables)
+    problem = dtlz2(n_variables, n_objectives)
+
+    # eq_example_optdm1
+    # verticaldms
+    reference_points = [
+        {"f_1": 0.1, "f_2": 0.95},
+        {"f_1": 0.5, "f_2": 0.83},
+        {"f_1": 0.9, "f_2": 0.692},
+        {"f_1": 0.6, "f_2": 0.75},
+    ]
+    cip = np.array([1, 1])
+
+    # agg_rps_test
+    # agg_test(problem, reference_points, cip, case_name, True)
+    agg_test_only3(problem, reference_points, cip, case_name, True)
+    # agg_rps_test_eq(problem, reference_points, cip, case_name)
+
+def experiment2_scaling2(case_name):
+   # test_maxmin()
+    n_variables = 30
+    n_objectives = 2
+    # ZDT3 has issues with something, maybe normalization i dunno
+    problem = zdt1(n_variables)
+
+    # eq_example_optdm1
+    # verticaldms
+    reference_points = [
+        {"f_1": 0.1, "f_2": 0.95},
+        {"f_1": 0.5, "f_2": 0.83},
+        {"f_1": 0.4, "f_2": 0.81},
+    ]
+    cip = np.array([1, 1])
+
+    # agg_rps_test
+    agg_test_only3(problem, reference_points, cip, case_name, True)
+    # agg_rps_test_eq(problem, reference_points, cip, case_name)
 
 def experiment2_solution_process3(case_name):
    # test_maxmin()
@@ -963,29 +1525,43 @@ def experiment2_solution_process3(case_name):
     cip = np.array([0.6, .6])
 
     # agg_rps_test
+    # agg_test(problem, reference_points, cip, case_name, True)
     agg_rps_test_eq(problem, reference_points, cip, case_name)
 
-def experiment2_test(case_name):
-   # test_maxmin()
-    n_variables = 30
-    n_objectives = 3
+def experiment2_test_river_poll(case_name):
     # ZDT3 has issues with something, maybe normalization i dunno
     # problem = zdt1(n_variables)
-    problem = zdt2(n_variables)
+    from desdeo.problem.testproblems import river_pollution_problem
+    problem = river_pollution_problem(five_objective_variant=False)
 
+    nadir = get_nadir_dict(problem)
     # eq_example_optdm1
     # verticaldms
     reference_points = [
-        {"f_1": 0.9, "f_2": 0.11},
-        {"f_1": 0.9, "f_2": 0.},
-        {"f_1": 0.39, "f_2": 0.5},
-        {"f_1": 0.0, "f_2": 0.9},
+        {
+            "f_1": 5,
+            "f_2": 3.01,
+            "f_3": 0.6,
+            "f_4": -1
+        },
+        {
+            "f_1": 4.85,
+            "f_2": 2.91,
+            "f_3": 1.4,
+            "f_4": -2
+        }, {
+            "f_1": 5.1,
+            "f_2": 2.90,
+            "f_3": 1.7,
+            "f_4": -4.5
+        },
     ]
     # TODO: NOTE, LETS WRITE, LETS ASSUME AT SOME LATER ITERATION I, WE HAVE CIP AT 0.7,0.7
-    cip = np.array([1, 1])
-
+    # cip = np.array([1, 1])
+    cip = objective_dict_to_numpy_array(problem, nadir)
     # agg_rps_test
-    agg_rps_test_eq(problem, reference_points, cip, case_name)
+    agg_test(problem, reference_points, cip, case_name)
+    agg_rps_test_mm(problem, reference_points, cip, case_name)
 
 def experiment3_test(case_name):
    # test_maxmin()
@@ -1007,7 +1583,8 @@ def experiment3_test(case_name):
     cip = np.array([1, 1])
 
     # agg_rps_test
-    agg_rps_test_mm(problem, reference_points, cip, case_name)
+    agg_test(problem, reference_points, cip, case_name)
+    # agg_rps_test_mm(problem, reference_points, cip, case_name)
 
 def experiment2_test_dtlz2(case_name):
    # test_maxmin()
@@ -1038,14 +1615,15 @@ def experiment1_pessmistic1(case_name):
 
     # eq_example_optdm1
     reference_points = [
-        {"f_1": 0.5, "f_2": 0.8},
+        {"f_1": 0.5, "f_2": 0.7},
         {"f_1": 0.45, "f_2": 0.5},
         {"f_1": 0.5, "f_2": 0.45},
     ]
-    cip = np.array([1, 1])
+    cip = np.array([0.8, 0.8])
 
     # agg_rps_test
-    agg_rps_test_mm(problem, reference_points, cip, case_name)
+    agg_test(problem, reference_points, cip, case_name)
+    # agg_rps_test_mm(problem, reference_points, cip, case_name)
 
 def experiment1_zdt2(case_name):
    # test_maxmin()
@@ -1056,14 +1634,15 @@ def experiment1_zdt2(case_name):
 
     # eq_example_optdm1
     reference_points = [
-        {"f_1": 0.8, "f_2": 0.4},
+        {"f_1": 0.8, "f_2": 0.5},
         {"f_1": 0.3, "f_2": 0.6},
         {"f_1": 0.5, "f_2": 0.8},
     ]
-    cip = np.array([1, 1])
+    cip = np.array([0.9, 0.9])
 
     # agg_rps_test
-    agg_rps_test_mm(problem, reference_points, cip, case_name)
+    agg_test(problem, reference_points, cip, case_name)
+    # agg_rps_test_mm(problem, reference_points, cip, case_name)
 
 def exp_optdm1(case_name):
     n_variables = 30
@@ -1073,14 +1652,15 @@ def exp_optdm1(case_name):
 
     # eq_example_optdm1
     reference_points = [
-        {"f_1": 0.4, "f_2": 0.3},
-        {"f_1": 0.8, "f_2": 0.7},
-        {"f_1": 0.7, "f_2": 0.8},
+        {"f_1": 0.6, "f_2": 0.5},
+        {"f_1": 0.9, "f_2": 0.8},
+        {"f_1": 0.75, "f_2": 0.85},
     ]
     cip = np.array([1, 1])
 
     # agg_rps_test
-    agg_rps_test_mm(problem, reference_points, cip, case_name)
+    agg_test(problem, reference_points, cip, case_name)
+    # agg_rps_test_mm(problem, reference_points, cip, case_name)
 
 def exp_optdm1_2(case_name):
     n_variables = 30
@@ -1097,7 +1677,9 @@ def exp_optdm1_2(case_name):
     cip = np.array([1, 1])
 
     # agg_rps_test
-    agg_rps_test_mm(problem, reference_points, cip, case_name)
+    agg_test_only3(problem, reference_points, cip, case_name)
+    # agg_test(problem, reference_points, cip, case_name)
+    # agg_rps_test_mm(problem, reference_points, cip, case_name)
 
 def exp2_optdm1(case_name):
     n_variables = 30
@@ -1114,7 +1696,28 @@ def exp2_optdm1(case_name):
     cip = np.array([1, 1])
 
     # agg_rps_test
+    agg_test_only3(problem, reference_points, cip, case_name, True)
+    # agg_rps_test_eq(problem, reference_points, cip, case_name)
+
+
+def exp3_optdm1(case_name):
+    n_variables = 30
+    n_objectives = 2
+    # ZDT3 has issues with something, maybe normalization i dunno
+    problem = zdt2(n_variables)
+
+    # eq_example_optdm1
+    reference_points = [
+        {"f_1": 0.1, "f_2": 0.8},
+        {"f_1": 0.9, "f_2": 0.7},
+        {"f_1": 0.7, "f_2": 0.8},
+    ]
+    cip = np.array([1, 1])
+
+    # agg_rps_test
+    # agg_test(problem, reference_points, cip, case_name, True)
     agg_rps_test_eq(problem, reference_points, cip, case_name)
+
 
 def exp_vertdms(case_name):
    # test_maxmin()
@@ -1125,14 +1728,77 @@ def exp_vertdms(case_name):
 
     # eq_example_optdm1
     reference_points = [
-        {"f_1": 0.3, "f_2": 0.4},
-        {"f_1": 0.3, "f_2": 0.6},
-        {"f_1": 0.4, "f_2": 0.8},
+        {"f_1": 0.2, "f_2": 0.3},
+        {"f_1": 0.2, "f_2": 0.5},
+        {"f_1": 0.5, "f_2": 0.2},
+    ]
+    cip = np.array([0.75, 0.75])
+
+    # agg_rps_test
+    agg_test_only3(problem, reference_points, cip, case_name)
+    # agg_test(problem, reference_points, cip, case_name)
+    # agg_rps_test_mm(problem, reference_points, cip, case_name)
+
+def exp2_vertdms(case_name):
+   # test_maxmin()
+    n_variables = 30
+    n_objectives = 2
+    # ZDT3 has issues with something, maybe normalization i dunno
+    problem = zdt1(n_variables)
+
+    # eq_example_optdm1
+    reference_points = [
+        {"f_1": 0.2, "f_2": 0.3},
+        {"f_1": 0.2, "f_2": 0.5},
+        {"f_1": 0.3, "f_2": 0.7},
+    ]
+    cip = np.array([0.75, 0.75])
+
+    # agg_rps_test
+    agg_test_only3(problem, reference_points, cip, case_name, True)
+    # agg_rps_test_eq(problem, reference_points, cip, case_name)
+
+def exp1_small_step(case_name):
+   # test_maxmin()
+    n_variables = 30
+    n_objectives = 2
+    # ZDT3 has issues with something, maybe normalization i dunno
+    problem = zdt1(n_variables)
+
+    # eq_example_optdm1
+    reference_points = [
+        {"f_1": 0.9, "f_2": 0.85},
+        {"f_1": 0.8, "f_2": 0.92},
+        {"f_1": 0.77, "f_2": 0.97},
+        {"f_1": 0.95, "f_2": 0.82},
     ]
     cip = np.array([1, 1])
 
     # agg_rps_test
-    agg_rps_test_mm(problem, reference_points, cip, case_name)
+    agg_test_only3(problem, reference_points, cip, case_name, False)
+    # agg_rps_test_eq(problem, reference_points, cip, case_name)
+    #
+
+def exp2_small_step(case_name):
+   # test_maxmin()
+    n_variables = 30
+    n_objectives = 2
+    # ZDT3 has issues with something, maybe normalization i dunno
+    problem = zdt1(n_variables)
+
+    # eq_example_optdm1
+    reference_points = [
+        {"f_1": 0.9, "f_2": 0.85},
+        {"f_1": 0.8, "f_2": 0.92},
+        {"f_1": 0.77, "f_2": 0.97},
+        {"f_1": 0.95, "f_2": 0.82},
+    ]
+    cip = np.array([1, 1])
+
+    # agg_rps_test
+    agg_test_only3(problem, reference_points, cip, case_name, True)
+    # agg_rps_test_eq(problem, reference_points, cip, case_name)
+
 
 def exp_change1(case_name):
    # test_maxmin()
@@ -1150,7 +1816,8 @@ def exp_change1(case_name):
     cip = np.array([1, 1])
 
     # agg_rps_test
-    agg_rps_test_mm(problem, reference_points, cip, case_name)
+    agg_test(problem, reference_points, cip, case_name)
+    # agg_rps_test_mm(problem, reference_points, cip, case_name)
 
 def exp_change2(case_name):
    # test_maxmin()
@@ -1168,7 +1835,8 @@ def exp_change2(case_name):
     cip = np.array([1, 1])
 
     # agg_rps_test
-    agg_rps_test_mm(problem, reference_points, cip, case_name)
+    agg_test(problem, reference_points, cip, case_name)
+    # agg_rps_test_mm(problem, reference_points, cip, case_name)
 
 def exp_change3(case_name):
    # test_maxmin()
@@ -1186,7 +1854,8 @@ def exp_change3(case_name):
     cip = np.array([1, 1])
 
     # agg_rps_test
-    agg_rps_test_mm(problem, reference_points, cip, case_name)
+    agg_test(problem, reference_points, cip, case_name)
+    # agg_rps_test_mm(problem, reference_points, cip, case_name)
 
 def exp_shapePF(case_name):
    # test_maxmin()
@@ -1204,7 +1873,8 @@ def exp_shapePF(case_name):
     cip = np.array([1, 1])
 
     # agg_rps_test
-    agg_rps_test_mm(problem, reference_points, cip, case_name)
+    agg_test(problem, reference_points, cip, case_name)
+    # agg_rps_test_mm(problem, reference_points, cip, case_name)
 
 def exp_shapePF2(case_name):
    # test_maxmin()
@@ -1222,7 +1892,8 @@ def exp_shapePF2(case_name):
     cip = np.array([1, 1])
 
     # agg_rps_test
-    agg_rps_test_mm(problem, reference_points, cip, case_name)
+    agg_test(problem, reference_points, cip, case_name)
+    # agg_rps_test_mm(problem, reference_points, cip, case_name)
 
 def exp_cip1(case_name):
    # test_maxmin()
@@ -1240,7 +1911,8 @@ def exp_cip1(case_name):
     cip = np.array([0.8, 0.5])
 
     # agg_rps_test
-    agg_rps_test_mm(problem, reference_points, cip, case_name)
+    agg_test(problem, reference_points, cip, case_name)
+    # agg_rps_test_mm(problem, reference_points, cip, case_name)
 
 
 def exp_cip2(case_name):
@@ -1252,14 +1924,64 @@ def exp_cip2(case_name):
 
     # eq_example_optdm1
     reference_points = [
-        {"f_1": 0.2, "f_2": 0.4},
-        {"f_1": 0.45, "f_2": 0.4},
-        {"f_1": 0.55, "f_2": 0.1},
+        {"f_1": 0.6, "f_2": 0.8},
+        {"f_1": 0.66, "f_2": 0.67},
+        {"f_1": 0.82, "f_2": 0.72},
+        {"f_1": 0.8, "f_2": 0.75},
+        {"f_1": 0.62, "f_2": 0.9},
+
     ]
-    cip = np.array([0.8, 0.5])
+    cip = np.array([1, 1])
 
     # agg_rps_test
-    agg_rps_test_mm(problem, reference_points, cip, case_name)
+    # agg_test(problem, reference_points, cip, case_name)
+    agg_test_only3(problem, reference_points, cip, case_name)
+    # agg_rps_test_mm(problem, reference_points, cip, case_name)
+
+
+def exp_cip3(case_name):
+   # test_maxmin()
+    n_variables = 30
+    n_objectives = 2
+    # ZDT3 has issues with something, maybe normalization i dunno
+    problem = zdt1(n_variables)
+
+    # eq_example_optdm1
+    reference_points = [
+        {"f_1": 0.3, "f_2": 0.05},
+        {"f_1": 0.4, "f_2": 0.15},
+        {"f_1": 0.42, "f_2": 0.39},
+        {"f_1": 0.3, "f_2": 0.3},
+        {"f_1": 0.1, "f_2": 0.44},
+    ]
+    cip = np.array([0.5, 0.5])
+
+    # agg_rps_test
+    # agg_test(problem, reference_points, cip, case_name)
+    agg_test_only3(problem, reference_points, cip, case_name)
+    # agg_rps_test_mm(problem, reference_points, cip, case_name)
+
+def test_sm_values(case_name):
+   # test_maxmin()
+    n_variables = 30
+    n_objectives = 2
+    # ZDT3 has issues with something, maybe normalization i dunno
+    problem = zdt1(n_variables)
+
+    # eq_example_optdm1
+    reference_points = [
+        {"f_1": 0.3, "f_2": 0.05},
+        {"f_1": 0.4, "f_2": 0.15},
+        {"f_1": 0.42, "f_2": 0.39},
+        {"f_1": 0.3, "f_2": 0.3},
+        {"f_1": 0.1, "f_2": 0.44},
+    ]
+    cip = np.array([0.5, 0.5])
+
+    # agg_rps_test
+    agg_test(problem, reference_points, cip, case_name)
+    # agg_rps_test_mm(problem, reference_points, cip, case_name)
+
 
 def experiment_new(case_name):
 
@@ -1283,8 +2005,8 @@ def experiment_new(case_name):
     cip = np.array([0.8, 0.5])
     """
     reference_points = [
-        {"f_1": 0.7, "f_2": 0.3},
-        {"f_1": 0.1, "f_2": 0.7},
+        {"f_1": 0.3, "f_2": 0.3},
+        {"f_1": 0.4, "f_2": 0.6},
         {"f_1": 0.7, "f_2": 0.7},
     ]
 
@@ -1296,69 +2018,109 @@ def experiment_new(case_name):
 
     rp_arr = np.array([[col["f_1"], col["f_2"]] for col in reference_points])
     # rp_arr = objective_dict_to_numpy_array(problem, reference_points)
+    # sp = subproblem(rp_arr, cip, n_objectives, q, ideal)
     sp = subproblem2(rp_arr, cip, n_objectives, q, ideal)
     print(sp)
     from desdeo.tools import ScipyMinimizeSolver, GurobipySolver, NevergradGenericSolver
 
-    # solver = ScipyMinimizeSolver(sp)
-    solver2 = PyomoIpoptSolver(sp)
-    solver3 = NevergradGenericSolver(sp)
+    solver = ScipyMinimizeSolver(sp)
+    # solver2 = PyomoIpoptSolver(sp)
+    solver_options = NevergradGenericOptions(budget=500, optimizer="CMA")
+    solver3 = NevergradGenericSolver(sp, solver_options)
 
     # gr_solver = GurobipySolver(sp)
 
-    # results = solver.solve("f_1")
-    results2 = solver2.solve("f_1")
+    results = solver.solve("f_1")
+    # results2 = solver2.solve("f_1")
     results3 = solver3.solve("f_1")
     # results3 = gr_solver.solve("f_1")
     print("======================")
-    # print("RESULLTS:  ", results)
-    print("RESULLTS:  ", results2)
+    print("RESULLTS:  ", results)
+    # print("RESULLTS:  ", results2)
     print("RESULLTS:  ", results3)
     print("======================")
 
     # agg_rps_test
-    # agg_rps_test_mm(problem, reference_points, cip, case_name)
+    agg_rps_test_mm(problem, reference_points, cip, case_name)
 
 
 if __name__ == "__main__":
 
+    # TODO find a real problem that works
+    # experiment_solution_process("realproblem")
+    # exp2_optdm1("e2o2")
+    # exp_optdm1_2("e1o1")
+    # exp_vertdms("verticaldms_2")
+    # experiment2_solution_process1("e2s1")
+    # experiment2_scaling("eprojscalealphab")
+    # experiment2_scaling("e2dtlz2")
+    # experiment2_scaling("e2scalecat")
+    experiment2_scaling2("criticalangle")
+    # exp1_small_step("e1small")
+
     # experiment_new("testing")
 
-    # exp_optdm1_2("eo1")
     """
-    experiment_optDM2("eo3")
-    experiment_optDMb("eo2")
-
-    experiment1_solution_process1("e1s1")
-    experiment1_solution_process2("e1s2")
-    experiment1_solution_process3("e1s3")
-    experiment1_pessmistic1("e1p1")
-    experiment1_zdt2("zdt2example")
-    exp_optdm1("optdm1")
-    exp_optdm1_2("eo1")
+    print("Running problem")
+    print("Running problem")
+    exp_optdm1_2("e1o1")
+    print("Running problem")
     exp_vertdms("verticaldms")
+    print("Running problem")
+    experiment1_zdt2("zdt2example")
 
+    print("Running problem")
+    experiment1_solution_process1("e1s1")
+    print("Running problem")
+    experiment1_solution_process2("e1s2")
+    print("Running problem")
+    experiment1_solution_process3("e1s3")
+    print("Running problem")
+    experiment1_pessmistic1("e1p1")
+    print("Running problem")
+    exp_optdm1_2("eo1")
+
+    print("Running problem")
     exp_change1("change1")
+    print("Running problem")
     exp_change2("change2")
+    print("Running problem")
     exp_change3("change3")
-
-    exp_shapePF("shape1")
-    exp_shapePF2("shape2")
-
+    print("Running problem")
     exp_cip1("cip1")
-    exp_cip2("cip2")
     """
+
+    # exp_vertdms("verticaldms_2")
+
+    # exp_shapePF("shape1")
+    # exp_shapePF2("shape2")
+    # experiment_optDM2("eo3")
+    # exp_cip2("Example 1 Alt2")
+    # exp_cip3("Example 2")
 
     # EQ variants
-    # experiment2_solution_process1("e2s1")
-    # experiment2_solution_process2("e2s2")
-    # experiment2_solution_process3("e2s3")
+    # exp2_optdm1("e2o2")
+    # exp2_vertdms("vert2")
 
+    # exp2_small_step("e2small")
+    """
+        {"f_1": 0.1, "f_2": 0.95},
+        {"f_1": 0.5, "f_2": 0.83},
+        {"f_1": 0.95, "f_2": 0.7673},
+        {"f_1": 0.6, "f_2": 0.75},
+    exp3_optdm1("e3o2 alt")
+    experiment2_solution_process1("e2s1")
+    experiment2_solution_process2("e2s2")
+    experiment2_solution_process3("e2s3")
+
+    """
+    # test_sm_values("smvalues")
     # Below dtlz2 does not work for some reason.
-    # experiment2_test("test")
+    #
+    # experiment2_test_river_poll("test")
     # experiment_zdt3("ezdt3")  # does not work
 
-    exp2_optdm1("e2o1")
+    # exp2_optdm1("e2o2")
     # experiment2_test("test")
     # experiment3_test("test")
     # experiment2_("")
