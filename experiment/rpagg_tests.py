@@ -6,6 +6,7 @@ import numpy as np
 from desdeo.problem.testproblems import zdt1, zdt2, zdt3, dtlz2
 # noqa
 
+from desdeo.tools.scipy_solver_interfaces import ScipyMinimizeOptions
 from desdeo.tools.utils import guess_best_solver, PyomoIpoptSolver, NevergradGenericSolver
 
 from preference_aggregation import find_GRP, maxmin_cones_criterion, maxmin_criterion
@@ -28,7 +29,109 @@ pdf_path = "/home/jp/tyot/mop/papers/prefagg_concept/oldversion/experiment_pics/
 html_path = "/home/jp/tyot/mop/papers/prefagg_concept/oldversion/experiment_pics/paperpics/htmls/"
 csv_path = "/home/jp/tyot/mop/papers/prefagg_concept/oldversion/exptables/"
 
-def agg_test(problem: Problem, rps: list[dict[str, float]], cip, name, proj=False, solver=None, solver_options=None):
+def visualize(problem_name, data, column_names, proj=False):
+    # visualize
+    marker_size = 15
+
+    if proj:
+        problem_pymoo = get_problem(problem_name)
+        # problem_pymoo = get_problem(problem.name, n_var=30, n_obj=2)
+        pf = problem_pymoo.pareto_front()
+
+        keys = ["f_1", "f_2"]
+        # Convert NumPy array to a list of dictionaries
+        PF = [dict(zip(keys, row)) for row in pf]
+        # plot PF
+        if problem_name == "zdt3":
+            fig = px.scatter(PF, x="f_1", y="f_2")
+        else:
+            fig = px.line(PF, x="f_1", y="f_2")
+
+    else:
+        df_empty = {
+            "f_1": [data["cip"]["f_1"]],
+            "f_2": [data["cip"]["f_2"]],
+        }
+        fig = px.scatter(df_empty, x="f_1", y="f_2")
+
+    # data.index.name = 'Group'
+    # data = data.reset_index().rename(columns={'index': 'Group'})
+
+    import plotly.graph_objects as go
+    # data = data.reset_index()
+
+    print(data)
+
+    # TODO: do smarter, there cna be more DMs
+    # list_of_rows = ["ideal","cip","DM1", "DM2", "DM3", "meanGRP","addGRP","conesGRP"]
+    colors = []
+    markers = []
+
+    for name in column_names:
+
+        fig.add_trace(
+            go.Scatter(
+                x=[data.loc[name, "f_1"]],
+                y=[data.loc[name, "f_2"]],
+                mode='markers',
+                name=name,
+                # color='Group',  # This assigns a unique color to each group
+                text=f'{name}',  # This displays the group name next to each point
+                # marker=dict(size=10, color=name)
+            )
+        )
+    """
+    fig.add_scatter(x=[cip[0]], y=[cip[1]], mode="markers", name="CIP", showlegend=True, marker=dict(size=marker_size, symbol="star"))
+    fig.add_scatter(x=[ideal[0]], y=[ideal[1]], mode="markers", name="ideal", showlegend=True, marker=dict(size=marker_size, symbol="star"))
+    # fig.update_traces(marker=dict(size=15, symbol="star"))
+
+    # plot RPs
+    for i in range(len(rp_arr)):
+        if proj:
+            fig.add_scatter(x=[conv_rp_arr[i][0]], y=[conv_rp_arr[i][1]], mode="markers", name=f"proj. DM{
+                            i+1}_RP", showlegend=True, marker=dict(size=10, symbol="circle"))
+        fig.add_scatter(x=[rp_arr[i][0]], y=[rp_arr[i][1]], mode="markers", name=f"DM{i+1}_RP", showlegend=True, marker=dict(size=marker_size, symbol="circle"))
+
+    # PLOT GRP
+    fig.add_scatter(x=[meanGRP_arr[0]], y=[meanGRP_arr[1]], mode="markers", name="GRP-mean", showlegend=True, marker=dict(size=marker_size, symbol="square"))
+    # additive
+    # fig.add_scatter(x=[grpmm_ext[0]], y=[grpmm_ext[1]], mode="markers", name="GRP_mm_ext", showlegend=True, marker=dict(size=marker_size, symbol="x"))
+    fig.add_scatter(x=[grpmm[0]], y=[grpmm[1]], mode="markers", name="GRP-add", showlegend=True, marker=dict(size=marker_size, symbol="x"))
+    # cones
+    # fig.add_scatter(x=[grpcones_ext[0]], y=[grpcones_ext[1]], mode="markers", name="GRP-cones_ext",
+    #                showlegend=True, marker=dict(size=15, symbol="cross"))
+    fig.add_scatter(x=[grpcones[0]], y=[grpcones[1]], mode="markers", name="GRP-cones", showlegend=True, marker=dict(size=marker_size, symbol="cross"))
+
+    # lines to show the polyhedron
+    fig.add_scatter(x=create_line_path(rp_arr[:, 0]), y=create_line_path(rp_arr[:, 1]),
+                    mode="lines", line=dict(color="#808080"), name="valid_area", showlegend=True)
+    # FOR saving as pdf
+    fig.update_layout(autosize=True, width=800, height=800, title=f"{name}")
+    fig.update_layout(legend=dict(
+        yanchor="bottom",
+        y=0.01,
+        xanchor="right",
+        x=0.99
+    ))
+    """
+    """
+    fig.update_layout(legend=dict(
+        yanchor="top",
+        y=0.99,
+        xanchor="left",
+        x=0.01
+    ))
+    """  # for bottom right legend
+    # fig.update_xaxes(range=[0.1, 0.8])
+    # fig.update_yaxes(range=[0.1, 0.8])
+    # fig.update_layout(margin_r=300, legend_x=1.2, autosize=True, width=800, height=800, title=f"{name}")
+    # fig.write_image(f"{pdf_path}{name}.pdf", width=800, height=800)
+    # fig.write_html(f"{html_path}{name}.html")
+
+    fig.show()
+
+
+def solve_test_setting(problem: Problem, rps: list[dict[str, float]], cip, name, proj=False, solver=None, solver_options=None):
     # nadir = objective_dict_to_numpy_array(problem, get_nadir_dict(problem))
     ideal = objective_dict_to_numpy_array(problem, get_ideal_dict(problem))
 
@@ -245,26 +348,20 @@ def list_of_dicts_to_array(list_of_dicts):
 
 # TODO;: make a visu that only uses additive, cones and po cones, as they are the ones that are differnet.
 # MAybe version where it is to decide wheter use original rps or conv rps as constraints??
-def agg_test_only3(problem: Problem, rps: list[dict[str, float]], cip, name, proj=False, solver=None, solver_options=None):
+def solve_test_setting_only3(problem: Problem, rps: list[dict[str, float]], cip, name, proj=False, solver=None, solver_options=None):
     # nadir = objective_dict_to_numpy_array(problem, get_nadir_dict(problem))
     ideal = objective_dict_to_numpy_array(problem, get_ideal_dict(problem))
 
     k = len(ideal)
     q = len(rps)
 
-    # TODO: make for any number of objs to work
-    # rp_arr = np.array([[col["f_1"], col["f_2"]] for col in rps])
     rp_arr = list_of_dicts_to_array(rps)
-    # cip_dict = {"f_1": cip[0], "f_2": cip[1]}
     cip_dict = numpy_array_to_objective_dict(problem, cip)
-
-    print(ideal)
 
     GRP = None
     GRP_cones = None
-    # GRP_cones_PO = None
-
     conv_rp_arr = None
+
     if proj:
         converted_prefs = []
         # TODO: find PO for each DM RP, for now only for asf, plotting mess
@@ -288,8 +385,8 @@ def agg_test_only3(problem: Problem, rps: list[dict[str, float]], cip, name, pro
             converted_prefs.append(fs)
 
         print(converted_prefs)
+        conv_rp_arr = list_of_dicts_to_array(converted_prefs)
 
-        conv_rp_arr = np.array([[col["f_1"], col["f_2"]] for col in converted_prefs])
         # find GRP, returns np.array
         grpmm, add_s = find_GRP(conv_rp_arr, cip, k, q, ideal, rp_arr, "eq_maxmin")
         GRP = cip - grpmm
@@ -299,10 +396,7 @@ def agg_test_only3(problem: Problem, rps: list[dict[str, float]], cip, name, pro
         GRP_cones = cip - grpcones
         # meanGRP_arr = np.mean(conv_rp_arr, axis=0) # projected does not make sense as no constraints
         meanGRP_arr = np.mean(rp_arr, axis=0)
-        print(meanGRP_arr)
 
-        # for plotting
-        # meanGRP_arr = cip - meanGRP_arr
     else:
         # find GRP, returns np.array
         grpmm, add_s = find_GRP(rp_arr, cip, k, q, ideal, rp_arr, "maxmin")
@@ -321,9 +415,9 @@ def agg_test_only3(problem: Problem, rps: list[dict[str, float]], cip, name, pro
 
         # for plotting
         meanGRP_arr = cip - meanGRP_arr
-    # GRP_mean = {"f_1": meanGRP_arr[0], "f_2": meanGRP_arr[1]}
 
-    grp_name_list = ["GRP mean", "GRP mm", "GRP cones"]
+    # Save results as .csv
+    grp_name_list = ["meanGRP", "addGRP", "conesGRP"]
 
     # create a list of points
     points = []
@@ -334,18 +428,14 @@ def agg_test_only3(problem: Problem, rps: list[dict[str, float]], cip, name, pro
         points.append(rp_arr[i])
     points.append(meanGRP_arr)
     points.append(grpmm)
-    # points.append(GRP_ext)
     points.append(grpcones)
-    # points.append(GRP_cones_ext)
 
     column_names = []
     column_names.append("ideal")
     column_names.append("cip")
 
     dm_indices = [f" DM{i+1} " for i in range(len(rps))]
-    print(dm_indices)
     for i in range(len(rps)):
-        # column_names.append(f"DM{i+1} RP")
         column_names.append(dm_indices[i])
 
     for i in range(len(grp_name_list)):
@@ -366,10 +456,11 @@ def agg_test_only3(problem: Problem, rps: list[dict[str, float]], cip, name, pro
     s_df.to_csv(f"{csv_path}{name}_s_values.csv")
     print(s_df)
 
-    marker_size = 15
+    # TODO: under construction. NEed to add conv. prefs too
+    visualize(problem.name, df, column_names, proj=proj)
 
-    # TODO: figure out the marker styles better
-    # fig = px.scatter(df, x="f_1", y="f_2", color=column_names)
+    # visualize
+    marker_size = 15
 
     if proj:
         problem_pymoo = get_problem(problem.name)
@@ -404,14 +495,11 @@ def agg_test_only3(problem: Problem, rps: list[dict[str, float]], cip, name, pro
         fig.add_scatter(x=[rp_arr[i][0]], y=[rp_arr[i][1]], mode="markers", name=f"DM{i+1}_RP", showlegend=True, marker=dict(size=marker_size, symbol="circle"))
 
     # PLOT GRP
-    fig.add_scatter(x=[meanGRP_arr[0]], y=[meanGRP_arr[1]], mode="markers", name="GRP-mean", showlegend=True, marker=dict(size=marker_size, symbol="square"))
+    fig.add_scatter(x=[meanGRP_arr[0]], y=[meanGRP_arr[1]], mode="markers", name="meanGRP", showlegend=True, marker=dict(size=marker_size, symbol="square"))
     # additive
-    # fig.add_scatter(x=[grpmm_ext[0]], y=[grpmm_ext[1]], mode="markers", name="GRP_mm_ext", showlegend=True, marker=dict(size=marker_size, symbol="x"))
-    fig.add_scatter(x=[grpmm[0]], y=[grpmm[1]], mode="markers", name="GRP-add", showlegend=True, marker=dict(size=marker_size, symbol="x"))
+    fig.add_scatter(x=[grpmm[0]], y=[grpmm[1]], mode="markers", name="addGRP", showlegend=True, marker=dict(size=marker_size, symbol="x"))
     # cones
-    # fig.add_scatter(x=[grpcones_ext[0]], y=[grpcones_ext[1]], mode="markers", name="GRP-cones_ext",
-    #                showlegend=True, marker=dict(size=15, symbol="cross"))
-    fig.add_scatter(x=[grpcones[0]], y=[grpcones[1]], mode="markers", name="GRP-cones", showlegend=True, marker=dict(size=marker_size, symbol="cross"))
+    fig.add_scatter(x=[grpcones[0]], y=[grpcones[1]], mode="markers", name="conesGRP", showlegend=True, marker=dict(size=marker_size, symbol="cross"))
 
     # lines to show the polyhedron
     fig.add_scatter(x=create_line_path(rp_arr[:, 0]), y=create_line_path(rp_arr[:, 1]),
@@ -441,7 +529,7 @@ def agg_test_only3(problem: Problem, rps: list[dict[str, float]], cip, name, pro
     fig.show()
 
 
-def agg_test_old(problem: Problem, rps: list[dict[str, float]], cip, name, solver=None, solver_options=None):
+def solve_test_setting_old(problem: Problem, rps: list[dict[str, float]], cip, name, solver=None, solver_options=None):
     # nadir = objective_dict_to_numpy_array(problem, get_nadir_dict(problem))
     ideal = objective_dict_to_numpy_array(problem, get_ideal_dict(problem))
 
@@ -1296,7 +1384,7 @@ def experiment_optDM1(case_name):
     cip = np.array([1, 1])
 
     # agg_rps_test
-    agg_test(problem, reference_points, cip, case_name)
+    solve_test_setting(problem, reference_points, cip, case_name)
     # agg_rps_test_mm(problem, reference_points, cip, case_name)
 
 def experiment_optDM2(case_name):
@@ -1314,7 +1402,7 @@ def experiment_optDM2(case_name):
     cip = np.array([1, 1])
 
     # agg_rps_test
-    agg_test(problem, reference_points, cip, case_name)
+    solve_test_setting(problem, reference_points, cip, case_name)
     # agg_rps_test_mm(problem, reference_points, cip, case_name)
 
 
@@ -1333,7 +1421,7 @@ def experiment_zdt3(case_name):
     cip = np.array([1, 1])
 
     # agg_rps_test
-    agg_test(problem, reference_points, cip, case_name)
+    solve_test_setting(problem, reference_points, cip, case_name)
     # agg_rps_test_mm(problem, reference_points, cip, case_name)
 
 def experiment_solution_process(case_name):
@@ -1355,7 +1443,7 @@ def experiment_solution_process(case_name):
     cip = np.array([5, 2])
 
     # agg_rps_test
-    agg_test_only3(problem, reference_points, cip, case_name)
+    solve_test_setting_only3(problem, reference_points, cip, case_name)
     # agg_rps_test_mm(problem, reference_points, cip, case_name)
 
 
@@ -1376,7 +1464,7 @@ def experiment1_solution_process1(case_name):
     cip = np.array([1, 1])
 
     # agg_rps_test
-    agg_test(problem, reference_points, cip, case_name)
+    solve_test_setting(problem, reference_points, cip, case_name)
     # agg_rps_test_mm(problem, reference_points, cip, case_name)
 
 def experiment1_solution_process2(case_name):
@@ -1397,7 +1485,7 @@ def experiment1_solution_process2(case_name):
     cip = np.array([0.7, .7])
 
     # agg_rps_test
-    agg_test(problem, reference_points, cip, case_name)
+    solve_test_setting(problem, reference_points, cip, case_name)
     # agg_rps_test_mm(problem, reference_points, cip, case_name)
 
 def experiment1_solution_process3(case_name):
@@ -1418,7 +1506,7 @@ def experiment1_solution_process3(case_name):
     cip = np.array([0.6, .6])
 
     # agg_rps_test
-    # agg_test(problem, reference_points, cip, case_name)
+    # solve_test_setting(problem, reference_points, cip, case_name)
     agg_rps_test_mm(problem, reference_points, cip, case_name)
 
 def experiment2_solution_process1(case_name):
@@ -1438,7 +1526,7 @@ def experiment2_solution_process1(case_name):
     cip = np.array([1, 1])
 
     # agg_rps_test
-    agg_test_only3(problem, reference_points, cip, case_name, True)
+    solve_test_setting_only3(problem, reference_points, cip, case_name, True)
     agg_rps_test_eq(problem, reference_points, cip, case_name)
 
 def experiment1_scaling(case_name):
@@ -1461,7 +1549,7 @@ def experiment1_scaling(case_name):
     cip = np.array([1, 1])
 
     # agg_rps_test
-    agg_test_only3(problem, reference_points, cip, case_name, False)
+    solve_test_setting_only3(problem, reference_points, cip, case_name, False)
     # agg_rps_test_eq(problem, reference_points, cip, case_name)
 
 def experiment2_scaling(case_name):
@@ -1483,8 +1571,8 @@ def experiment2_scaling(case_name):
     cip = np.array([1, 1])
 
     # agg_rps_test
-    # agg_test(problem, reference_points, cip, case_name, True)
-    agg_test_only3(problem, reference_points, cip, case_name, True)
+    # solve_test_setting(problem, reference_points, cip, case_name, True)
+    solve_test_setting_only3(problem, reference_points, cip, case_name, True)
     # agg_rps_test_eq(problem, reference_points, cip, case_name)
 
 def experiment2_scaling2(case_name):
@@ -1504,7 +1592,7 @@ def experiment2_scaling2(case_name):
     cip = np.array([1, 1])
 
     # agg_rps_test
-    agg_test_only3(problem, reference_points, cip, case_name, True)
+    solve_test_setting_only3(problem, reference_points, cip, case_name, True)
     # agg_rps_test_eq(problem, reference_points, cip, case_name)
 
 def experiment2_solution_process3(case_name):
@@ -1525,7 +1613,7 @@ def experiment2_solution_process3(case_name):
     cip = np.array([0.6, .6])
 
     # agg_rps_test
-    # agg_test(problem, reference_points, cip, case_name, True)
+    # solve_test_setting(problem, reference_points, cip, case_name, True)
     agg_rps_test_eq(problem, reference_points, cip, case_name)
 
 def experiment2_test_river_poll(case_name):
@@ -1560,7 +1648,7 @@ def experiment2_test_river_poll(case_name):
     # cip = np.array([1, 1])
     cip = objective_dict_to_numpy_array(problem, nadir)
     # agg_rps_test
-    agg_test(problem, reference_points, cip, case_name)
+    solve_test_setting(problem, reference_points, cip, case_name)
     agg_rps_test_mm(problem, reference_points, cip, case_name)
 
 def experiment3_test(case_name):
@@ -1583,7 +1671,7 @@ def experiment3_test(case_name):
     cip = np.array([1, 1])
 
     # agg_rps_test
-    agg_test(problem, reference_points, cip, case_name)
+    solve_test_setting(problem, reference_points, cip, case_name)
     # agg_rps_test_mm(problem, reference_points, cip, case_name)
 
 def experiment2_test_dtlz2(case_name):
@@ -1622,7 +1710,7 @@ def experiment1_pessmistic1(case_name):
     cip = np.array([0.8, 0.8])
 
     # agg_rps_test
-    agg_test(problem, reference_points, cip, case_name)
+    solve_test_setting(problem, reference_points, cip, case_name)
     # agg_rps_test_mm(problem, reference_points, cip, case_name)
 
 def experiment1_zdt2(case_name):
@@ -1641,7 +1729,7 @@ def experiment1_zdt2(case_name):
     cip = np.array([0.9, 0.9])
 
     # agg_rps_test
-    agg_test(problem, reference_points, cip, case_name)
+    solve_test_setting(problem, reference_points, cip, case_name)
     # agg_rps_test_mm(problem, reference_points, cip, case_name)
 
 def exp_optdm1(case_name):
@@ -1659,7 +1747,7 @@ def exp_optdm1(case_name):
     cip = np.array([1, 1])
 
     # agg_rps_test
-    agg_test(problem, reference_points, cip, case_name)
+    solve_test_setting(problem, reference_points, cip, case_name)
     # agg_rps_test_mm(problem, reference_points, cip, case_name)
 
 def exp_optdm1_2(case_name):
@@ -1677,8 +1765,8 @@ def exp_optdm1_2(case_name):
     cip = np.array([1, 1])
 
     # agg_rps_test
-    agg_test_only3(problem, reference_points, cip, case_name)
-    # agg_test(problem, reference_points, cip, case_name)
+    solve_test_setting_only3(problem, reference_points, cip, case_name)
+    # solve_test_setting(problem, reference_points, cip, case_name)
     # agg_rps_test_mm(problem, reference_points, cip, case_name)
 
 def exp2_optdm1(case_name):
@@ -1696,7 +1784,7 @@ def exp2_optdm1(case_name):
     cip = np.array([1, 1])
 
     # agg_rps_test
-    agg_test_only3(problem, reference_points, cip, case_name, True)
+    solve_test_setting_only3(problem, reference_points, cip, case_name, True)
     # agg_rps_test_eq(problem, reference_points, cip, case_name)
 
 
@@ -1715,7 +1803,7 @@ def exp3_optdm1(case_name):
     cip = np.array([1, 1])
 
     # agg_rps_test
-    # agg_test(problem, reference_points, cip, case_name, True)
+    # solve_test_setting(problem, reference_points, cip, case_name, True)
     agg_rps_test_eq(problem, reference_points, cip, case_name)
 
 
@@ -1735,8 +1823,8 @@ def exp_vertdms(case_name):
     cip = np.array([0.75, 0.75])
 
     # agg_rps_test
-    agg_test_only3(problem, reference_points, cip, case_name)
-    # agg_test(problem, reference_points, cip, case_name)
+    solve_test_setting_only3(problem, reference_points, cip, case_name)
+    # solve_test_setting(problem, reference_points, cip, case_name)
     # agg_rps_test_mm(problem, reference_points, cip, case_name)
 
 def exp2_vertdms(case_name):
@@ -1755,7 +1843,7 @@ def exp2_vertdms(case_name):
     cip = np.array([0.75, 0.75])
 
     # agg_rps_test
-    agg_test_only3(problem, reference_points, cip, case_name, True)
+    solve_test_setting_only3(problem, reference_points, cip, case_name, True)
     # agg_rps_test_eq(problem, reference_points, cip, case_name)
 
 def exp1_small_step(case_name):
@@ -1775,7 +1863,7 @@ def exp1_small_step(case_name):
     cip = np.array([1, 1])
 
     # agg_rps_test
-    agg_test_only3(problem, reference_points, cip, case_name, False)
+    solve_test_setting_only3(problem, reference_points, cip, case_name, False)
     # agg_rps_test_eq(problem, reference_points, cip, case_name)
     #
 
@@ -1796,7 +1884,7 @@ def exp2_small_step(case_name):
     cip = np.array([1, 1])
 
     # agg_rps_test
-    agg_test_only3(problem, reference_points, cip, case_name, True)
+    solve_test_setting_only3(problem, reference_points, cip, case_name, True)
     # agg_rps_test_eq(problem, reference_points, cip, case_name)
 
 
@@ -1816,7 +1904,7 @@ def exp_change1(case_name):
     cip = np.array([1, 1])
 
     # agg_rps_test
-    agg_test(problem, reference_points, cip, case_name)
+    solve_test_setting(problem, reference_points, cip, case_name)
     # agg_rps_test_mm(problem, reference_points, cip, case_name)
 
 def exp_change2(case_name):
@@ -1835,7 +1923,7 @@ def exp_change2(case_name):
     cip = np.array([1, 1])
 
     # agg_rps_test
-    agg_test(problem, reference_points, cip, case_name)
+    solve_test_setting(problem, reference_points, cip, case_name)
     # agg_rps_test_mm(problem, reference_points, cip, case_name)
 
 def exp_change3(case_name):
@@ -1854,7 +1942,7 @@ def exp_change3(case_name):
     cip = np.array([1, 1])
 
     # agg_rps_test
-    agg_test(problem, reference_points, cip, case_name)
+    solve_test_setting(problem, reference_points, cip, case_name)
     # agg_rps_test_mm(problem, reference_points, cip, case_name)
 
 def exp_shapePF(case_name):
@@ -1873,7 +1961,7 @@ def exp_shapePF(case_name):
     cip = np.array([1, 1])
 
     # agg_rps_test
-    agg_test(problem, reference_points, cip, case_name)
+    solve_test_setting(problem, reference_points, cip, case_name)
     # agg_rps_test_mm(problem, reference_points, cip, case_name)
 
 def exp_shapePF2(case_name):
@@ -1892,7 +1980,7 @@ def exp_shapePF2(case_name):
     cip = np.array([1, 1])
 
     # agg_rps_test
-    agg_test(problem, reference_points, cip, case_name)
+    solve_test_setting(problem, reference_points, cip, case_name)
     # agg_rps_test_mm(problem, reference_points, cip, case_name)
 
 def exp_cip1(case_name):
@@ -1911,7 +1999,7 @@ def exp_cip1(case_name):
     cip = np.array([0.8, 0.5])
 
     # agg_rps_test
-    agg_test(problem, reference_points, cip, case_name)
+    solve_test_setting(problem, reference_points, cip, case_name)
     # agg_rps_test_mm(problem, reference_points, cip, case_name)
 
 
@@ -1934,8 +2022,8 @@ def exp_cip2(case_name):
     cip = np.array([1, 1])
 
     # agg_rps_test
-    # agg_test(problem, reference_points, cip, case_name)
-    agg_test_only3(problem, reference_points, cip, case_name)
+    # solve_test_setting(problem, reference_points, cip, case_name)
+    solve_test_setting_only3(problem, reference_points, cip, case_name)
     # agg_rps_test_mm(problem, reference_points, cip, case_name)
 
 
@@ -1957,8 +2045,8 @@ def exp_cip3(case_name):
     cip = np.array([0.5, 0.5])
 
     # agg_rps_test
-    # agg_test(problem, reference_points, cip, case_name)
-    agg_test_only3(problem, reference_points, cip, case_name)
+    # solve_test_setting(problem, reference_points, cip, case_name)
+    solve_test_setting_only3(problem, reference_points, cip, case_name)
     # agg_rps_test_mm(problem, reference_points, cip, case_name)
 
 def test_sm_values(case_name):
@@ -1979,7 +2067,7 @@ def test_sm_values(case_name):
     cip = np.array([0.5, 0.5])
 
     # agg_rps_test
-    agg_test(problem, reference_points, cip, case_name)
+    solve_test_setting(problem, reference_points, cip, case_name)
     # agg_rps_test_mm(problem, reference_points, cip, case_name)
 
 
@@ -2012,27 +2100,28 @@ def experiment_new(case_name):
 
     cip = np.array([1, 1])
     q = 3
-    from preference_aggregation import subproblem, subproblem2, simple_test_problem2
+    from preference_aggregation import subproblem_linear, subproblem_nl, simple_test_problem2
 
-    # sp = simple_test_problem2()
+    sp = simple_test_problem2()
 
     rp_arr = np.array([[col["f_1"], col["f_2"]] for col in reference_points])
     # rp_arr = objective_dict_to_numpy_array(problem, reference_points)
-    # sp = subproblem(rp_arr, cip, n_objectives, q, ideal)
-    sp = subproblem2(rp_arr, cip, n_objectives, q, ideal)
+    # sp = subproblem_linear(rp_arr, cip, n_objectives, q, ideal)
+    sp = subproblem_nl(rp_arr, cip, n_objectives, q, ideal)
     print(sp)
     from desdeo.tools import ScipyMinimizeSolver, GurobipySolver, NevergradGenericSolver
 
-    solver = ScipyMinimizeSolver(sp)
-    # solver2 = PyomoIpoptSolver(sp)
+    solv_opts = ScipyMinimizeOptions(method="SLSQP")
+    solver = ScipyMinimizeSolver(sp, options=solv_opts)
+    #solver2 = PyomoIpoptSolver(sp)
     solver_options = NevergradGenericOptions(budget=500, optimizer="CMA")
     solver3 = NevergradGenericSolver(sp, solver_options)
 
     # gr_solver = GurobipySolver(sp)
 
     results = solver.solve("f_1")
-    # results2 = solver2.solve("f_1")
-    results3 = solver3.solve("f_1")
+    #results2 = solver2.solve("f_1")
+    results3 = solver3.solve("f_1")#
     # results3 = gr_solver.solve("f_1")
     print("======================")
     print("RESULLTS:  ", results)
@@ -2046,6 +2135,8 @@ def experiment_new(case_name):
 
 if __name__ == "__main__":
 
+    import warnings
+    warnings.filterwarnings("ignore", category=UserWarning)
     # TODO find a real problem that works
     # experiment_solution_process("realproblem")
     # exp2_optdm1("e2o2")
@@ -2055,10 +2146,10 @@ if __name__ == "__main__":
     # experiment2_scaling("eprojscalealphab")
     # experiment2_scaling("e2dtlz2")
     # experiment2_scaling("e2scalecat")
-    experiment2_scaling2("criticalangle")
+    # experiment2_scaling2("criticalangle")
     # exp1_small_step("e1small")
 
-    # experiment_new("testing")
+    experiment_new("testing")
 
     """
     print("Running problem")

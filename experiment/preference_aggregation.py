@@ -25,13 +25,13 @@ from desdeo.problem.schema import (
 
 # TODO: THIS DOES NOT WORK PROPERLY
 # def find_GRP_old(
-def find_GRP_simple(
+def find_GRP(
     rps: np.ndarray,
     cip: np.ndarray,
     k: int,
     q: int,
     ideal: np.ndarray,
-    nadir: np.ndarray,
+    original_rps: np.ndarray,
     pref_agg_method: str
 ) -> np.ndarray:
     """
@@ -51,7 +51,10 @@ def find_GRP_simple(
     bnds = []
     # bounds for objective functions, bounded by ideal and current iteration point.
     for i in range(k):
-        bnds.append((ideal[i], cip[i]))
+        if ideal[i] > cip[i]:
+            bnds.append((cip[i], ideal[i]))
+        else:
+            bnds.append((ideal[i], cip[i]))
 
     # weight bounds for DMs. Can be between 0 and 1.
     for i in range(k, k+q):
@@ -75,7 +78,11 @@ def find_GRP_simple(
     # Create constraints for each objective function
     Cons = []
     for i in range(k):
-        Cons.append({'type': 'eq', 'fun': feas_space_const(X, k, q, i, rps)})
+        if pref_agg_method == "eq_maxmin_cones" or pref_agg_method == "eq_maxmin" or pref_agg_method == "eq_maxmin_ext" or pref_agg_method == "eq_maxmin_cones_ext":
+            # Cons.append({'type': 'eq', 'fun': feas_space_const(X, k, q, i, rps)}) # for proj. rps as constraints
+            Cons.append({'type': 'eq', 'fun': feas_space_const(X, k, q, i, original_rps)})  # fopr original_rps as constraints
+        else:
+            Cons.append({'type': 'eq', 'fun': feas_space_const(X, k, q, i, rps)})
 
     # Convex constraint, sum should be 1.
     # sum_{r=1}^4(lambda_r) - 1 = 0
@@ -85,13 +92,12 @@ def find_GRP_simple(
     conv = {'type': 'eq', 'fun': convex_constr}
     Cons.append(conv)
 
+    # rho = 10
     rho = 0.0001
 
     # The s_m(R) for all DMs
-    # TODO: standardization for maxmin (especially if not solving zdt1 and zdt2 only)
     if pref_agg_method == "maxmin" or pref_agg_method == "eq_maxmin":
-        def fx(X):
-            # TODO: recheck, if -1* should be inside maxmin terms or not!
+        def Sm(X):
             # max S. For scipy we need to convert to minimization.
             maxmin_terms = [maxmin_criterion(rps[j, :], cip, X[:k]) for j in range(q)]
             worst_off = np.min(maxmin_terms)
@@ -99,196 +105,47 @@ def find_GRP_simple(
             return to_maximize
             # return -1*np.min(maxmin_terms)  # + rho * np.sum(maxmin_terms) # was min
     if pref_agg_method == "maxmin_ext" or pref_agg_method == "eq_maxmin_ext":
-        def fx(X):
+        def Sm(X):
             maxmin_terms = [maxmin_criterion(rps[j, :], cip, X[:k]) for j in range(q)]
             return -1 * (np.min(maxmin_terms) + rho * np.sum(maxmin_terms))
     if pref_agg_method == "maxmin_cones" or pref_agg_method == "eq_maxmin_cones":
-        def fx(X):
-            # TODO: these are equivalent.. not sure if it matters which to use.. in otherwords, which is closest to the og formulation i guess
-            all_s_m = [maxmin_cones_criterion(cip, rps[j, :], X[:k]) for j in range(q)]
+        def Sm(X):
+            all_s_m = [maxmin_cones_criterion(rps[j, :], cip, X[:k]) for j in range(q)]
             s_m = -1*np.min(all_s_m)  # was min
             return s_m
-    if pref_agg_method == "maxmin_cones_ext" or pref_agg_method == "eq_maxmin_cones":
-        def fx(X):
-            # TODO: these are equivalent.. not sure if it matters which to use.. in otherwords, which is closest to the og formulation i guess
-            all_s_m = [maxmin_cones_criterion(cip, rps[j, :], X[:k]) for j in range(q)]
+    if pref_agg_method == "maxmin_cones_ext" or pref_agg_method == "eq_maxmin_cones_ext":
+        def Sm(X):
+            all_s_m = [maxmin_cones_criterion(rps[j, :], cip, X[:k]) for j in range(q)]
             s_m = -1 * (np.min(all_s_m) + rho * np.sum(all_s_m))
             return s_m
 
-    solution = minimize(fx,
-                        X,
+    solution = minimize(fun=Sm,
+                        x0=X,
                         bounds=bnds,
                         constraints=Cons,
-                        # method = 'trust-constr',
-                        # options={'xtol': 1e-20, 'gtol': 1e-20, 'maxiter': 10000, 'disp': True}
+                        # method='trust-constr',
+                        # options={'xtol': 1e-10, 'gtol': 1e-10, 'maxiter': 10000, 'disp': True}
                         method='SLSQP',
-                        options={'ftol': 1e-10, 'maxiter': 20000, 'disp': True}
-                        # options={'ftol': 1e-20, 'maxiter': 20000, 'disp': True} # change later to more iters and toler
+                        options={'ftol': 1e-10, 'maxiter': 10000,
+                                 'eps': 1e-10,
+                                 'disp': True}
                         )
 
     # Decision variables (solutions)
     print(solution.x)
     group_RP = solution.x[0:k]
-    return group_RP
-
-# THIS is the version with separate aplha parameter to optimize. To handle the discontinuity on min()
-def find_GRP_old(
-    rps: np.ndarray,
-    cip: np.ndarray,
-    k: int,
-    q: int,
-    ideal: np.ndarray,
-    nadir: np.ndarray,
-    pref_agg_method: str
-) -> np.ndarray:
-    """
-    Finds a group reference point by forming a subproblem optimizing the given fairness criteria.
-
-    Args:
-        rps (np.ndarray): the reference points from the DMs
-        cip (np.ndarray): current iteration point
-        k (int): the number of objective functions
-        q (int): the number of DMs
-        ideal (np.ndarray): the ideal vector of the problem
-        nadir (np.ndarray): the nadir vector of the problem
-
-    Returns:
-        np.ndarray : the group reference point
-    """
-
-    alpha = k+q
-
-    bnds = []
-    # bounds for objective functions, bounded by ideal and current iteration point.
-    for i in range(k):
-        bnds.append((ideal[i], cip[i]))
-
-    # weight bounds for DMs. Can be between 0 and 1.
-    for i in range(k, k+q):
-        bnds.append((0, 1))
-    # bnds.append((-100000, 100000))
-    bnds.append((-100000, 100000))
-
-    # create X of first iteration guess
-    # X = [RPs.., DM weights.., ALPHA]
-    X = np.zeros(k+q+1)
-    # Fill first guess for GRP by taking the mean of the RPs
-    for i in range(k):
-        X[i] = np.mean(rps[:, i])
-        # X[i] = 0
-
-    # Calculate the weights for DMs
-    for qk in range(q):
-        X[k+qk] = 1/q
-
-    # constraints for DMs S
-    def DMconstr_mm(X, q, k, rps, cip):
-        # alpha - S_4(R) <= 0
-        # FOR MAXMIN
-        return lambda X: X[alpha] - np.min([maxmin_criterion(rps[j, :], cip, X[:k]) for j in range(q)])
-
-    rho = 0.0001
-
-    def DMconstr_ext(X, q, k, rps, cip):
-        # alpha - S_4(R) <= 0
-        # FOR maxmin
-        maxmin_terms = [maxmin_criterion(rps[j, :], cip, X[:k]) for j in range(q)]
-        print(maxmin_terms)
-        return lambda X: X[alpha] - (np.min(maxmin_terms) - rho * np.sum(maxmin_terms))
-
-    def DMconstr_cones(X, q, k, rps, cip):
-        all_s_m = [maxmin_cones_criterion(rps[j, :], cip, X[:k]) for j in range(q)]
-        s_m = -1*np.min(all_s_m)
-        return lambda X: X[alpha] - np.min(all_s_m)
-
-    def DMconstr_cones_ext(X, q, k, rps, cip):
-        all_s_m = [maxmin_cones_criterion(rps[j, :], cip, X[:k]) for j in range(q)]
-        s_m = -1*np.min(all_s_m)
-        return lambda X: X[alpha] - (np.min(all_s_m) - rho * np.sum(all_s_m))
-    # constraints for feasible space
-
-    def feas_space_const(X, k, q, i, rps):
-        return lambda X: sum([X[k+j]*rps[j, i] for j in range(q)]) - X[i]
-
-    # Create constraints for each objective function
-    Cons = []
-    for i in range(k):
-        Cons.append({'type': 'eq', 'fun': feas_space_const(X, k, q, i, rps)})
-
-    if pref_agg_method == "maxmin_cones" or pref_agg_method == "eq_maxmin_cones":
-        Cons.append({'type': 'ineq', 'fun': DMconstr_cones(X, q, k, rps, cip)})
-    if pref_agg_method == "maxmin_cones_ext" or pref_agg_method == "eq_maxmin_cones_ext":
-        Cons.append({'type': 'ineq', 'fun': DMconstr_cones_ext(X, q, k, rps, cip)})
-    if pref_agg_method == "maxmin_ext" or pref_agg_method == "eq_maxmin_ext":
-        Cons.append({'type': 'ineq', 'fun': DMconstr_ext(X, q, k, rps, cip)})
-    else:
-        Cons.append({'type': 'ineq', 'fun': DMconstr_mm(X, q, k, rps, cip)})
-
-    # Convex constraint, sum should be 1.
-    # sum_{r=1}^4(lambda_r) - 1 = 0
-    def convex_constr(X):
-        return sum(X[k:k+q]) - 1
-
-    conv = {'type': 'eq', 'fun': convex_constr}
-    Cons.append(conv)
-
-    # rho = 0.0001
-
-    # The s_m(R) for all DMs
-    # TODO: standardization for maxmin (especially if not solving zdt1 and zdt2 only)
+    s_values = None
     if pref_agg_method == "maxmin" or pref_agg_method == "eq_maxmin":
-        """ Have to convert to minimization for scipy.optimize. Hence Maximize min S_m(x) =>
-        def fx(X):
-            return -1*X[alpha] -1*np.min(maxmin_terms)
-        """
-        def fx(X):
-            maxmin_terms = [maxmin_criterion(rps[j, :], cip, X[:k]) for j in range(q)]
-            return -1*X[alpha] - np.min(maxmin_terms)  # + rho * np.sum(maxmin_terms)
-    if pref_agg_method == "maxmin_ext" or pref_agg_method == "eq_maxmin_ext":
-        def fx(X):
-            """
-            return -1*X[alpha]
-            """
-        def fx(X):
-            maxmin_terms = [maxmin_criterion(rps[j, :], cip, X[:k]) for j in range(q)]
-            return -1*X[alpha] - (np.min(maxmin_terms) + rho * np.sum(maxmin_terms))
+        maxmin_terms = [maxmin_criterion(rps[j, :], cip, group_RP) for j in range(q)]
+        print(f"{pref_agg_method} {maxmin_terms}")
+        s_values = maxmin_terms
+
     if pref_agg_method == "maxmin_cones" or pref_agg_method == "eq_maxmin_cones":
-        """
-        def fx(X):
-            return -1*X[alpha]
-        """
-        def fx(X):
-            # TODO: these are equivalent.. not sure if it matters which to use.. in otherwords, which is closest to the og formulation i guess
-            all_s_m = [maxmin_cones_criterion(rps[j, :], cip, X[:k]) for j in range(q)]
-            s_m = -np.min(all_s_m)
-            return -1*X[alpha] + s_m
-    if pref_agg_method == "maxmin_cones_ext" or pref_agg_method == "eq_maxmin_cones_ext":
-        """
-        def fx(X):
-            return -1*X[alpha]
-        """
-        def fx(X):
-            # TODO: these are equivalent.. not sure if it matters which to use.. in otherwords, which is closest to the og formulation i guess
-            all_s_m = [maxmin_cones_criterion(rps[j, :], cip, X[:k]) for j in range(q)]
-            s_m = -np.min(all_s_m)
-            return -1*X[alpha] + s_m - rho * np.sum(all_s_m)
+        all_s_m = [maxmin_cones_criterion(rps[j, :], cip, group_RP) for j in range(q)]
+        print(f"{pref_agg_method}  {all_s_m}")
+        s_values = all_s_m
 
-    solution = minimize(fx,
-                        X,
-                        bounds=bnds,
-                        constraints=Cons,
-                        # method = 'trust-constr',
-                        # options={'xtol': 1e-20, 'gtol': 1e-20, 'maxiter': 10000, 'disp': True}
-                        method='SLSQP',
-                        options={'ftol': 1e-20, 'maxiter': 20000, 'disp': True}
-                        # options={'ftol': 1e-20, 'maxiter': 20000, 'disp': True} # change later to more iters and toler
-                        )
-
-    # Decision variables (solutions)
-    print(solution.x)
-    group_RP = solution.x[0:k]
-    return group_RP
-
+    return group_RP, s_values
 
 def aggregate(
     problem: Problem,
@@ -337,7 +194,7 @@ def aggregate(
 
 
 # THIS is the version with separate aplha parameter to optimize. To handle the discontinuity on min()
-def find_GRP(
+def find_GRP2(
     rps: np.ndarray,
     cip: np.ndarray,
     k: int,
@@ -370,8 +227,8 @@ def find_GRP(
     bnds = []
     # bounds for objective functions, bounded by ideal and current iteration point.
     for i in range(k):
-        # bnds.append((ideal[i], cip[i]))
-        bnds.append((ideal[i], 5))
+        bnds.append((ideal[i], cip[i]))
+        # bnds.append((ideal[i], 5))
 
     # weight bounds for DMs. Can be between 0 and 1.
     for i in range(k, k+q):
@@ -425,11 +282,13 @@ def find_GRP(
     Cons = []
     for i in range(k):
         if pref_agg_method == "eq_maxmin_cones" or pref_agg_method == "eq_maxmin" or pref_agg_method == "eq_maxmin_ext" or pref_agg_method == "eq_maxmin_cones_ext":
+            # Cons.append({'type': 'eq', 'fun': feas_space_const(X, k, q, i, rps)})
             Cons.append({'type': 'eq', 'fun': feas_space_const(X, k, q, i, original_rps)})
         else:
             Cons.append({'type': 'eq', 'fun': feas_space_const(X, k, q, i, rps)})
 
     # rps = original_rps
+    """
     if pref_agg_method == "maxmin_cones" or pref_agg_method == "eq_maxmin_cones":
         Cons.append({'type': 'ineq', 'fun': DMconstr_cones(X, q, k, rps, cip)})
     if pref_agg_method == "maxmin_cones_ext" or pref_agg_method == "eq_maxmin_cones_ext":
@@ -438,9 +297,10 @@ def find_GRP(
         Cons.append({'type': 'ineq', 'fun': DMconstr_ext(X, q, k, rps, cip)})
     else:
         Cons.append({'type': 'ineq', 'fun': DMconstr_mm(X, q, k, rps, cip)})
+    """
+
     # Convex constraint, sum should be 1.
     # sum_{r=1}^4(lambda_r) - 1 = 0
-
     def convex_constr(X):
         return sum(X[k:k+q]) - 1
 
@@ -493,15 +353,28 @@ def find_GRP(
                         bounds=bnds,
                         constraints=Cons,
                         method='SLSQP',
-                        options={'ftol': 1e-20, 'maxiter': 20000,
+                        options={'ftol': 1e-8, 'maxiter': 10000,
                                  'eps': 1e-10,
                                  'disp': True}
                         )
 
     # Decision variables (solutions)
+    print(pref_agg_method)
     print(solution.x)
     group_RP = solution.x[0:k]
-    return group_RP
+
+    s_values = None
+    if pref_agg_method == "maxmin" or pref_agg_method == "eq_maxmin":
+        maxmin_terms = [maxmin_criterion(rps[j, :], cip, group_RP) for j in range(q)]
+        print(f"{pref_agg_method} {maxmin_terms}")
+        s_values = maxmin_terms
+
+    if pref_agg_method == "maxmin_cones" or pref_agg_method == "eq_maxmin_cones":
+        all_s_m = [maxmin_cones_criterion(rps[j, :], cip, group_RP) for j in range(q)]
+        print(f"{pref_agg_method}  {all_s_m}")
+        s_values = all_s_m
+
+    return group_RP, s_values
 
 
 # The old not normalized maxmin criterion.
@@ -604,14 +477,15 @@ def simple_linear_test_problem() -> Problem:
         objectives=objectives,
     )
 
-def subproblem(rps, cip, k, q, ideal) -> Problem:
+# TODO: fix, does not work properly.
+def subproblem_linear(rps, cip, k, q, ideal) -> Problem:
     # variables for the amount of objectives (k) in the original problem
     # bounds come from the ideal and nadir of the original problem
     # initial value is the mean.
 
     variables = []
     variables.append(
-        Variable(name="alpha", symbol="a", variable_type="real", lowerbound=-100, upperbound=100, initial_value=1),
+        Variable(name="alpha", symbol="a", variable_type="real", lowerbound=-10000, upperbound=10000, initial_value=1),
     )
     for i in range(k):
         variables.append(
@@ -661,7 +535,9 @@ def subproblem(rps, cip, k, q, ideal) -> Problem:
                 name=f"Feasible space constraint for objective {i}",
                 symbol=f"fs_{i}",
                 cons_type=ConstraintTypeEnum.EQ,  # should be EQ, does not work
+                # cons_type=ConstraintTypeEnum.LTE,  # should be EQ, does not work
                 func=f"( w_0*dm_0_q_{i} + w_1*dm_1_q_{i} +  w_2*dm_2_q_{i} )  - x_{i}",
+                # func=f"x_{i} - ( w_0*dm_0_q_{i} + w_1*dm_1_q_{i} +  w_2*dm_2_q_{i} )",
                 is_linear=True,
                 is_convex=True,
                 is_twice_differentiable=True,
@@ -674,7 +550,7 @@ def subproblem(rps, cip, k, q, ideal) -> Problem:
             name="Convexity constraint",
             symbol="c_w",
             cons_type=ConstraintTypeEnum.EQ,
-            # func=f"(w_{m}) - 1",
+            # cons_type=ConstraintTypeEnum.LTE,
             func="(w_0 + w_1 + w_2) - 1",
             is_linear=True,
             is_convex=True,
@@ -686,18 +562,17 @@ def subproblem(rps, cip, k, q, ideal) -> Problem:
     dm2_expr = "" + " + ".join([f" (dm_{1}_q_{i} - p_{i}) * x_{i} " for i in range(k)])
     dm3_expr = "" + " + ".join([f" (dm_{2}_q_{i} - p_{i}) * x_{i} " for i in range(k)])
 
-    min_term = f"Min(({dm1_expr}),({dm2_expr}), ({dm3_expr}) )"
+    # min_term = f"Min(({dm1_expr}),({dm2_expr}), ({dm3_expr}) )"
 
     constraints.append(
         Constraint(
             name="DM1 const",
             symbol="dm1",
             cons_type=ConstraintTypeEnum.LTE,
-            # func=f"(w_{m}) - 1",
-            # func=f"a - {dm1_expr}",
-            func=f"a- {dm1_expr} ",
+            func=f"a - {dm1_expr}",
+            # func=f"{dm1_expr} - a",
             is_linear=True,
-            # is_convex=True,
+            is_convex=True,
             is_twice_differentiable=True,
         )
     )
@@ -706,10 +581,10 @@ def subproblem(rps, cip, k, q, ideal) -> Problem:
             name="DM1 const",
             symbol="dm2",
             cons_type=ConstraintTypeEnum.LTE,
-            # func=f"(w_{m}) - 1",
-            func=f" a- {dm2_expr}",
+            func=f"a - {dm2_expr}",
+            # func=f"{dm2_expr} - a",
             is_linear=True,
-            # is_convex=True,
+            is_convex=True,
             is_twice_differentiable=True,
         )
     )
@@ -718,10 +593,10 @@ def subproblem(rps, cip, k, q, ideal) -> Problem:
             name="DM1 const",
             symbol="dm3",
             cons_type=ConstraintTypeEnum.LTE,
-            # func=f"(w_{m}) - 1",
-            func=f"a- {dm3_expr} ",
+            func=f"a - {dm3_expr}",
+            # func=f"{dm3_expr} - a ",
             is_linear=True,
-            # is_convex=True,
+            is_convex=True,
             is_twice_differentiable=True,
         )
     )
@@ -740,7 +615,8 @@ def subproblem(rps, cip, k, q, ideal) -> Problem:
     # expr.append(dm2_expr)
     # expr.append(dm3_expr)
 
-    # maxmin_fairness = f"Min ({dm1_expr}, {dm2_expr}, {dm3_expr} )"
+    # maxmin_fairness = f" a - Min ({dm1_expr}, {dm2_expr}, {dm3_expr} )"
+    # maxmin_fairness = f" a - Max ({dm1_expr}, {dm2_expr}, {dm3_expr} )"
     # maxmin_fairness = f" 1 + Min ({dm1_expr}, 0) + 1"
     # maxmin_fairness = f"Min ({expr})"
 
@@ -748,8 +624,10 @@ def subproblem(rps, cip, k, q, ideal) -> Problem:
     # maxmin_fairness = f" - a + Max(({dm1_expr}),({dm2_expr}), ({dm3_expr}) )"
     # maxmin_fairness = f" - a + {min_term}"
     # maxmin_fairness = f"a - {min_term}"
-    # maxmin_fairness = "a"
-    maxmin_fairness = "Min((dm_0_q_0 - p_0) * x_0 + (dm_0_q_1 - p_1) * x_1, (dm_1_q_0 - p_0) * x_0 + (dm_1_q_1 - p_1) * x_1, (dm_2_q_0 - p_0) * x_0 + (dm_2_q_1 - p_1) * x_1)"
+    # maxmin_fairness = "0+a"
+    maxmin_fairness = "-a"
+    # maxmin_fairness = "a - Min((dm_0_q_0 - p_0) * x_0 + (dm_0_q_1 - p_1) * x_1, (dm_1_q_0 - p_0) * x_0 + (dm_1_q_1 - p_1) * x_1, (dm_2_q_0 - p_0) * x_0 + (dm_2_q_1 - p_1) * x_1)"
+    # maxmin_fairness = "Min((dm_0_q_0 - p_0) * x_0 + (dm_0_q_1 - p_1) * x_1, (dm_1_q_0 - p_0) * x_0 + (dm_1_q_1 - p_1) * x_1, (dm_2_q_0 - p_0) * x_0 + (dm_2_q_1 - p_1) * x_1) - a"
 
     # func=f"Max(({x_1_eprs}) * x_3 - 7.735 * (({x_1_eprs})**2 / x_2) - 180, 0) + Max(4 - x_3 / x_2, 0)",
 
@@ -759,10 +637,11 @@ def subproblem(rps, cip, k, q, ideal) -> Problem:
             symbol="f_1",
             func=maxmin_fairness,
             objective_type=ObjectiveTypeEnum.analytical,
-            # is_linear=True,
-            # is_convex=True,
+            is_linear=True,
+            is_convex=True,
             is_twice_differentiable=True,
-            maximize=True,
+            maximize=False,
+            # maximize=True,
         )
     ]
 
@@ -777,7 +656,7 @@ def subproblem(rps, cip, k, q, ideal) -> Problem:
     )
 
 
-def subproblem2(rps, cip, k, q, ideal) -> Problem:
+def subproblem_nl(rps, cip, k, q, ideal) -> Problem:
     # variables for the amount of objectives (k) in the original problem
     # bounds come from the ideal and nadir of the original problem
     # initial value is the mean.
@@ -829,7 +708,7 @@ def subproblem2(rps, cip, k, q, ideal) -> Problem:
             Constraint(
                 name=f"Feasible space constraint for objective {i}",
                 symbol=f"fs_{i}",
-                cons_type=ConstraintTypeEnum.EQ,  # should be EQ, does not work
+                cons_type=ConstraintTypeEnum.LTE,  # should be EQ, does not work
                 func=f"( w_0*dm_0_q_{i} + w_1*dm_1_q_{i} +  w_2*dm_2_q_{i} )  - x_{i}",
                 is_linear=True,
                 is_convex=True,
@@ -851,32 +730,82 @@ def subproblem2(rps, cip, k, q, ideal) -> Problem:
         )
     )
 
-    dm1_expr = "" + " + ".join([f"(dm_{0}_q_{i} - p_{i}) * x_{i} " for i in range(k)])
-    dm2_expr = "" + " + ".join([f" (dm_{1}_q_{i} - p_{i}) * x_{i} " for i in range(k)])
-    dm3_expr = "" + " + ".join([f" (dm_{2}_q_{i} - p_{i}) * x_{i} " for i in range(k)])
+    # dm1_expr = "" + " + ".join([f"(dm_{0}_q_{i} - p_{i}) * x_{i} " for i in range(k)])
+    # dm2_expr = "" + " + ".join([f" (dm_{1}_q_{i} - p_{i}) * x_{i} " for i in range(k)])
+    # dm3_expr = "" + " + ".join([f" (dm_{2}_q_{i} - p_{i}) * x_{i} " for i in range(k)])
 
-    min_term = f"Min(({dm1_expr}),({dm2_expr}), ({dm3_expr}) )"
+    # min_term = f"Min(({dm1_expr}),({dm2_expr}), ({dm3_expr}) )"
     # 'Min(((dm_0_q_0 - p_0) * x_0  + (dm_0_q_1 - p_1) * x_1 ),  ( (dm_1_q_0 - p_0) * x_0  + (dm_1_q_1 - p_1) * x_1 ), ( (dm_2_q_0 - p_0) * x_0  +  (dm_2_q_1 - p_1) * x_1 ) )'
     # min_term = f"(({dm1_expr}))"
     # maxmin_fairness = "Min( ((dm_0_q_0 - p_0) * x_0 + (dm_0_q_1 - p_1) * x_1 ), ((dm_1_q_0 - p_0) * x_0 + (dm_1_q_1 - p_1) * x_1), ((dm_2_q_0 - p_0) * x_0 + (dm_2_q_1 - p_1) * x_1))"
+    maxmin_fairness = f"Max(1, 2, 0)"
 
-    maxmin_fairness = f" {min_term}"
+    # maxmin_fairness = f" -1*{min_term}"
 
-    # func=f"Max(({x_1_eprs}) * x_3 - 7.735 * (({x_1_eprs})**2 / x_2) - 180, 0) + Max(4 - x_3 / x_2, 0)",
+    # dm1_expr = f" 0 + {dm1_expr}"
+    # dm2_expr = f" 0 + {dm2_expr}"
+    # dm3_expr = f" 0 + {dm3_expr}"
+
+    dm1_expr = "(dm_0_q_0 - p_0) * x_0 + (dm_0_q_1 - p_1) * x_1"
+    dm2_expr = "(dm_1_q_0 - p_0) * x_0 + (dm_1_q_1 - p_1) * x_1"
+    dm3_expr = "(dm_2_q_0 - p_0) * x_0 + (dm_2_q_1 - p_1) * x_1"
 
     objective = [
         Objective(
             name="f_1",
             symbol="f_1",
             func=maxmin_fairness,
-            objective_type=ObjectiveTypeEnum.analytical,
             # is_linear=True,
             # is_convex=True,
-            is_twice_differentiable=True,
-            maximize=True,
+            #is_twice_differentiable=True,
+            is_twice_differentiable=False,
+            maximize=False,
+            # maximize=True,
         )
     ]
 
+    # func=f"Max(({x_1_eprs}) * x_3 - 7.735 * (({x_1_eprs})**2 / x_2) - 180, 0) + Max(4 - x_3 / x_2, 0)",
+    objectives = [
+        Objective(
+            name="f_1",
+            symbol="f_1",
+            # func=maxmin_fairness,
+            func=dm1_expr,
+            # objective_type=ObjectiveTypeEnum.analytical,
+            # is_linear=True,
+            # is_convex=True,
+            #is_twice_differentiable=True,
+            is_twice_differentiable=False,
+            maximize=False,
+            # maximize=True,
+        ),
+        Objective(
+            name="f_2",
+            symbol="f_2",
+            # func=maxmin_fairness,
+            func=dm2_expr,
+            # objective_type=ObjectiveTypeEnum.analytical,
+            # is_linear=True,
+            # is_convex=True,
+            #is_twice_differentiable=True,
+            is_twice_differentiable=False,
+            maximize=False,
+            # maximize=True,
+        ),
+        Objective(
+            name="f_3",
+            symbol="f_3",
+            # func=maxmin_fairness,
+            func=dm3_expr,
+            # objective_type=ObjectiveTypeEnum.analytical,
+            # is_linear=True,
+            # is_convex=True,
+            #is_twice_differentiable=True,
+            is_twice_differentiable=False,
+            maximize=False,
+            # maximize=True,
+        )
+    ]
     return Problem(
         name="maxmin subproblem",
         description="subproblem for aggregation of reference points according to maxmin fairness",
@@ -885,6 +814,7 @@ def subproblem2(rps, cip, k, q, ideal) -> Problem:
         # constraints=[feasible_const, convex_const],
         constraints=constraints,
         objectives=objective,
+        # objectives=objectives,
     )
 
 def simple_test_problem2() -> Problem:
