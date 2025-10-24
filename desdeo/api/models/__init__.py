@@ -8,8 +8,9 @@ __all__ = [  # noqa: RUF022
     "DiscreteRepresentationDB",
     "EMOSaveState",
     "EMOSolveRequest",
-    "EMOState",
+    "EMOIterateState",
     "ENautilusState",
+    "ENautilusStepRequest",
     "ExtraFunctionDB",
     "ForestProblemMetaData",
     "GenericIntermediateSolutionResponse",
@@ -73,13 +74,17 @@ __all__ = [  # noqa: RUF022
     "GroupInfoRequest",
     "BasePreferences",
     "ReferencePointDictType",
-    "EMOSolveRequest",
     "PreferredRanges",
     "PreferedSolutions",
     "NonPreferredSolutions",
-    "EMOSaveState",
+    "EMOFetchRequest",
+    "EMOFetchResponse",
+    "EMOIterateRequest",
+    "EMOIterateResponse",
     "EMOSaveRequest",
-    "EMOState",
+    "EMOScoreRequest",
+    "EMOScoreResponse",
+    "Solution",
     "SolutionReference",
     "SolutionReferenceResponse",
     "SolverSelectionMetadata",
@@ -101,7 +106,17 @@ __all__ = [  # noqa: RUF022
 
 
 from .archive import UserSavedEMOResults
-from .EMO import EMOSaveRequest, EMOSolveRequest
+from .emo import (
+    EMOFetchRequest,
+    EMOFetchResponse,
+    EMOIterateRequest,
+    EMOIterateResponse,
+    EMOSaveRequest,
+    EMOScoreRequest,
+    EMOScoreResponse,
+    Solution,
+)
+from .enautilus import EnautilusStepRequest
 from .gdm_aggregate import (
     Group,
     GroupCreateRequest,
@@ -187,8 +202,8 @@ from .session import (
     InteractiveSessionInfo,
 )
 from .state import (
+    EMOIterateState,
     EMOSaveState,
-    EMOState,
     ENautilusState,
     GNIMBUSOptimizationState,
     GNIMBUSVotingState,
