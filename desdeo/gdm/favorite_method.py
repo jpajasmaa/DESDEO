@@ -27,7 +27,7 @@ I think you would swap around terms:
 
 If you want to maximise utility, probably you would multiply by -1.
 
-We are then searching for solutions than are non-dominated with respect to Utility, so IOPIS with this utility function should work ok. 
+We are then searching for solutions than are non-dominated with respect to Utility, so IOPIS with this utility function should work ok.
 """
 def PUtility(i, p, k, X, P, rw, pdw, maximizing=False):
     """
@@ -187,12 +187,15 @@ def itp_mps(problem: Problem, mps):
     return evaluated_points
 
 def find_group_solutions(problem: Problem, evaluated_points, norm_mps, solution_selector: str, aggregator: str, n: int = 3):
+    """Find n fair group solutions according to different fairness criteria.
+        TODO: extend to return any amount of fair solutions with some order such as:
+        1. Maxmin-cones solution
+        2. regret sum
+        3. regret maxmin
 
-    # THESE do not matter for dtlz2, but for other problems they do
-    # X in normalized space
-    # X = evaluated_points
-    # P in normalized space
-    # P = norm_mps
+        Maxmin-cones is a singular, for regret sum and regret maxmin can return multiple solutions.
+
+    """
 
     norm_eval_sols = []
     # evaluated_points["targets"]
@@ -220,6 +223,20 @@ def find_group_solutions(problem: Problem, evaluated_points, norm_mps, solution_
     # top5fair = np.stack(top5fair)
 
     return top_fair
+
+
+def shrink_group_ROI(wrapped_problem: ProblemWrapper, group_preferred_solution: dict[str, float]):
+    """Version with problemWrapper that gets updated."""
+    pass
+
+def shift_points(problem: Problem, most_preferred_solutions, group_preferred_solution: dict[str, float], steps_remaining):
+    """Calls calculate_navigation_point to shift fake_nadir and individual most most_preferred_solutions. """
+
+    shifted_mps = {}
+    for dm in most_preferred_solutions:
+        shifted_mps.update({dm: calculate_navigation_point(dtlz2_problem, most_preferred_solutions[dm], group_preferred_solution, steps_remaining)})
+
+    return shifted_mps
 
 
 """
@@ -293,8 +310,18 @@ if __name__ == "__main__":
     print(fair_sols)'
     """
 
+    # TODO: Implement majority judgemnet for voting to select the group preferred solution. Now uses majority rule, fails otherwise.
+    from desdeo.gdm.voting_rules import majority_rule
+
+    votes_idx = {
+        "DM1": 1,
+        "DM2": 1,
+        "DM3": 2
+    }
+    winner_idx = majority_rule(votes_idx)
+
     # TODO: either convert or return fair solutions in dictionary format
-    group_preferred_solution = {"f_1": fair_sols[0][0], "f_2": fair_sols[0][1], "f_3": fair_sols[0][2]}
+    group_preferred_solution = {"f_1": fair_sols[winner_idx][0], "f_2": fair_sols[winner_idx][1], "f_3": fair_sols[winner_idx][2]}
     print(group_preferred_solution)
 
     # Shift fake nadir is next. Can use from nautilus navigator
@@ -305,3 +332,9 @@ if __name__ == "__main__":
     print(current_fake_nadir)
 
     # TODO: now need to shift the MPSes
+    shifted_mps = shift_points(dtlz2_problem, most_preferred_solutions, group_preferred_solution, steps_remaining)
+    print(shifted_mps)
+
+    # TODO: Zoom in with the ITP (either opt. more solutions or just remove the ones outside)
+
+    # TODO: update the UFs, show new fair solutions and the loop continues
