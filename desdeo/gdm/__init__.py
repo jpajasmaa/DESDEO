@@ -25,5 +25,6 @@ from .voting_rules import (
 
 from .favorite_method import (
     find_group_solutions,
-    itp_mps,
+    get_representative_set,
+    IPR_Options,
 )

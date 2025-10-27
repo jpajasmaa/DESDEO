@@ -133,7 +133,7 @@ def get_hull_equations(hull):
 
 
 def generate_points(
-    num_points: int, num_dims: int, reference_points: np.ndarray,
+    num_points: int, num_dims: int, reference_points: np.ndarray | None,
 ) -> tuple[
     np.ndarray,
     np.ndarray,
