@@ -4,7 +4,7 @@
 from sys import version
 import pydantic
 from pydantic import Field, ConfigDict
-from desdeo.gdm.gdmtools import agg_aspbounds, dict_of_rps_to_list_of_rps
+from desdeo.gdm.gdmtools import *  # TODO: fix start import
 from desdeo.tools.generics import EMOResult, SolverResults
 from desdeo.emo.options.templates import EMOOptions
 from desdeo.tools.iterative_pareto_representer import _EvaluatedPoint, choose_reference_point
@@ -20,110 +20,6 @@ import polars as pl
 
 import numpy as np
 from desdeo.problem.schema import Problem
-
-# Juergen UFS for optimization
-# Looks to be correctly working
-"""
-And yes, I am assuming we are minimising the objectives and the utilities.
-
-Did you mean maximisation of objectives, or utilities, or both?
-I think if you just want to maximise objectives (and still minimise utilities), then
-I think you would swap around terms:
->
-> PUtility(i, p, k)= pdweight(p,k)*max(rw*(P(p,k)-X(i,k)),P(p,k)-X(i,k))
-
-If you want to maximise utility, probably you would multiply by -1.
-
-We are then searching for solutions than are non-dominated with respect to Utility, so IOPIS with this utility function should work ok.
-"""
-def PUtility(i, p, k, X, P, rw, pdw, maximizing=False):
-    """
-    i: index over solutions ==> a solution
-    p: index over DMs ==> specific DM
-    k: index over objectives ==> speficic obj
-    """
-    # weights, rows DMS, columns objs. TODO: if providing different weights, change this. Now 1 for all.
-
-    if maximizing:
-        f_term = rw * (P[p, k] - X[i, k])
-        s_term = P[p, k] - X[i, k]
-    else:
-        f_term = rw * (X[i, k] - P[p, k])
-        s_term = X[i, k] - P[p, k]
-    maxterm = np.max((f_term, s_term))  # if wanting to maximize utility, multiply by -1.
-    return pdw[p, k] * maxterm
-
-def UF_total_sum(i, p, X, P, rw, pdw, maximize=False):
-    summa = 0
-    K = X.shape[1]
-    for k in range(K):
-        summa += PUtility(i, p, k, X, P, rw, pdw, maximize)
-
-    return summa
-
-def UF_mm(i, p, X, P, rw, pdw, maximize=False):
-    Putilities = []
-    K = X.shape[1]
-    for k in range(K):
-        Putilities.append(PUtility(i, p, k, X, P, rw, pdw, maximize))
-
-    return max(Putilities)
-
-
-# TODO: addstuff params and so on. rewrite maybe
-# X : solutions
-# P : MPSses
-# maximize: Whether to minimize or maximize the objective functions
-def solve_UFs(X: np.ndarray, P: np.ndarray, rw: float, pdw: np.ndarray | None, agg: str, maximize=False):
-    UF_vals = []
-    UF_ws = []
-
-    Q, K = X.shape[0], X.shape[1]
-    # weights, rows DMS, columns objs. TODO: if providing different weights, change this. Now 1 for all.
-    rw = rw  # factor to multiple rewards
-    if pdw is None:
-        pdw = np.ones((Q, K))
-    # for each solution
-    for i in range(len(X)):
-        UFs_for_each = []
-        # for each DM. So this UF for each DM as an objective function for IOPIS should work?
-        for p in range(len(P)):  # 4 DMs right now
-            if agg == "sum":
-                uf_val = UF_total_sum(i, p, X, P, rw, pdw, maximize)
-            else:  # agg == mm
-                uf_val = UF_mm(i, p, X, P, rw, pdw, maximize)
-            UFs_for_each.append(uf_val)
-            UF_vals.append(uf_val)
-        if agg == "sum":
-            UF_ws.append(sum(UFs_for_each))
-        else:
-            UF_ws.append(min(UFs_for_each))
-    print(len(UF_vals))
-    print(len(UF_ws))
-
-    return UF_vals, UF_ws
-
-def get_top_n_fair_solutions(solutions, UF_ws, n):
-    idxs = np.argpartition(UF_ws, -n)[-n:]
-    fair_sols = []
-    for i in range(n):
-        fair_sols.append(solutions[idxs[i]])
-    return fair_sols
-
-# TODO: comments
-def scale_rp(problem: Problem, reference_point, ideal, nadir, maximize):
-    """Scales a reference point to [0,1]"""
-    rp = {}
-    # ideal = problem.get_ideal_point()
-    # nadir = problem.get_nadir_point()
-
-    # scaling to [0,1], when maximizing objective functions
-    for obj in problem.objectives:
-        if maximize:
-            rp.update({obj.symbol: (reference_point[obj.symbol] - nadir[obj.symbol]) / (ideal[obj.symbol] - nadir[obj.symbol])})
-        else:
-            rp.update({obj.symbol: (reference_point[obj.symbol] - ideal[obj.symbol]) / (nadir[obj.symbol] - ideal[obj.symbol])})  # when minimizing
-    return rp
 
 
 # get a problem
@@ -164,7 +60,7 @@ class ProblemWrapper():
 
 
 # TODO: this to be re-written after UFs are implemented as polars expressions
-def find_group_solutions(problem: Problem, evaluated_points, norm_mps, solution_selector: str, aggregator: str, n: int = 3):
+def find_group_solutions(problem: Problem, evaluated_points, mps, solution_selector: str, aggregator: str, n: int = 3):
     """Find n fair group solutions according to different fairness criteria.
         TODO: extend to return any amount of fair solutions with some order such as:
         1. Maxmin-cones solution
@@ -173,7 +69,12 @@ def find_group_solutions(problem: Problem, evaluated_points, norm_mps, solution_
 
         Maxmin-cones is a singular, for regret sum and regret maxmin can return multiple solutions.
 
+        mps must be np array for the below code !
+
     """
+
+    # TODO: normalize the MPSses
+    norm_mps = mps
 
     norm_eval_sols = []
     # evaluated_points["targets"]
@@ -283,7 +184,7 @@ def get_representative_set(problem: Problem, options: MethodOptions) -> tuple[pl
     # Normalize mps for fairness and IPR. Convert to array for now.
     mps = {}
     for dm in options.most_preferred_solutions:
-        mps.update({dm: scale_rp(problem, most_preferred_solutions[dm], options.fake_ideal, options.fake_nadir, False)})
+        mps.update({dm: scale_rp(problem, options.most_preferred_solutions[dm], options.fake_ideal, options.fake_nadir, False)})
 
     # RPs as array for methods to come
     rp_arr = []
@@ -309,21 +210,11 @@ def get_representative_set(problem: Problem, options: MethodOptions) -> tuple[pl
                     print(f"Run {i+1}/{num_runs}")
                 reference_point, _ = choose_reference_point(refp, evaluated_points)
                 evaluated_points = wrapped_problem.solve(reference_point)
-
             break
         except Exception:
             break
 
     df = pl.DataFrame(evaluated_points)  # TODO: only the output to be visualized to the DMs
-    fair_sols = []
-    fairness_metrics = ["regret"]
-
-    for criterion in fairness_metrics:
-        # TODO: fix pseudocode. This is the idea, but now we would need to call the polars expression versions of these.
-        fair_sols.append(find_group_solutions(dtlz2_problem, evaluated_points, norm_mps, "regret", "sum"))
-
-    print(fair_sols)
-
     fav_res = IPR_Results(
         evaluated_points=evaluated_points,
         most_preferred_solutions=options.most_preferred_solutions,
@@ -373,10 +264,6 @@ if __name__ == "__main__":
     # MethodOptions = IPR_Options | EMOOptions
     # MethodResults = IPR_Results | EMOResult
     from desdeo.problem.testproblems.dtlz2_problem import dtlz2
-    from desdeo.problem import (
-        numpy_array_to_objective_dict,
-        objective_dict_to_numpy_array,
-    )
     dtlz2_problem = dtlz2(8, 3)
     ideal = dtlz2_problem.get_ideal_point()
     nadir = dtlz2_problem.get_nadir_point()
@@ -388,7 +275,7 @@ if __name__ == "__main__":
 
     most_preferred_solutions_list = dict_of_rps_to_list_of_rps(most_preferred_solutions)
 
-    # TODO: get fake_ideal and fake_nadir
+    # TODO: get fake_ideal and fake_nadir to get started!
     fake_ideal, fake_nadir = agg_aspbounds(most_preferred_solutions_list, dtlz2_problem)
     print("Fake ideal", fake_ideal)
     print("Fake nadir", fake_nadir)
@@ -396,8 +283,8 @@ if __name__ == "__main__":
     fairness_metrics = ["regret_sum", "regret_mm", "cones"]
 
     options = IPR_Options(
-        fake_ideal=ideal,
-        fake_nadir=nadir,
+        fake_ideal=fake_ideal,
+        fake_nadir=fake_nadir,
         most_preferred_solutions=most_preferred_solutions,
         total_points=10000,
         num_points_to_evaluate=10,
@@ -409,11 +296,27 @@ if __name__ == "__main__":
     # df, res = get_representative_set(dtlz2_problem, options)
     df, method_res = get_representative_set(dtlz2_problem, options)
     print(df["objectives"])
-    # print(method_res)
+    print(method_res.evaluated_points)
+
+    # mps going to find_group_solutions() need to be 2d ndarray
+    mps = most_preferred_solutions
+    rp_arr = []
+    for i, dm in enumerate(mps):
+        rp_arr.append(objective_dict_to_numpy_array(dtlz2_problem, mps[dm]).tolist())
 
     # print(method_res.fair_solutions)
     """ FAIRNESS STUFF WORKED BUT NOW IMPROVING ON IT
-    fair_sols = method_res.fair_solutions
+    """
+    fair_sols = []
+    fairness_metrics = ["regret"]
+
+    for criterion in fairness_metrics:
+        # TODO: fix pseudocode. This is the idea, but now we would need to call the polars expression versions of these.
+        # fair_sols.append(find_group_solutions(dtlz2_problem, method_res.evaluated_points, most_preferred_solutions_list, "regret", "sum"))
+        fair_sols.append(find_group_solutions(dtlz2_problem, method_res.evaluated_points, rp_arr, "regret", "sum"))
+
+    fair_sols = fair_sols[0]  # remove the outer list, only needed for this scuffed implementation
+    print("fair sols:", fair_sols)
 
     # TODO: Implement majority judgemnet for voting to select the group preferred solution. Now uses majority rule, fails otherwise.
     from desdeo.gdm.voting_rules import majority_rule
@@ -424,13 +327,12 @@ if __name__ == "__main__":
         "DM3": 2
     }
     winner_idx = majority_rule(votes_idx)
+    print(winner_idx)
 
     # TODO: either convert or return fair solutions in dictionary format
     group_preferred_solution = {"f_1": fair_sols[winner_idx][0], "f_2": fair_sols[winner_idx][1], "f_3": fair_sols[winner_idx][2]}
     print(group_preferred_solution)
-    """
 
-    group_preferred_solution = {'f_1': 0.2049589008489896, 'f_2': 0.904959056849697, 'f_3': 0.2049589001752685}
     # TODO: Zoom in with the ITP (either opt. more solutions or just remove the ones outside)
     steps_remaining = 3
     new_iter_options = handle_zooming(dtlz2_problem, method_res, group_preferred_solution, steps_remaining)
