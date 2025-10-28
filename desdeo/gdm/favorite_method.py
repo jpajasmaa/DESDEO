@@ -213,6 +213,8 @@ def shift_points(problem: Problem, most_preferred_solutions, group_preferred_sol
     return shifted_mps
 
 
+# TODO: create two versions with version1 options and version2 options
+
 class IPR_Options(pydantic.BaseModel):
     """Options for iterative_pareto_representer applied with the favorite method."""
     fake_ideal: dict[str, float | None]
@@ -226,9 +228,33 @@ class IPR_Options(pydantic.BaseModel):
     """How many points to evaluate. Not so large number"""
     EvaluatedPoints: list[_EvaluatedPoint]
     """List of EvaluatedPoints from IPR."""
-    version: str
+    # version: str
     """Version 1: evaluate in the convex hull of MPS. Version 2: evaluate in the box of fake_ideal and fake_nadir."""
-    fairness_metrics: list[str]
+    # fairness_metrics: list[str]
+
+class IPR_OptionsV1(pydantic.BaseModel):
+    """Options for iterative_pareto_representer applied with the favorite method."""
+    most_preferred_solutions: dict[str, dict[str, float]]
+    """What about DMs' RPs? To be normalized!"""
+    total_points: int
+    """Big number"""
+    num_points_to_evaluate: int
+    """How many points to evaluate. Not so large number"""
+    EvaluatedPoints: list[_EvaluatedPoint]
+
+
+class IPR_OptionsV2(pydantic.BaseModel):
+    """Options for iterative_pareto_representer applied with the favorite method."""
+    fake_ideal: dict[str, float | None]
+    """fake ideal"""
+    fake_nadir: dict[str, float | None]
+    """What about DMs' RPs? To be normalized!"""
+    total_points: int
+    """Big number"""
+    num_points_to_evaluate: int
+    """How many points to evaluate. Not so large number"""
+    EvaluatedPoints: list[_EvaluatedPoint]
+
 
 # class IPR_Results(pydantic.BaseModel):
 #    model_config = ConfigDict(arbitrary_types_allowed=True, use_attribute_docstrings=True)
@@ -237,9 +263,10 @@ class IPR_Options(pydantic.BaseModel):
 class IPR_Results(pydantic.BaseModel):
     #    model_config = ConfigDict(arbitrary_types_allowed=True, use_attribute_docstrings=True)
     evaluated_points: list[_EvaluatedPoint]  # I dont know how to use this properly.
+    most_preferred_solutions: dict[str, dict[str, float]]
     # fair_solutions: list[dict[str, float]]  # TODO: decide the type
-    fair_solutions: list  # TODO: decide the type
-    fairness_metrics: list[str]  # string to indicate the fair solution type
+    # fair_solutions: list  # TODO: decide the type
+    # fairness_metrics: list[str]  # string to indicate the fair solution type
 
 
 # TODO: move to some template file etc. Handle EMOOptions for IOPIS
@@ -252,9 +279,10 @@ MethodResults = IPR_Results  # | EMOResult
 def get_representative_set(problem: Problem, options: MethodOptions) -> tuple[pl.DataFrame, MethodResults]:
     evaluated_points = None
 
+    # TODO: switch case, for emo side and IPR side
     # Normalize mps for fairness and IPR. Convert to array for now.
     mps = {}
-    for dm in most_preferred_solutions:
+    for dm in options.most_preferred_solutions:
         mps.update({dm: scale_rp(problem, most_preferred_solutions[dm], options.fake_ideal, options.fake_nadir, False)})
 
     # RPs as array for methods to come
@@ -282,59 +310,60 @@ def get_representative_set(problem: Problem, options: MethodOptions) -> tuple[pl
                 reference_point, _ = choose_reference_point(refp, evaluated_points)
                 evaluated_points = wrapped_problem.solve(reference_point)
 
-            # print(wrapped_problem.ideal)
-            # print(wrapped_problem.nadir)
             break
         except Exception:
             break
 
-    df = pl.DataFrame(evaluated_points)
+    df = pl.DataFrame(evaluated_points)  # TODO: only the output to be visualized to the DMs
     fair_sols = []
-    # fairness_metrics = ["regret"]
+    fairness_metrics = ["regret"]
 
-    for criterion in options.fairness_metrics:
+    for criterion in fairness_metrics:
         # TODO: fix pseudocode. This is the idea, but now we would need to call the polars expression versions of these.
         fair_sols.append(find_group_solutions(dtlz2_problem, evaluated_points, norm_mps, "regret", "sum"))
 
-    # solution_selector = "regret"
-    # aggregator = "sum"
-    # fair_sols = find_group_solutions(dtlz2_problem, eval_points, norm_mps, solution_selector, aggregator)
     print(fair_sols)
 
     fav_res = IPR_Results(
         evaluated_points=evaluated_points,
-        fair_solutions=fair_sols,
-        fairness_metrics=options.fairness_metrics,
+        most_preferred_solutions=options.most_preferred_solutions,
+        # fair_solutions=fair_sols,
+        # fairness_metrics=options.fairness_metrics,
     )
 
     return (df, fav_res)
 
-# def handle_zooming(problem: Problem, res:MethodResults, pref:Preference) -> MethodOptions:
-def handle_zooming(problem: Problem, res: list[_EvaluatedPoint], group_mps: dict[str, float], next_iter_version: str, steps_remaining: int, fairness_metrics: list[str]):
+def handle_zooming(problem: Problem, res: MethodResults, group_mps: dict[str, float], steps_remaining: int) -> MethodOptions:
     """Should handle zooming and return MethodOptions for the next iteration. """
-    # get current ideal and current nadir
+
+    # TODO: switch cases for different versions.
+    # Currently, gets get current ideal and current nadir from DMs' MPSses
+    most_preferred_solutions = res.most_preferred_solutions  # most preferred solutions of current iteration
+    print(most_preferred_solutions)
     most_preferred_solutions_list = dict_of_rps_to_list_of_rps(most_preferred_solutions)
-    fake_ideal, current_fake_nadir = agg_aspbounds(most_preferred_solutions_list, dtlz2_problem)  # we can get fake_nadir with calculate_navigation_point
-    current_fake_nadir = calculate_navigation_point(dtlz2_problem, current_fake_nadir, group_preferred_solution, steps_remaining)
-    print(current_fake_nadir)
+    fake_ideal, current_fake_nadir = agg_aspbounds(most_preferred_solutions_list, problem)  # we can get fake_nadir with calculate_navigation_point
+    print(fake_ideal, current_fake_nadir)
+    fake_nadir = calculate_navigation_point(problem, current_fake_nadir, group_mps, steps_remaining)
 
     # TODO: now need to shift the MPSes
-    shifted_mps = shift_points(dtlz2_problem, most_preferred_solutions, group_preferred_solution, steps_remaining)
+    shifted_mps = shift_points(problem, most_preferred_solutions, group_mps, steps_remaining)
     print(shifted_mps)
-    most_preferred_solutions_list = dict_of_rps_to_list_of_rps(most_preferred_solutions)
-    fake_ideal, current_fake_nadir = agg_aspbounds(most_preferred_solutions_list, dtlz2_problem)  # we can get fake_nadir with calculate_navigation_point
     print("Fake ideal", fake_ideal)
     print("Fake nadir", fake_nadir)
+
+    # steps_remaining = res.steps_remaining - 1
+    # TODO: somewhere add check for steps_remaining need to be > 0
 
     options = IPR_Options(
         fake_ideal=fake_ideal,
         fake_nadir=fake_nadir,
-        most_preferred_solutions=most_preferred_solutions,
-        total_points=10000,
+        most_preferred_solutions=shifted_mps,
+        total_points=10000,  # TODO: set params for these someway
         num_points_to_evaluate=10,
-        EvaluatedPoints=evaluated_points,
-        version=next_iter_version,
-        fairness_metrics=fairness_metrics,
+        EvaluatedPoints=res.evaluated_points,
+        # version=next_iter_version,
+        # fairness_metrics=fairness_metrics,
+        # steps_remaining=steps_remaining,
     )
     return options
 
@@ -373,16 +402,17 @@ if __name__ == "__main__":
         total_points=10000,
         num_points_to_evaluate=10,
         EvaluatedPoints=evaluated_points,
-        version="fakenadir",
-        fairness_metrics=fairness_metrics,
+        # version="fakenadir",
+        # fairness_metrics=fairness_metrics,
         # version="fake"
     )
     # df, res = get_representative_set(dtlz2_problem, options)
     df, method_res = get_representative_set(dtlz2_problem, options)
-    print(df)
-    print(method_res)
+    print(df["objectives"])
+    # print(method_res)
 
-    print(method_res.fair_solutions)
+    # print(method_res.fair_solutions)
+    """ FAIRNESS STUFF WORKED BUT NOW IMPROVING ON IT
     fair_sols = method_res.fair_solutions
 
     # TODO: Implement majority judgemnet for voting to select the group preferred solution. Now uses majority rule, fails otherwise.
@@ -398,11 +428,18 @@ if __name__ == "__main__":
     # TODO: either convert or return fair solutions in dictionary format
     group_preferred_solution = {"f_1": fair_sols[winner_idx][0], "f_2": fair_sols[winner_idx][1], "f_3": fair_sols[winner_idx][2]}
     print(group_preferred_solution)
+    """
 
-    version = "convex hull"  # or anything else # TODO: better
-    steps_remaining = 3
-    new_iter_options = handle_zooming(dtlz2_problem, method_res.evaluated_points, group_preferred_solution, version, steps_remaining, fairness_metrics)
-
+    group_preferred_solution = {'f_1': 0.2049589008489896, 'f_2': 0.904959056849697, 'f_3': 0.2049589001752685}
     # TODO: Zoom in with the ITP (either opt. more solutions or just remove the ones outside)
+    steps_remaining = 3
+    new_iter_options = handle_zooming(dtlz2_problem, method_res, group_preferred_solution, steps_remaining)
 
     # TODO: update the UFs, show new fair solutions and the loop continues
+    df, method_res = get_representative_set(dtlz2_problem, new_iter_options)
+    print(new_iter_options)
+    print("new iter")
+    print(df["objectives"])
+    # print(method_res)
+
+    # print(method_res.fair_solutions)
