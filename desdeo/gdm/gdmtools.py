@@ -48,6 +48,10 @@ def scale_delta(problem: Problem, d: float):
     return delta
 
 
+# OK Juergen UFs just provide for each solution i in n, and for k in objs, a regret value of the DMs.
+#
+#
+#
 # Juergen UFS for optimization
 # Looks to be correctly working
 """
@@ -79,6 +83,48 @@ def PUtility(i, p, k, X, P, rw, pdw, maximizing=False):
         s_term = X[i, k] - P[p, k]
     maxterm = np.max((f_term, s_term))  # if wanting to maximize utility, multiply by -1.
     return pdw[p, k] * maxterm
+
+
+"""
+%Compute regret values
+MDutility=zeros(n,3);
+for i=1:n
+        MDutility(i, 1)=sum(max(zeros(1,3),X(i,:)-A(1,:))); p = 0
+        MDutility(i, 2)=sum(max(zeros(1,3),X(i,:)-A(2,:))); p = 1
+        MDutility(i, 3)=sum(max(zeros(1,3),X(i,:)-A(3,:))); p = 2
+end
+"""
+# for i in n solutions and for each p in P DMs. returns the regret values as a list of each P DMs.
+# So for 3 DMs, returns [p1, p2, p3]
+def MDutility_allDMs(sol, mpses, rw, pdw):
+    uf_arr = []  # convert to numpy later for numba
+
+    Q, K = sol.shape[0], sol.shape[1]
+    zeros = np.zeros(len(K))
+
+    for p in range(len(mpses)):
+        uf_arr.append(np.sum(np.max(zeros, sol - mpses[p])))
+
+    return uf_arr
+
+# X: all solutions
+# P: MPSes
+# all solutions, MPSes, everything have to be scaled and converted to minimization
+def uf_total_sum(X, P, rw, pdw, maximize=False):
+
+    sum_regrets = []
+    for i in range(len(X)):
+        # could just return the list here
+        # per_sol = []
+        # for q in range(len(P)):
+        #    per_sol.append(MDutility_allDMs(X[i], P[q], rw, pdw, maximize))
+        per_sol = MDutility_allDMs(X[i], P, rw, pdw)
+        print(per_sol)
+
+        # TODO: call fairness func to aggreate here. Now just taking the sum.
+        sum_regrets.append(sum(per_sol))
+    return sum_regrets
+
 
 def UF_total_sum(i, p, X, P, rw, pdw, maximize=False):
     summa = 0

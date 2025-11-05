@@ -60,7 +60,7 @@ class ProblemWrapper():
 
 
 # TODO: this to be re-written after UFs are implemented as polars expressions
-def find_group_solutions(problem: Problem, evaluated_points, mps, solution_selector: str, aggregator: str, n: int = 3):
+def find_group_solutions(problem: Problem, evaluated_points, mps, solution_selector: str, aggregator: str, n: int = 3, maximize=False):
     """Find n fair group solutions according to different fairness criteria.
         TODO: extend to return any amount of fair solutions with some order such as:
         1. Maxmin-cones solution
@@ -93,10 +93,7 @@ def find_group_solutions(problem: Problem, evaluated_points, mps, solution_selec
     # TODO: would be convenient to get all the parameter to some parameter dictionary etc that I can apply.
     # Look for inspiration in Bhupinder's EMO stuff?
     rw = 0
-    maximize = False
     UF_vals, UF_agg = solve_UFs(norm_eval_sols, norm_mps_arr, rw, None, aggregator, maximize)
-    print(len(UF_vals))
-    print(len(UF_agg))
 
     top_fair = np.stack(get_top_n_fair_solutions(eval_sols_in_objs, UF_agg, n))
     # top5fair = np.stack(top5fair)
@@ -109,7 +106,7 @@ def shift_points(problem: Problem, most_preferred_solutions, group_preferred_sol
 
     shifted_mps = {}
     for dm in most_preferred_solutions:
-        shifted_mps.update({dm: calculate_navigation_point(dtlz2_problem, most_preferred_solutions[dm], group_preferred_solution, steps_remaining)})
+        shifted_mps.update({dm: calculate_navigation_point(problem, most_preferred_solutions[dm], group_preferred_solution, steps_remaining)})
 
     return shifted_mps
 
@@ -178,7 +175,7 @@ MethodResults = IPR_Results  # | EMOResult
 
 # I dont know how to use this properly.
 def get_representative_set(problem: Problem, options: MethodOptions) -> tuple[pl.DataFrame, MethodResults]:
-    evaluated_points = None
+    evaluated_points = []
 
     # TODO: switch case, for emo side and IPR side
     # Normalize mps for fairness and IPR. Convert to array for now.
@@ -192,6 +189,8 @@ def get_representative_set(problem: Problem, options: MethodOptions) -> tuple[pl
         rp_arr.append(objective_dict_to_numpy_array(problem, mps[dm]).tolist())
     norm_mps = rp_arr
 
+    dims = len(problem.get_nadir_point())
+
     # get the representative set
     # set n or the possibilities of n according to the num points to evaluate
     for n in ([options.num_points_to_evaluate, options.num_points_to_evaluate / 2, 10]):
@@ -199,9 +198,9 @@ def get_representative_set(problem: Problem, options: MethodOptions) -> tuple[pl
         try:
             # generate points in the convex hull of RPs or fake_ideal and fake_nadir
             if version == "convex_hull":
-                _, refp = generate_points(num_points=options.total_points, num_dims=3, reference_points=norm_mps)
+                _, refp = generate_points(num_points=options.total_points, num_dims=dims, reference_points=norm_mps)
             else:
-                _, refp = generate_points(num_points=options.total_points, num_dims=3, reference_points=None)
+                _, refp = generate_points(num_points=options.total_points, num_dims=dims, reference_points=None)
 
             num_runs = n
             wrapped_problem = ProblemWrapper(problem, fake_ideal=options.fake_ideal, fake_nadir=options.fake_nadir)
@@ -250,7 +249,7 @@ def handle_zooming(problem: Problem, res: MethodResults, group_mps: dict[str, fl
         fake_nadir=fake_nadir,
         most_preferred_solutions=shifted_mps,
         total_points=10000,  # TODO: set params for these someway
-        num_points_to_evaluate=10,
+        num_points_to_evaluate=100,
         EvaluatedPoints=res.evaluated_points,
         # version=next_iter_version,
         # fairness_metrics=fairness_metrics,
