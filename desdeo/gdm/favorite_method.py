@@ -1,34 +1,33 @@
 """ The Favorite method, a general method for group decision making in multiobjective optimization """
 
 
-from sys import version
-import pydantic
-from pydantic import Field, ConfigDict
-from desdeo.gdm.gdmtools import dict_of_rps_to_list_of_rps, agg_aspbounds, scale_rp, solve_UFs, get_top_n_fair_solutions, uf_total_sum
-from desdeo.tools.generics import EMOResult, SolverResults
-from desdeo.emo.options.templates import EMOOptions
-from desdeo.tools.iterative_pareto_representer import _EvaluatedPoint, choose_reference_point
-from desdeo.tools.GenerateReferencePoints import generate_points
-from desdeo.tools.scalarization import add_asf_diff
-from desdeo.tools import IpoptOptions, PyomoIpoptSolver
+import plotly.express as ex
+from desdeo.problem.schema import Problem
+import numpy as np
+import polars as pl
+from desdeo.mcdm.nautilus_navigator import calculate_navigation_point
 from desdeo.problem import (
     numpy_array_to_objective_dict,
     objective_dict_to_numpy_array,
 )
-from desdeo.mcdm.nautilus_navigator import calculate_navigation_point
-import polars as pl
-
-import numpy as np
-from desdeo.problem.schema import Problem
-
-import plotly.express as ex
+from desdeo.tools import IpoptOptions, PyomoIpoptSolver
+from desdeo.tools.scalarization import add_asf_diff
+from desdeo.tools.GenerateReferencePoints import generate_points
+from desdeo.tools.iterative_pareto_representer import _EvaluatedPoint, choose_reference_point
+from desdeo.emo.options.templates import EMOOptions
+from desdeo.tools.generics import EMOResult, SolverResults
+from sys import version
+import pydantic
+from pydantic import Field, ConfigDict
+from desdeo.gdm.gdmtools import (dict_of_rps_to_list_of_rps, agg_aspbounds, scale_rp, get_top_n_fair_solutions,
+                                 min_max_regret, average_pareto_regret, inequality_in_pareto_regret)
 
 
 # TODO: now for easier testing. REMOVE THIS GLOBAL VAR
 num_of_runs = 100
 
 
-def visualize_3d(options, evaluated_points, fair_sols):
+def visualize_3d(options, evaluated_points, fair_sols, n):
     fig = ex.scatter_3d()
 
     # Add reference points
@@ -67,10 +66,22 @@ def visualize_3d(options, evaluated_points, fair_sols):
 
     # Add maxfair points
     fig = fig.add_scatter3d(
-        x=fair_sols[:, 0],
-        y=fair_sols[:, 1],
-        z=fair_sols[:, 2],
-        mode="markers", name="maxfair_sum", marker_symbol="x", opacity=0.9)
+        x=fair_sols[:n, 0],
+        y=fair_sols[:n, 1],
+        z=fair_sols[:n, 2],
+        mode="markers", name="min_regret", marker_symbol="x", opacity=0.9)
+
+    fig = fig.add_scatter3d(
+        x=fair_sols[n:n+n, 0],
+        y=fair_sols[n:n+n, 1],
+        z=fair_sols[n:n+n, 2],
+        mode="markers", name="avg_regret", marker_symbol="x", opacity=0.9)
+
+    fig = fig.add_scatter3d(
+        x=fair_sols[2*n:3*n, 0],
+        y=fair_sols[2*n:3*n, 1],
+        z=fair_sols[2*n:3*n, 2],
+        mode="markers", name="gini_regret", marker_symbol="x", opacity=0.9)
 
     """
     fig.update_layout(
@@ -183,20 +194,30 @@ def find_group_solutions(problem: Problem, evaluated_points: list[_EvaluatedPoin
     # Look for inspiration in Bhupinder's EMO stuff?
     # Regret UFs, no achievement for aspiration. Sum over DMs.
 
-    sum_regrets = uf_total_sum(norm_eval_sols, norm_mps_arr)
-    print(sum_regrets)
+    # Regret UFs, no achievement for aspiration. Take the DM that is worst-off. Min()
+    min_regrets = min_max_regret(norm_eval_sols, norm_mps_arr)
+    print("min regrets:", min_regrets)
 
-    # rw = 0
+    # Avererage Pareto regret
+    avg_regrets = average_pareto_regret(norm_eval_sols, norm_mps_arr)
+    print("avg pareto regrets:", avg_regrets)
+
+    # inequality in pareto regret
+    gini_regrets = inequality_in_pareto_regret(norm_eval_sols, norm_mps_arr)
+    print("gini pareto regrets:", gini_regrets)
+
     # UF_vals, UF_agg = solve_UFs(norm_eval_sols, norm_mps_arr, rw, None, aggregator, maximize)
 
-    # Regret UFs, no achievement for aspiration. Take the DM that is worst-off. Min()
-
     # Regret UFs, no achievement for aspiration. Take the DM that is best-off. Max()
+    min_r = get_top_n_fair_solutions(eval_sols_in_objs, min_regrets, n)
+    # top_fair = np.stack(get_top_n_fair_solutions(eval_sols_in_objs, min_regrets, n))
 
-    # Other juergen UF?
+    avg_r = get_top_n_fair_solutions(eval_sols_in_objs, avg_regrets, n)
 
-    top_fair = np.stack(get_top_n_fair_solutions(eval_sols_in_objs, sum_regrets, n))
-    # top5fair = np.stack(top5fair)
+    gini_r = get_top_n_fair_solutions(eval_sols_in_objs, gini_regrets, n)
+
+    top_fair = np.concatenate((min_r, avg_r, gini_r))
+    # top_fair = np.stack(top_fair)
 
     return top_fair
 
@@ -414,7 +435,7 @@ if __name__ == "__main__":
     """
     fair_sols = []
     fairness_metrics = ["regret"]
-    n = 8
+    n = 1
 
     # TODO: fix pseudocode. This is the idea, but now we would need to call the polars expression versions of these.
     # fair_sols.append(find_group_solutions(dtlz2_problem, method_res.evaluated_points, most_preferred_solutions_list, "regret", "sum"))
@@ -423,7 +444,7 @@ if __name__ == "__main__":
 
     print("fair sols:", fair_sols)
 
-    visualize_3d(options, method_res.evaluated_points, fair_sols)
+    visualize_3d(options, method_res.evaluated_points, fair_sols, n)
 
     """
          Voting
@@ -478,4 +499,4 @@ if __name__ == "__main__":
 
     print("fair sols after shrinking:", fair_sols)
 
-    visualize_3d(new_iter_options, method_res2.evaluated_points, fair_sols)
+    visualize_3d(new_iter_options, method_res2.evaluated_points, fair_sols, n)

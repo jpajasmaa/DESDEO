@@ -53,7 +53,9 @@ def get_top_n_fair_solutions(solutions, fairness_values, n):
     fair_sols = []
     for i in range(n):
         fair_sols.append(solutions[idxs[i]])
+
     return fair_sols
+    # return fair_sols if len(fair_sols) < 2 else fair_sols[0]
 
 # TODO: comments
 def scale_rp(problem: Problem, reference_point, ideal, nadir, maximize):
@@ -85,7 +87,7 @@ end
 # The larger the value is, the more regret the DM has
 # Numba goes BRRRRRT
 @njit()
-def MDutility_allDMs(sol, mpses):
+def regret_allDMs(sol, mpses):
     uf_arr = []  # convert to numpy later for numba
 
     print(sol)
@@ -100,18 +102,38 @@ def MDutility_allDMs(sol, mpses):
 # X: all solutions
 # P: MPSes
 # all solutions, MPSes, everything have to be scaled and converted to minimization
-def uf_total_sum(all_sols, mpses):
-
-    sum_regrets = []
+def min_max_regret(all_sols, mpses):
+    min_regrets = []
     for i in range(len(all_sols)):
-        per_sol = MDutility_allDMs(all_sols[i], mpses)
-        print(per_sol)
+        per_sol = regret_allDMs(all_sols[i], mpses)
 
-        # TODO: call fairness func to aggreate here. Now just taking the min-max.
-        sum_regrets.append(min(per_sol))  # minmax
-        # sum_regrets.append(sum(per_sol))  # sum max
-        # sum_regrets.append(1/3*sum(per_sol))  # avg max
-    return sum_regrets
+        min_regrets.append(min(per_sol))  # minmax
+    return min_regrets
+
+
+def average_pareto_regret(all_sols, mpses):
+    avg_regrets = []
+    M = len(mpses)  # number of DMs
+    for i in range(len(all_sols)):
+        pr = regret_allDMs(all_sols[i], mpses)
+        avg_pr = 1 / M * sum(pr)
+
+        avg_regrets.append(avg_pr)  # avg pr
+    return avg_regrets
+
+def inequality_in_pareto_regret(all_sols, mpses):
+    gini_regrets = []
+    M = len(mpses)  # number of DMs
+    for i in range(len(all_sols)):
+        pr = regret_allDMs(all_sols[i], mpses)
+        pr = np.array(pr)  # to make subtraction to work
+        avg_pr = 1 / M * sum(pr)
+
+        gini_sum = sum(abs(pr - avg_pr))
+
+        gini_regrets.append(gini_sum)
+
+    return gini_regrets
 
 
 """

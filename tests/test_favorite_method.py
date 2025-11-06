@@ -9,9 +9,16 @@ from desdeo.problem import (
     objective_dict_to_numpy_array,
 )
 
+@pytest.mark.favorite
+def test_fairness_funcs():
+    pass
+
 
 @pytest.mark.favorite
-def test_find_group_solutions():
+def test_favorite_method_iteration():
+    """
+    Test favorite_method iteration, includes both get_representative_set and finding fair group solutions.
+    """
 
     dtlz2_problem = dtlz2(8, 3)
     ideal = dtlz2_problem.get_ideal_point()
@@ -34,9 +41,9 @@ def test_find_group_solutions():
         version="convex_hull"
         # version="fake"
     )
-    # df, res = get_representative_set(dtlz2_problem, options)
-    eval_points = get_representative_set(dtlz2_problem, options)
-    assert eval_points is not None
+    df, res = get_representative_set(dtlz2_problem, options)
+    assert res is not None
+    # TODO: check for correct types in res
 
     # need to scale the mpses for fairness
     mps = {}
@@ -49,14 +56,14 @@ def test_find_group_solutions():
         rp_arr.append(objective_dict_to_numpy_array(dtlz2_problem, mps[dm]).tolist())
     normalized_most_preferred_solutions = rp_arr
 
-    solution_selector = "regret"
-    aggregator = "sum"
-    fair_sols = find_group_solutions(dtlz2_problem, eval_points, normalized_most_preferred_solutions, solution_selector, aggregator)
+    solution_selector = ["regret"]
+    fair_sols = find_group_solutions(dtlz2_problem, res.evaluated_points, normalized_most_preferred_solutions, solution_selector)
     print(fair_sols)
 
     assert fair_sols is not None
+    assert False
 
 
 @pytest.mark.favorite
-def test_shift_fakenadir():
+def test_zooming():
     pass
