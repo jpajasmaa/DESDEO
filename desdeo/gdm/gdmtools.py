@@ -1,7 +1,7 @@
 """ This module contains tools for group decision making such as manipulating set of preferences. """
 
 from desdeo.problem import Problem
-
+from numba import njit  # type: ignore
 
 import numpy as np
 
@@ -48,6 +48,76 @@ def scale_delta(problem: Problem, d: float):
     return delta
 
 
+def get_top_n_fair_solutions(solutions, fairness_values, n):
+    idxs = np.argpartition(fairness_values, -n)[-n:]
+    fair_sols = []
+    for i in range(n):
+        fair_sols.append(solutions[idxs[i]])
+    return fair_sols
+
+# TODO: comments
+def scale_rp(problem: Problem, reference_point, ideal, nadir, maximize):
+    """Scales a reference point to [0,1]"""
+    rp = {}
+    # ideal = problem.get_ideal_point()
+    # nadir = problem.get_nadir_point()
+
+    # scaling to [0,1], when maximizing objective functions
+    for obj in problem.objectives:
+        if maximize:
+            rp.update({obj.symbol: (reference_point[obj.symbol] - nadir[obj.symbol]) / (ideal[obj.symbol] - nadir[obj.symbol])})
+        else:
+            rp.update({obj.symbol: (reference_point[obj.symbol] - ideal[obj.symbol]) / (nadir[obj.symbol] - ideal[obj.symbol])})  # when minimizing
+    return rp
+
+
+"""
+%Compute regret values
+MDutility=zeros(n,3);
+for i=1:n
+        MDutility(i, 1)=sum(max(zeros(1,3),X(i,:)-A(1,:))); p = 0
+        MDutility(i, 2)=sum(max(zeros(1,3),X(i,:)-A(2,:))); p = 1
+        MDutility(i, 3)=sum(max(zeros(1,3),X(i,:)-A(3,:))); p = 2
+end
+"""
+# for i in n solutions and for each p in P DMs. returns the regret values as a list of each P DMs.
+# So for 3 DMs, returns [p1, p2, p3]
+# The larger the value is, the more regret the DM has
+# Numba goes BRRRRRT
+@njit()
+def MDutility_allDMs(sol, mpses):
+    uf_arr = []  # convert to numpy later for numba
+
+    print(sol)
+    zeros = np.zeros(len(sol))
+
+    for p in range(len(mpses)):
+        uf_arr.append(np.sum(np.maximum(zeros, sol - mpses[p])))  # improvements do not count
+        # uf_arr.append(np.sum(sol - mpses[p]))  # improvements do count
+
+    return uf_arr
+
+# X: all solutions
+# P: MPSes
+# all solutions, MPSes, everything have to be scaled and converted to minimization
+def uf_total_sum(all_sols, mpses):
+
+    sum_regrets = []
+    for i in range(len(all_sols)):
+        per_sol = MDutility_allDMs(all_sols[i], mpses)
+        print(per_sol)
+
+        # TODO: call fairness func to aggreate here. Now just taking the min-max.
+        sum_regrets.append(min(per_sol))  # minmax
+        # sum_regrets.append(sum(per_sol))  # sum max
+        # sum_regrets.append(1/3*sum(per_sol))  # avg max
+    return sum_regrets
+
+
+"""
+OLD VERSION
+"""
+
 # OK Juergen UFs just provide for each solution i in n, and for k in objs, a regret value of the DMs.
 #
 #
@@ -83,47 +153,6 @@ def PUtility(i, p, k, X, P, rw, pdw, maximizing=False):
         s_term = X[i, k] - P[p, k]
     maxterm = np.max((f_term, s_term))  # if wanting to maximize utility, multiply by -1.
     return pdw[p, k] * maxterm
-
-
-"""
-%Compute regret values
-MDutility=zeros(n,3);
-for i=1:n
-        MDutility(i, 1)=sum(max(zeros(1,3),X(i,:)-A(1,:))); p = 0
-        MDutility(i, 2)=sum(max(zeros(1,3),X(i,:)-A(2,:))); p = 1
-        MDutility(i, 3)=sum(max(zeros(1,3),X(i,:)-A(3,:))); p = 2
-end
-"""
-# for i in n solutions and for each p in P DMs. returns the regret values as a list of each P DMs.
-# So for 3 DMs, returns [p1, p2, p3]
-def MDutility_allDMs(sol, mpses, rw, pdw):
-    uf_arr = []  # convert to numpy later for numba
-
-    Q, K = sol.shape[0], sol.shape[1]
-    zeros = np.zeros(len(K))
-
-    for p in range(len(mpses)):
-        uf_arr.append(np.sum(np.max(zeros, sol - mpses[p])))
-
-    return uf_arr
-
-# X: all solutions
-# P: MPSes
-# all solutions, MPSes, everything have to be scaled and converted to minimization
-def uf_total_sum(X, P, rw, pdw, maximize=False):
-
-    sum_regrets = []
-    for i in range(len(X)):
-        # could just return the list here
-        # per_sol = []
-        # for q in range(len(P)):
-        #    per_sol.append(MDutility_allDMs(X[i], P[q], rw, pdw, maximize))
-        per_sol = MDutility_allDMs(X[i], P, rw, pdw)
-        print(per_sol)
-
-        # TODO: call fairness func to aggreate here. Now just taking the sum.
-        sum_regrets.append(sum(per_sol))
-    return sum_regrets
 
 
 def UF_total_sum(i, p, X, P, rw, pdw, maximize=False):
@@ -175,25 +204,3 @@ def solve_UFs(X: np.ndarray, P: np.ndarray, rw: float, pdw: np.ndarray | None, a
     print(len(UF_ws))
 
     return UF_vals, UF_ws
-
-def get_top_n_fair_solutions(solutions, UF_ws, n):
-    idxs = np.argpartition(UF_ws, -n)[-n:]
-    fair_sols = []
-    for i in range(n):
-        fair_sols.append(solutions[idxs[i]])
-    return fair_sols
-
-# TODO: comments
-def scale_rp(problem: Problem, reference_point, ideal, nadir, maximize):
-    """Scales a reference point to [0,1]"""
-    rp = {}
-    # ideal = problem.get_ideal_point()
-    # nadir = problem.get_nadir_point()
-
-    # scaling to [0,1], when maximizing objective functions
-    for obj in problem.objectives:
-        if maximize:
-            rp.update({obj.symbol: (reference_point[obj.symbol] - nadir[obj.symbol]) / (ideal[obj.symbol] - nadir[obj.symbol])})
-        else:
-            rp.update({obj.symbol: (reference_point[obj.symbol] - ideal[obj.symbol]) / (nadir[obj.symbol] - ideal[obj.symbol])})  # when minimizing
-    return rp
