@@ -49,6 +49,14 @@ def scale_delta(problem: Problem, d: float):
 
 
 def get_top_n_fair_solutions(solutions, fairness_values, n):
+    """
+    Numpy docs about argpartition: The returned indices are not guaranteed to be sorted according to the values. Furthermore, 
+    the default selection algorithm introselect is unstable, and hence the returned indices are not guaranteed to be 
+    the earliest/latest occurrence of the element.
+
+    Basically this may fuck up
+    TODO: should be only used in getting all the solutions?
+    """
     idxs = np.argpartition(fairness_values, -n)[-n:]
     fair_sols = []
     for i in range(n):
@@ -90,7 +98,6 @@ end
 def regret_allDMs(sol, mpses):
     uf_arr = []  # convert to numpy later for numba
 
-    print(sol)
     zeros = np.zeros(len(sol))
 
     for p in range(len(mpses)):
@@ -99,16 +106,43 @@ def regret_allDMs(sol, mpses):
 
     return uf_arr
 
+@njit()
+def regret_allDMs_max(sol, mpses):
+    uf_arr = []  # convert to numpy later for numba
+
+    ones = np.ones(len(sol))
+
+    for p in range(len(mpses)):
+        uf_arr.append(np.sum(np.minimum(ones, sol - mpses[p])))  # improvements do not count
+        # uf_arr.append(np.sum(np.maximum(ones, sol - mpses[p])))  # improvements do not count
+        # uf_arr.append(np.max(sol - mpses[p]))  # improvements do count
+
+    return uf_arr
+
+
 # X: all solutions
 # P: MPSes
 # all solutions, MPSes, everything have to be scaled and converted to minimization
-def min_max_regret(all_sols, mpses):
+def min_max_regret_no_impro(all_sols, mpses):
     min_regrets = []
     for i in range(len(all_sols)):
         per_sol = regret_allDMs(all_sols[i], mpses)
+        # per_sol = regret_allDMs(all_sols[i], mpses)
 
         min_regrets.append(min(per_sol))  # minmax
     return min_regrets
+
+# X: all solutions
+# P: MPSes
+# all solutions, MPSes, everything have to be scaled and converted to minimization
+def max_min_regret(all_sols, mpses):
+    max_min_regrets = []
+    for i in range(len(all_sols)):
+        per_sol = regret_allDMs_max(all_sols[i], mpses)
+        # per_sol = regret_allDMs(all_sols[i], mpses)
+
+        max_min_regrets.append(max(per_sol))  # minmax
+    return max_min_regrets
 
 
 def average_pareto_regret(all_sols, mpses):

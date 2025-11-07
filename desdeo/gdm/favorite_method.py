@@ -19,8 +19,10 @@ from desdeo.tools.generics import EMOResult, SolverResults
 from sys import version
 import pydantic
 from pydantic import Field, ConfigDict
-from desdeo.gdm.gdmtools import (dict_of_rps_to_list_of_rps, agg_aspbounds, scale_rp, get_top_n_fair_solutions,
-                                 min_max_regret, average_pareto_regret, inequality_in_pareto_regret)
+from desdeo.gdm.gdmtools import (dict_of_rps_to_list_of_rps, agg_aspbounds, min_max_regret_no_impro, scale_rp, get_top_n_fair_solutions,
+                                 max_min_regret, min_max_regret_no_impro, average_pareto_regret, inequality_in_pareto_regret)
+
+from desdeo.gdm.preference_aggregation import find_GRP
 
 
 # TODO: now for easier testing. REMOVE THIS GLOBAL VAR
@@ -54,8 +56,16 @@ def visualize_3d(options, evaluated_points, fair_sols, n):
         y=front["f_2"].to_numpy(),
         z=front["f_3"].to_numpy(),
         mode="markers", name="Front", marker_symbol="circle", opacity=0.9)
-    # Add DMs RPs
-
+    fig = fig.add_scatter3d(
+        x=[options.fake_ideal["f_1"]],
+        y=[options.fake_ideal["f_2"]],
+        z=[options.fake_ideal["f_3"]],
+        mode="markers", name="fake_ideal", marker_symbol="diamond", opacity=0.9)
+    fig = fig.add_scatter3d(
+        x=[options.fake_nadir["f_1"]],
+        y=[options.fake_nadir["f_2"]],
+        z=[options.fake_nadir["f_3"]],
+        mode="markers", name="fake_nadir", marker_symbol="diamond", opacity=0.9)
     DMs = options.most_preferred_solutions.keys()
     for dm in DMs:
         fig = fig.add_scatter3d(
@@ -69,7 +79,7 @@ def visualize_3d(options, evaluated_points, fair_sols, n):
         x=fair_sols[:n, 0],
         y=fair_sols[:n, 1],
         z=fair_sols[:n, 2],
-        mode="markers", name="min_regret", marker_symbol="x", opacity=0.9)
+        mode="markers", name="min_regret_no_impro", marker_symbol="x", opacity=0.9)
 
     fig = fig.add_scatter3d(
         x=fair_sols[n:n+n, 0],
@@ -82,6 +92,18 @@ def visualize_3d(options, evaluated_points, fair_sols, n):
         y=fair_sols[2*n:3*n, 1],
         z=fair_sols[2*n:3*n, 2],
         mode="markers", name="gini_regret", marker_symbol="x", opacity=0.9)
+
+    fig = fig.add_scatter3d(
+        x=fair_sols[3*n:4*n, 0],
+        y=fair_sols[3*n:4*n, 1],
+        z=fair_sols[3*n:4*n, 2],
+        mode="markers", name="maxmin_regret", marker_symbol="x", opacity=0.9)
+
+    fig = fig.add_scatter3d(
+        x=fair_sols[4*n:, 0],
+        y=fair_sols[4*n:, 1],
+        z=fair_sols[4*n:, 2],
+        mode="markers", name="cones", marker_symbol="x", opacity=0.9)
 
     """
     fig.update_layout(
@@ -195,7 +217,7 @@ def find_group_solutions(problem: Problem, evaluated_points: list[_EvaluatedPoin
     # Regret UFs, no achievement for aspiration. Sum over DMs.
 
     # Regret UFs, no achievement for aspiration. Take the DM that is worst-off. Min()
-    min_regrets = min_max_regret(norm_eval_sols, norm_mps_arr)
+    min_regrets = min_max_regret_no_impro(norm_eval_sols, norm_mps_arr)
     print("min regrets:", min_regrets)
 
     # Avererage Pareto regret
@@ -206,20 +228,51 @@ def find_group_solutions(problem: Problem, evaluated_points: list[_EvaluatedPoin
     gini_regrets = inequality_in_pareto_regret(norm_eval_sols, norm_mps_arr)
     print("gini pareto regrets:", gini_regrets)
 
+    # maxmin in pareto regret
+    maxmin_regrets = max_min_regret(norm_eval_sols, norm_mps_arr)
+    print("maxmin regrets:", maxmin_regrets)
+
     # UF_vals, UF_agg = solve_UFs(norm_eval_sols, norm_mps_arr, rw, None, aggregator, maximize)
 
     # Regret UFs, no achievement for aspiration. Take the DM that is best-off. Max()
     min_r = get_top_n_fair_solutions(eval_sols_in_objs, min_regrets, n)
-    # top_fair = np.stack(get_top_n_fair_solutions(eval_sols_in_objs, min_regrets, n))
-
     avg_r = get_top_n_fair_solutions(eval_sols_in_objs, avg_regrets, n)
-
     gini_r = get_top_n_fair_solutions(eval_sols_in_objs, gini_regrets, n)
+    # TODO: find out what is the bug here. returns arrays
+    mm_r = get_top_n_fair_solutions(eval_sols_in_objs, maxmin_regrets, n)
 
-    top_fair = np.concatenate((min_r, avg_r, gini_r))
+    """
+    Maxmin-cones
+    """
+    cip = np.array([np.max(norm_mps_arr[:, 0]) + 0.001, np.max(norm_mps_arr[:, 1]) + 0.001, np.max(norm_mps_arr[:, 2]) + 0.001])
+    ideal_arr = np.array([np.min(norm_mps_arr[:, 0]), np.min(norm_mps_arr[:, 1]), np.min(norm_mps_arr[:, 2])])
+
+    k = 3
+    q = 3
+    pa = "maxmin_cones"
+    all_rps = norm_mps_arr
+    GRP, _ = find_GRP(all_rps, cip, k, q, ideal_arr, cip, pa)
+    print("MAXMIN cones GRP", GRP)
+    # Find PO solution with conesGRP
+    GRP_dict = {"f_1": GRP[0], "f_2": GRP[1], "f_3": GRP[2]}
+
+    p, target = add_asf_diff(
+        dtlz2_problem,
+        symbol=f"asf",
+        reference_point=GRP_dict,
+    )
+    # scaled_problem, target = add_asf_diff(self.problem, "asf", refp)
+    solver = PyomoIpoptSolver(p)
+    res = solver.solve(target)
+    fs = res.optimal_objectives
+    GRP_po = objective_dict_to_numpy_array(problem, fs)
+
+    top_fair = np.concatenate((min_r, avg_r, gini_r, mm_r, [GRP_po]))
     # top_fair = np.stack(top_fair)
 
-    return top_fair
+    regret_values = {"min": min_regrets, "avg": avg_regrets, "gini": gini_regrets, "mm": mm_r, "cones": GRP_po}
+
+    return top_fair, regret_values
 
 
 def shift_points(problem: Problem, most_preferred_solutions, group_preferred_solution: dict[str, float], steps_remaining):
@@ -393,11 +446,36 @@ if __name__ == "__main__":
     ideal = dtlz2_problem.get_ideal_point()
     nadir = dtlz2_problem.get_nadir_point()
 
+    n_of_dms = 3
+
     evaluated_points = []
     most_preferred_solutions = {'DM1': {'f_1': 0.17049589013991726, 'f_2': 0.17049589002331159, 'f_3': 0.9704959056742878},
                                 'DM2': {'f_1': 0.17049589008489896, 'f_2': 0.9704959056849697, 'f_3': 0.17049589001752685},
                                 'DM3': {'f_1': 0.9704959057874635, 'f_2': 0.17049588971897997, 'f_3': 0.1704958898000307}}
+# random rps
+    """
+    reference_points = {}
+    for i in range(n_of_dms):
+        reference_points[f"DM{i+1}"] = {"f_1": np.random.random(), "f_2": np.random.random(), "f_3": np.random.random()}
 
+    print(reference_points)
+    from desdeo.tools.scalarization import add_asf_nondiff, add_asf_diff
+    from desdeo.tools import ProximalSolver, GurobipySolver, PyomoIpoptSolver
+
+    most_preferred_solutions = {}
+    DMs = reference_points.keys()
+    for dm in DMs:
+        p, target = add_asf_diff(
+            dtlz2_problem,
+            symbol=f"asf",
+            reference_point=reference_points[dm],
+        )
+        solver = PyomoIpoptSolver(p)
+        res = solver.solve(target)
+        fs = res.optimal_objectives
+        most_preferred_solutions[f"{dm}"] = fs
+    
+    """
     most_preferred_solutions_list = dict_of_rps_to_list_of_rps(most_preferred_solutions)
 
     # TODO: get fake_ideal and fake_nadir to get started!
@@ -439,10 +517,23 @@ if __name__ == "__main__":
 
     # TODO: fix pseudocode. This is the idea, but now we would need to call the polars expression versions of these.
     # fair_sols.append(find_group_solutions(dtlz2_problem, method_res.evaluated_points, most_preferred_solutions_list, "regret", "sum"))
-    fair_sols = find_group_solutions(dtlz2_problem, method_res.evaluated_points,
-                                     rp_arr, selectors=fairness_metrics, n=n)
+    fair_sols, regret_values_dict = find_group_solutions(dtlz2_problem, method_res.evaluated_points,
+                                                         rp_arr, selectors=fairness_metrics, n=n)
 
     print("fair sols:", fair_sols)
+
+    """
+    fairmm = regret_values_dict["mm"]
+    # fairmm = regret_values_dict["min"]
+    print(fairmm)
+
+    y = np.linspace(min(fairmm), max(fairmm), 100)
+    x = fairmm
+    print(min(fairmm), max(fairmm))
+    fig = ex.scatter(x, y)
+    # fig.write_image(f"/home/jp/tyot/mop/desdeo/DESDEO/experiment/code/generic_method/fairness_tests/fairlinmm.png")
+    fig.show("browser")
+    """
 
     visualize_3d(options, method_res.evaluated_points, fair_sols, n)
 
@@ -494,8 +585,8 @@ if __name__ == "__main__":
     # print(method_res.fair_solutions)
     # TODO: fix pseudocode. This is the idea, but now we would need to call the polars expression versions of these.
     # fair_sols.append(find_group_solutions(dtlz2_problem, method_res.evaluated_points, most_preferred_solutions_list, "regret", "sum"))
-    fair_sols = find_group_solutions(dtlz2_problem, method_res2.evaluated_points,
-                                     shifted_rp_arr, selectors=fairness_metrics, n=n)
+    fair_sols, regret_values_dict = find_group_solutions(dtlz2_problem, method_res2.evaluated_points,
+                                                         shifted_rp_arr, selectors=fairness_metrics, n=n)
 
     print("fair sols after shrinking:", fair_sols)
 
