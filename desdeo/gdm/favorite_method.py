@@ -26,7 +26,74 @@ from desdeo.gdm.gdmtools import (dict_of_rps_to_list_of_rps, agg_aspbounds, alph
 
 
 # TODO: now for easier testing. REMOVE THIS GLOBAL VAR
-num_of_runs = 100
+num_of_runs = 10
+
+# TODO: create two versions with version1 options and version2 options
+
+class IPR_Options(pydantic.BaseModel):
+    """Options for iterative_pareto_representer applied with the favorite method."""
+    fake_ideal: dict[str, float | None]
+    """fake ideal"""
+    fake_nadir: dict[str, float | None]
+    most_preferred_solutions: dict[str, dict[str, float]]
+    """What about DMs' RPs? To be normalized!"""
+    total_points: int
+    """Big number"""
+    num_points_to_evaluate: int
+    """How many points to evaluate. Not so large number"""
+    EvaluatedPoints: list[_EvaluatedPoint]
+    """List of EvaluatedPoints from IPR."""
+    version: str
+    """Version 1: evaluate in the convex hull of MPS. Version 2: evaluate in the box of fake_ideal and fake_nadir."""
+    # fairness_metrics: list[str]
+
+class IPR_OptionsV1(pydantic.BaseModel):
+    """Options for iterative_pareto_representer applied with the favorite method."""
+    most_preferred_solutions: dict[str, dict[str, float]]
+    """What about DMs' RPs? To be normalized!"""
+    total_points: int
+    """Big number"""
+    num_points_to_evaluate: int
+    """How many points to evaluate. Not so large number"""
+    EvaluatedPoints: list[_EvaluatedPoint]
+
+
+class IPR_OptionsV2(pydantic.BaseModel):
+    """Options for iterative_pareto_representer applied with the favorite method."""
+    fake_ideal: dict[str, float | None]
+    """fake ideal"""
+    fake_nadir: dict[str, float | None]
+    """What about DMs' RPs? To be normalized!"""
+    total_points: int
+    """Big number"""
+    num_points_to_evaluate: int
+    """How many points to evaluate. Not so large number"""
+    EvaluatedPoints: list[_EvaluatedPoint]
+
+
+# class IPR_Results(pydantic.BaseModel):
+#    model_config = ConfigDict(arbitrary_types_allowed=True, use_attribute_docstrings=True)
+#    evaluated_points: str = Field("The evaluated points.")  # I dont know how to use this properly.
+
+class IPR_Results(pydantic.BaseModel):
+    #    model_config = ConfigDict(arbitrary_types_allowed=True, use_attribute_docstrings=True)
+    evaluated_points: list[_EvaluatedPoint]  # I dont know how to use this properly.
+    most_preferred_solutions: dict[str, dict[str, float]]
+    # fair_solutions: list[dict[str, float]]  # TODO: decide the type
+    # fair_solutions: list  # TODO: decide the type
+    # fairness_metrics: list[str]  # string to indicate the fair solution type
+
+
+# IMPLEMENt below to tag the solutions in find fair solutions?
+class FairSolution(pydantic.BaseModel):
+    objective_values: dict[str, float]
+    fairness_criterion: str
+    # fairness_value: float # could add fairness value of this solution.
+
+
+# TODO: move to some template file etc. Handle EMOOptions for IOPIS
+MethodOptions = IPR_Options  # | EMOOptions
+MethodResults = IPR_Results  # | EMOResult
 
 
 def visualize_3d(options, evaluated_points, fair_sols, n):
@@ -188,7 +255,7 @@ class ProblemWrapper():
 
 # TODO: this to be re-written after UFs are implemented as polars expressions
 def find_group_solutions(problem: Problem, evaluated_points: list[_EvaluatedPoint], mps: list[np.ndarray],
-                         selectors: list[str], n: int = 3):
+                         selectors: list[str], n: int = 1) -> tuple[list[FairSolution], list[float]]:
     """Find n fair group solutions according to different fairness criteria.
         Assumes everything has been properly converted to minimization already.
         TODO: extend to return any amount of fair solutions with some order such as:
@@ -200,6 +267,7 @@ def find_group_solutions(problem: Problem, evaluated_points: list[_EvaluatedPoin
 
         mps must be np array for the below code !
 
+        Returns a list of FairSolutions
     """
 
     # TODO: normalize the MPSses
@@ -260,6 +328,8 @@ def find_group_solutions(problem: Problem, evaluated_points: list[_EvaluatedPoin
     print("nash regrets no impro:", min(nash), max(nash))
 
     # Regret UFs, no achievement for aspiration. Take the DM that is best-off. Max()
+    #
+    # TODO: to get fairness values for each solution, this topfair should also return the index.
     min_r_no = get_top_n_fair_solutions(eval_sols_in_objs, min_no_regrets, n)
     util_r = get_top_n_fair_solutions(eval_sols_in_objs, utilitarian, n)
     min_r = get_top_n_fair_solutions(eval_sols_in_objs, min_regrets, n)
@@ -300,11 +370,18 @@ def find_group_solutions(problem: Problem, evaluated_points: list[_EvaluatedPoin
     # top_fair = np.concatenate((min_r_no, min_r, avg_r, gini_r, util_r, nash_r, [GRP_po]))
     top_fair = np.concatenate((min_r_no, min_r, avg_r, gini_r, util_r, nash_r))
     # top_fair = np.stack(top_fair)
+    fairness_criteria = ["min_no", "min", "avg", "gini", "util", "nash"]  # need to get this elsewhere
+    top_fair_arr = []
+    for i, fair_solution in enumerate(top_fair):
+        fair_sol = FairSolution(objective_values=numpy_array_to_objective_dict(problem, fair_solution), fairness_criterion=fairness_criteria[i])
+        top_fair_arr.append(fair_sol)
 
     regret_values = {"min_no": min_no_regrets, "min": min_regrets, "avg": avg_regrets, "gini": gini_regrets,
                      "util": utilitarian, "nash": nash, }  # "cones": GRP_po}
 
-    return top_fair, regret_values
+    print(top_fair_arr)
+
+    return top_fair_arr, regret_values
 
 
 def shift_points(problem: Problem, most_preferred_solutions, group_preferred_solution: dict[str, float], steps_remaining):
@@ -323,67 +400,6 @@ def shift_points(problem: Problem, most_preferred_solutions, group_preferred_sol
         shifted_mps.update({dm: res.optimal_objectives})
 
     return shifted_mps
-
-
-# TODO: create two versions with version1 options and version2 options
-
-class IPR_Options(pydantic.BaseModel):
-    """Options for iterative_pareto_representer applied with the favorite method."""
-    fake_ideal: dict[str, float | None]
-    """fake ideal"""
-    fake_nadir: dict[str, float | None]
-    most_preferred_solutions: dict[str, dict[str, float]]
-    """What about DMs' RPs? To be normalized!"""
-    total_points: int
-    """Big number"""
-    num_points_to_evaluate: int
-    """How many points to evaluate. Not so large number"""
-    EvaluatedPoints: list[_EvaluatedPoint]
-    """List of EvaluatedPoints from IPR."""
-    version: str
-    """Version 1: evaluate in the convex hull of MPS. Version 2: evaluate in the box of fake_ideal and fake_nadir."""
-    # fairness_metrics: list[str]
-
-class IPR_OptionsV1(pydantic.BaseModel):
-    """Options for iterative_pareto_representer applied with the favorite method."""
-    most_preferred_solutions: dict[str, dict[str, float]]
-    """What about DMs' RPs? To be normalized!"""
-    total_points: int
-    """Big number"""
-    num_points_to_evaluate: int
-    """How many points to evaluate. Not so large number"""
-    EvaluatedPoints: list[_EvaluatedPoint]
-
-
-class IPR_OptionsV2(pydantic.BaseModel):
-    """Options for iterative_pareto_representer applied with the favorite method."""
-    fake_ideal: dict[str, float | None]
-    """fake ideal"""
-    fake_nadir: dict[str, float | None]
-    """What about DMs' RPs? To be normalized!"""
-    total_points: int
-    """Big number"""
-    num_points_to_evaluate: int
-    """How many points to evaluate. Not so large number"""
-    EvaluatedPoints: list[_EvaluatedPoint]
-
-
-# class IPR_Results(pydantic.BaseModel):
-#    model_config = ConfigDict(arbitrary_types_allowed=True, use_attribute_docstrings=True)
-#    evaluated_points: str = Field("The evaluated points.")  # I dont know how to use this properly.
-
-class IPR_Results(pydantic.BaseModel):
-    #    model_config = ConfigDict(arbitrary_types_allowed=True, use_attribute_docstrings=True)
-    evaluated_points: list[_EvaluatedPoint]  # I dont know how to use this properly.
-    most_preferred_solutions: dict[str, dict[str, float]]
-    # fair_solutions: list[dict[str, float]]  # TODO: decide the type
-    # fair_solutions: list  # TODO: decide the type
-    # fairness_metrics: list[str]  # string to indicate the fair solution type
-
-
-# TODO: move to some template file etc. Handle EMOOptions for IOPIS
-MethodOptions = IPR_Options  # | EMOOptions
-MethodResults = IPR_Results  # | EMOResult
 
 # evaluated_points: list(_EvaluatedPoint) = Field("The evaluated points.")
 
