@@ -19,10 +19,10 @@ from desdeo.tools.generics import EMOResult, SolverResults
 from sys import version
 import pydantic
 from pydantic import Field, ConfigDict
-from desdeo.gdm.gdmtools import (dict_of_rps_to_list_of_rps, agg_aspbounds, min_max_regret_no_impro, scale_rp, get_top_n_fair_solutions,
+from desdeo.gdm.gdmtools import (dict_of_rps_to_list_of_rps, agg_aspbounds, alpha_fairness, min_max_regret, min_max_regret_no_impro, scale_rp, get_top_n_fair_solutions,
                                  max_min_regret, min_max_regret_no_impro, average_pareto_regret, inequality_in_pareto_regret)
 
-from desdeo.gdm.preference_aggregation import find_GRP
+# from desdeo.gdm.preference_aggregation import find_GRP
 
 
 # TODO: now for easier testing. REMOVE THIS GLOBAL VAR
@@ -85,24 +85,35 @@ def visualize_3d(options, evaluated_points, fair_sols, n):
         x=fair_sols[n:n+n, 0],
         y=fair_sols[n:n+n, 1],
         z=fair_sols[n:n+n, 2],
-        mode="markers", name="avg_regret", marker_symbol="x", opacity=0.9)
+        mode="markers", name="min_regret", marker_symbol="x", opacity=0.9)
 
     fig = fig.add_scatter3d(
         x=fair_sols[2*n:3*n, 0],
         y=fair_sols[2*n:3*n, 1],
         z=fair_sols[2*n:3*n, 2],
-        mode="markers", name="gini_regret", marker_symbol="x", opacity=0.9)
+        mode="markers", name="avg_regret", marker_symbol="x", opacity=0.9)
 
     fig = fig.add_scatter3d(
         x=fair_sols[3*n:4*n, 0],
         y=fair_sols[3*n:4*n, 1],
         z=fair_sols[3*n:4*n, 2],
-        mode="markers", name="maxmin_regret", marker_symbol="x", opacity=0.9)
+        mode="markers", name="gini_regret", marker_symbol="x", opacity=0.9)
 
     fig = fig.add_scatter3d(
-        x=fair_sols[4*n:, 0],
-        y=fair_sols[4*n:, 1],
-        z=fair_sols[4*n:, 2],
+        x=fair_sols[4*n:5*n, 0],
+        y=fair_sols[4*n:5*n, 1],
+        z=fair_sols[4*n:5*n, 2],
+        mode="markers", name="utilitarian", marker_symbol="x", opacity=0.9)
+    fig = fig.add_scatter3d(
+        x=fair_sols[5*n:6*n, 0],
+        y=fair_sols[5*n:6*n, 1],
+        z=fair_sols[5*n:6*n, 2],
+        mode="markers", name="nash", marker_symbol="x", opacity=0.9)
+
+    fig = fig.add_scatter3d(
+        x=fair_sols[6*n:, 0],
+        y=fair_sols[6*n:, 1],
+        z=fair_sols[6*n:, 2],
         mode="markers", name="cones", marker_symbol="x", opacity=0.9)
 
     """
@@ -217,41 +228,59 @@ def find_group_solutions(problem: Problem, evaluated_points: list[_EvaluatedPoin
     # Regret UFs, no achievement for aspiration. Sum over DMs.
 
     # Regret UFs, no achievement for aspiration. Take the DM that is worst-off. Min()
-    min_regrets = min_max_regret_no_impro(norm_eval_sols, norm_mps_arr)
-    print("min regrets:", min_regrets)
+    min_no_regrets = min_max_regret_no_impro(norm_eval_sols, norm_mps_arr)
+    print("min regrets no impro:", min(min_no_regrets), max(min_no_regrets))
+
+    # Regret UFs, achievement for aspiration.
+    min_regrets = min_max_regret(norm_eval_sols, norm_mps_arr)
+    print("chebyshev regret:", min(min_regrets), max(min_regrets))
 
     # Avererage Pareto regret
     avg_regrets = average_pareto_regret(norm_eval_sols, norm_mps_arr)
-    print("avg pareto regrets:", avg_regrets)
+    print("avg pareto regrets:", min(avg_regrets), max(avg_regrets))
 
     # inequality in pareto regret
     gini_regrets = inequality_in_pareto_regret(norm_eval_sols, norm_mps_arr)
-    print("gini pareto regrets:", gini_regrets)
+    print("gini pareto regrets:", min(gini_regrets), max(gini_regrets))
 
     # maxmin in pareto regret
-    maxmin_regrets = max_min_regret(norm_eval_sols, norm_mps_arr)
-    print("maxmin regrets:", maxmin_regrets)
+    # maxmin_regrets = max_min_regret(norm_eval_sols, norm_mps_arr)
+    # print("maxmin regrets:", maxmin_regrets)
 
-    # UF_vals, UF_agg = solve_UFs(norm_eval_sols, norm_mps_arr, rw, None, aggregator, maximize)
+    # alpha fairness with pareto regret
+    # alpha_regrets = alpha_fairness(norm_eval_sols, norm_mps_arr, alpha=0)
+    # print("alpha regrets:", alpha_regrets)
+
+    # lets test different values for alpha
+    # min_no_regrets = alpha_fairness(norm_eval_sols, norm_mps_arr, alpha=0.0)  # should match to the utilitarian fairness
+    utilitarian = alpha_fairness(norm_eval_sols, norm_mps_arr, alpha=0.0)  # some midway between nash and utilitarian
+    print("utilitarian regrets no impro:", min(utilitarian), max(utilitarian))
+    # avg_regrets = alpha_fairness(norm_eval_sols, norm_mps_arr, alpha=1)  # should match Nash (proportionally fair)
+    nash = alpha_fairness(norm_eval_sols, norm_mps_arr, alpha=1)  # alpha goes to infinity matches maxmin fair.
+    print("nash regrets no impro:", min(nash), max(nash))
 
     # Regret UFs, no achievement for aspiration. Take the DM that is best-off. Max()
+    min_r_no = get_top_n_fair_solutions(eval_sols_in_objs, min_no_regrets, n)
+    util_r = get_top_n_fair_solutions(eval_sols_in_objs, utilitarian, n)
     min_r = get_top_n_fair_solutions(eval_sols_in_objs, min_regrets, n)
     avg_r = get_top_n_fair_solutions(eval_sols_in_objs, avg_regrets, n)
     gini_r = get_top_n_fair_solutions(eval_sols_in_objs, gini_regrets, n)
+    nash_r = get_top_n_fair_solutions(eval_sols_in_objs, nash, n)
     # TODO: find out what is the bug here. returns arrays
-    mm_r = get_top_n_fair_solutions(eval_sols_in_objs, maxmin_regrets, n)
+    # alpha_r = get_top_n_fair_solutions(eval_sols_in_objs, alpha_regrets, n)
 
     """
     Maxmin-cones
-    """
     cip = np.array([np.max(norm_mps_arr[:, 0]) + 0.001, np.max(norm_mps_arr[:, 1]) + 0.001, np.max(norm_mps_arr[:, 2]) + 0.001])
     ideal_arr = np.array([np.min(norm_mps_arr[:, 0]), np.min(norm_mps_arr[:, 1]), np.min(norm_mps_arr[:, 2])])
 
     k = 3
     q = 3
-    pa = "maxmin_cones"
+    pa = "eq_maxmin_cones"
+    # pa = "eq_maxmin"
     all_rps = norm_mps_arr
-    GRP, _ = find_GRP(all_rps, cip, k, q, ideal_arr, cip, pa)
+    GRP, _ = find_GRP(all_rps, cip, k, q, ideal_arr, all_rps, pa)
+    # GRP = GRP - cip
     print("MAXMIN cones GRP", GRP)
     # Find PO solution with conesGRP
     GRP_dict = {"f_1": GRP[0], "f_2": GRP[1], "f_3": GRP[2]}
@@ -267,10 +296,13 @@ def find_group_solutions(problem: Problem, evaluated_points: list[_EvaluatedPoin
     fs = res.optimal_objectives
     GRP_po = objective_dict_to_numpy_array(problem, fs)
 
-    top_fair = np.concatenate((min_r, avg_r, gini_r, mm_r, [GRP_po]))
+    """
+    # top_fair = np.concatenate((min_r_no, min_r, avg_r, gini_r, util_r, nash_r, [GRP_po]))
+    top_fair = np.concatenate((min_r_no, min_r, avg_r, gini_r, util_r, nash_r))
     # top_fair = np.stack(top_fair)
 
-    regret_values = {"min": min_regrets, "avg": avg_regrets, "gini": gini_regrets, "mm": mm_r, "cones": GRP_po}
+    regret_values = {"min_no": min_no_regrets, "min": min_regrets, "avg": avg_regrets, "gini": gini_regrets,
+                     "util": utilitarian, "nash": nash, }  # "cones": GRP_po}
 
     return top_fair, regret_values
 
@@ -411,14 +443,14 @@ def handle_zooming(problem: Problem, res: MethodResults, group_mps: dict[str, fl
     # TODO: switch cases for different versions.
     # Currently, gets get current ideal and current nadir from DMs' MPSses
     most_preferred_solutions = res.most_preferred_solutions  # most preferred solutions of current iteration
-    print(most_preferred_solutions)
+    # print(most_preferred_solutions)
     most_preferred_solutions_list = dict_of_rps_to_list_of_rps(most_preferred_solutions)
     fake_ideal, current_fake_nadir = agg_aspbounds(most_preferred_solutions_list, problem)  # we can get fake_nadir with calculate_navigation_point
-    print(fake_ideal, current_fake_nadir)
+    # print(fake_ideal, current_fake_nadir)
     fake_nadir = calculate_navigation_point(problem, current_fake_nadir, group_mps, steps_remaining)
 
     shifted_mps = shift_points(problem, most_preferred_solutions, group_mps, steps_remaining)
-    print(shifted_mps)
+    # print(shifted_mps)
 
     # steps_remaining = res.steps_remaining - 1
     # TODO: somewhere add check for steps_remaining need to be > 0
@@ -452,8 +484,8 @@ if __name__ == "__main__":
     most_preferred_solutions = {'DM1': {'f_1': 0.17049589013991726, 'f_2': 0.17049589002331159, 'f_3': 0.9704959056742878},
                                 'DM2': {'f_1': 0.17049589008489896, 'f_2': 0.9704959056849697, 'f_3': 0.17049589001752685},
                                 'DM3': {'f_1': 0.9704959057874635, 'f_2': 0.17049588971897997, 'f_3': 0.1704958898000307}}
-# random rps
     """
+# random rps
     reference_points = {}
     for i in range(n_of_dms):
         reference_points[f"DM{i+1}"] = {"f_1": np.random.random(), "f_2": np.random.random(), "f_3": np.random.random()}
@@ -474,7 +506,7 @@ if __name__ == "__main__":
         res = solver.solve(target)
         fs = res.optimal_objectives
         most_preferred_solutions[f"{dm}"] = fs
-    
+
     """
     most_preferred_solutions_list = dict_of_rps_to_list_of_rps(most_preferred_solutions)
 
@@ -500,8 +532,8 @@ if __name__ == "__main__":
      GET REPRESENTATIVE SET
     """
     df, method_res = get_representative_set(dtlz2_problem, options)
-    print(df["objectives"])
-    print(method_res.evaluated_points)
+    # print(df["objectives"])
+    # print(method_res.evaluated_points)
 
     mps = most_preferred_solutions
     rp_arr = []
@@ -522,10 +554,9 @@ if __name__ == "__main__":
 
     print("fair sols:", fair_sols)
 
-    """
-    fairmm = regret_values_dict["mm"]
+    fairmm = regret_values_dict["nash"]
     # fairmm = regret_values_dict["min"]
-    print(fairmm)
+    # print(fairmm)
 
     y = np.linspace(min(fairmm), max(fairmm), 100)
     x = fairmm
@@ -533,7 +564,6 @@ if __name__ == "__main__":
     fig = ex.scatter(x, y)
     # fig.write_image(f"/home/jp/tyot/mop/desdeo/DESDEO/experiment/code/generic_method/fairness_tests/fairlinmm.png")
     fig.show("browser")
-    """
 
     visualize_3d(options, method_res.evaluated_points, fair_sols, n)
 
@@ -574,9 +604,9 @@ if __name__ == "__main__":
     """
     # TODO: update the UFs, show new fair solutions and the loop continues
     df, method_res2 = get_representative_set(dtlz2_problem, new_iter_options)
-    print(new_iter_options)
-    print("new iter")
-    print(df["objectives"])
+    # print(new_iter_options)
+    # print("new iter")
+    # print(df["objectives"])
     # print(method_res)
 
     """
@@ -591,3 +621,14 @@ if __name__ == "__main__":
     print("fair sols after shrinking:", fair_sols)
 
     visualize_3d(new_iter_options, method_res2.evaluated_points, fair_sols, n)
+
+    fairmm = regret_values_dict["nash"]
+    # fairmm = regret_values_dict["min"]
+    print(fairmm)
+
+    y = np.linspace(min(fairmm), max(fairmm), 100)
+    x = fairmm
+    print(min(fairmm), max(fairmm))
+    fig = ex.scatter(x, y)
+    # fig.write_image(f"/home/jp/tyot/mop/desdeo/DESDEO/experiment/code/generic_method/fairness_tests/fairlinmm.png")
+    fig.show("browser")

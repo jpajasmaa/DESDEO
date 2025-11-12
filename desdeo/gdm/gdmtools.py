@@ -3,6 +3,7 @@
 from desdeo.problem import Problem
 from numba import njit  # type: ignore
 
+# from preference_aggregation import eval_RP, maxmin_criterion
 import numpy as np
 
 # Below two are tools for GDM, have needed them in both projects
@@ -54,7 +55,7 @@ def get_top_n_fair_solutions(solutions, fairness_values, n):
     the default selection algorithm introselect is unstable, and hence the returned indices are not guaranteed to be 
     the earliest/latest occurrence of the element.
 
-    Basically this may fuck up
+    Basically this may frick up
     TODO: should be only used in getting all the solutions?
     """
     idxs = np.argpartition(fairness_values, -n)[-n:]
@@ -82,23 +83,17 @@ def scale_rp(problem: Problem, reference_point, ideal, nadir, maximize):
 
 
 """
-%Compute regret values
-MDutility=zeros(n,3);
-for i=1:n
-        MDutility(i, 1)=sum(max(zeros(1,3),X(i,:)-A(1,:))); p = 0
-        MDutility(i, 2)=sum(max(zeros(1,3),X(i,:)-A(2,:))); p = 1
-        MDutility(i, 3)=sum(max(zeros(1,3),X(i,:)-A(3,:))); p = 2
-end
+Utility funcs
 """
 # for i in n solutions and for each p in P DMs. returns the regret values as a list of each P DMs.
 # So for 3 DMs, returns [p1, p2, p3]
 # The larger the value is, the more regret the DM has
 # Numba goes BRRRRRT
 @njit()
-def regret_allDMs(sol, mpses):
+def regret_allDMs_no_impro(sol, mpses):
     uf_arr = []  # convert to numpy later for numba
 
-    zeros = np.zeros(len(sol))
+    zeros = np.zeros(len(sol)) + 1e-6
 
     for p in range(len(mpses)):
         uf_arr.append(np.sum(np.maximum(zeros, sol - mpses[p])))  # improvements do not count
@@ -107,17 +102,35 @@ def regret_allDMs(sol, mpses):
     return uf_arr
 
 @njit()
+def regret_allDMs(sol, mpses):
+    uf_arr = []  # convert to numpy later for numba
+
+    for p in range(len(mpses)):
+        uf_arr.append(np.sum(sol - mpses[p]))  # improvements do count
+
+    return uf_arr
+
+@njit()
 def regret_allDMs_max(sol, mpses):
     uf_arr = []  # convert to numpy later for numba
 
-    ones = np.ones(len(sol))
+    # ones = np.ones(len(sol))
 
     for p in range(len(mpses)):
-        uf_arr.append(np.sum(np.minimum(ones, sol - mpses[p])))  # improvements do not count
+        uf_val = np.max(sol - mpses[p])
+        if uf_val < 1e-6:
+            uf_val = 1e-6
+        uf_arr.append(uf_val)  # improvements do not count
+        # uf_arr.append(np.maximum(ones, sol - mpses[p]))  # improvements do not count
         # uf_arr.append(np.sum(np.maximum(ones, sol - mpses[p])))  # improvements do not count
         # uf_arr.append(np.max(sol - mpses[p]))  # improvements do count
 
     return uf_arr
+
+
+"""
+ Fainess funcs
+"""
 
 
 # X: all solutions
@@ -126,7 +139,18 @@ def regret_allDMs_max(sol, mpses):
 def min_max_regret_no_impro(all_sols, mpses):
     min_regrets = []
     for i in range(len(all_sols)):
-        per_sol = regret_allDMs(all_sols[i], mpses)
+        per_sol = regret_allDMs_no_impro(all_sols[i], mpses)
+
+        min_regrets.append(min(per_sol))  # minmax
+    return min_regrets
+
+# X: all solutions
+# P: MPSes
+# all solutions, MPSes, everything have to be scaled and converted to minimization
+def min_max_regret(all_sols, mpses):
+    min_regrets = []
+    for i in range(len(all_sols)):
+        per_sol = regret_allDMs_max(all_sols[i], mpses)
         # per_sol = regret_allDMs(all_sols[i], mpses)
 
         min_regrets.append(min(per_sol))  # minmax
@@ -138,8 +162,8 @@ def min_max_regret_no_impro(all_sols, mpses):
 def max_min_regret(all_sols, mpses):
     max_min_regrets = []
     for i in range(len(all_sols)):
-        per_sol = regret_allDMs_max(all_sols[i], mpses)
-        # per_sol = regret_allDMs(all_sols[i], mpses)
+        # per_sol = regret_allDMs_max(all_sols[i], mpses)
+        per_sol = regret_allDMs(all_sols[i], mpses)
 
         max_min_regrets.append(max(per_sol))  # minmax
     return max_min_regrets
@@ -168,6 +192,45 @@ def inequality_in_pareto_regret(all_sols, mpses):
         gini_regrets.append(gini_sum)
 
     return gini_regrets
+
+# See Bertsimas: On the Efficiency-Fairness Trade-off
+# Utilities must be strictly positive.
+def alpha_fairness(all_sols, mpses, alpha):
+    alpha_fairs = []
+    M = len(mpses)  # number of DMs
+    for i in range(len(all_sols)):
+        # TODO: utilities must be [0, R^n_+]
+        # utilities = min_max_regret(all_sols[i], mpses)
+        utilities = regret_allDMs_no_impro(all_sols[i], mpses)
+        # utilities = cones_preference_model(all_sols[i], mpses)
+        # utilities = additive_preference_model(all_sols, mpses)
+        if alpha == 1:
+            alpha_fairs.append(np.sum(np.log(utilities)))
+        else:
+            tops = []
+            bottom = 1 - alpha
+            if bottom == 0:  # this should not happen but just in case
+                bottom += 0.00001
+            for m in range(M):
+                tops.append(utilities[m]**(1 - alpha))
+            result = np.array(tops) / bottom
+            alpha_fairs.append((np.sum(result)))
+
+    return alpha_fairs
+
+# Vectorized versions of cones and additive local preference models
+def cones_preference_model(r, mpses):
+    cip = mpses.max(axis=0, keepdims=True) + 1e-6  # get fake nadir as cip
+    cip = cip[0]  # drop unnessecary 2d list
+    print("cip", cip)
+    cones_utilities = []
+    M = len(mpses)
+    for m in range(M):
+        cones_utilities.append(eval_RP(mpses[m], cip, r))
+    return cones_utilities
+
+def additive_preference_model(r, mpses):
+    pass
 
 
 """
