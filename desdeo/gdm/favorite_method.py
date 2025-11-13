@@ -88,7 +88,7 @@ class IPR_Results(pydantic.BaseModel):
 class FairSolution(pydantic.BaseModel):
     objective_values: dict[str, float]
     fairness_criterion: str
-    # fairness_value: float # could add fairness value of this solution.
+    fairness_value: float  # could add fairness value of this solution.
 
 
 # TODO: move to some template file etc. Handle EMOOptions for IOPIS
@@ -96,6 +96,7 @@ MethodOptions = IPR_Options  # | EMOOptions
 MethodResults = IPR_Results  # | EMOResult
 
 
+# TODO: udpate to handle the new format
 def visualize_3d(options, evaluated_points, fair_sols, n):
     fig = ex.scatter_3d()
 
@@ -330,15 +331,16 @@ def find_group_solutions(problem: Problem, evaluated_points: list[_EvaluatedPoin
     # Regret UFs, no achievement for aspiration. Take the DM that is best-off. Max()
     #
     # TODO: to get fairness values for each solution, this topfair should also return the index.
-    min_r_no = get_top_n_fair_solutions(eval_sols_in_objs, min_no_regrets, n)
-    util_r = get_top_n_fair_solutions(eval_sols_in_objs, utilitarian, n)
-    min_r = get_top_n_fair_solutions(eval_sols_in_objs, min_regrets, n)
-    avg_r = get_top_n_fair_solutions(eval_sols_in_objs, avg_regrets, n)
-    gini_r = get_top_n_fair_solutions(eval_sols_in_objs, gini_regrets, n)
-    nash_r = get_top_n_fair_solutions(eval_sols_in_objs, nash, n)
+    min_r_no, min_no_i = get_top_n_fair_solutions(eval_sols_in_objs, min_no_regrets, n)
+    util_r, util_i = get_top_n_fair_solutions(eval_sols_in_objs, utilitarian, n)
+    min_r, min_i = get_top_n_fair_solutions(eval_sols_in_objs, min_regrets, n)
+    avg_r, avg_i = get_top_n_fair_solutions(eval_sols_in_objs, avg_regrets, n)
+    gini_r, gini_i = get_top_n_fair_solutions(eval_sols_in_objs, gini_regrets, n)
+    nash_r, nash_i = get_top_n_fair_solutions(eval_sols_in_objs, nash, n)
     # TODO: find out what is the bug here. returns arrays
     # alpha_r = get_top_n_fair_solutions(eval_sols_in_objs, alpha_regrets, n)
 
+    print("indexes", min_no_regrets[min_no_i[0]])
     """
     Maxmin-cones
     cip = np.array([np.max(norm_mps_arr[:, 0]) + 0.001, np.max(norm_mps_arr[:, 1]) + 0.001, np.max(norm_mps_arr[:, 2]) + 0.001])
@@ -369,19 +371,33 @@ def find_group_solutions(problem: Problem, evaluated_points: list[_EvaluatedPoin
     """
     # top_fair = np.concatenate((min_r_no, min_r, avg_r, gini_r, util_r, nash_r, [GRP_po]))
     top_fair = np.concatenate((min_r_no, min_r, avg_r, gini_r, util_r, nash_r))
+    # TODO: smarter way instead of this monstrosity
+    # Adds the top fair solution's fairness value to a np.array of lists, similar to top_fair, to be added to FairSolution objects.
+    top_fair_values = np.concatenate((
+        [min_no_regrets[min_no_i[0]]],
+        [min_regrets[min_i[0]]],
+        [avg_regrets[avg_i[0]]],
+        [gini_regrets[gini_i[0]]],
+        [utilitarian[util_i[0]]],
+        [nash[nash_i[0]]],
+    ))
     # top_fair = np.stack(top_fair)
     fairness_criteria = ["min_no", "min", "avg", "gini", "util", "nash"]  # need to get this elsewhere
-    top_fair_arr = []
+    FairSolutions_arr = []
     for i, fair_solution in enumerate(top_fair):
-        fair_sol = FairSolution(objective_values=numpy_array_to_objective_dict(problem, fair_solution), fairness_criterion=fairness_criteria[i])
-        top_fair_arr.append(fair_sol)
+        fair_sol = FairSolution(
+            objective_values=numpy_array_to_objective_dict(problem, fair_solution),
+            fairness_criterion=fairness_criteria[i],
+            fairness_value=top_fair_values[i]
+        )
+        FairSolutions_arr.append(fair_sol)
 
     regret_values = {"min_no": min_no_regrets, "min": min_regrets, "avg": avg_regrets, "gini": gini_regrets,
                      "util": utilitarian, "nash": nash, }  # "cones": GRP_po}
 
-    print(top_fair_arr)
+    print(FairSolutions_arr)
 
-    return top_fair_arr, regret_values
+    return FairSolutions_arr, regret_values
 
 
 def shift_points(problem: Problem, most_preferred_solutions, group_preferred_solution: dict[str, float], steps_remaining):
@@ -570,6 +586,7 @@ if __name__ == "__main__":
 
     print("fair sols:", fair_sols)
 
+    """
     fairmm = regret_values_dict["nash"]
     # fairmm = regret_values_dict["min"]
     # print(fairmm)
@@ -580,7 +597,7 @@ if __name__ == "__main__":
     fig = ex.scatter(x, y)
     # fig.write_image(f"/home/jp/tyot/mop/desdeo/DESDEO/experiment/code/generic_method/fairness_tests/fairlinmm.png")
     fig.show("browser")
-
+    """
     visualize_3d(options, method_res.evaluated_points, fair_sols, n)
 
     """
@@ -638,6 +655,7 @@ if __name__ == "__main__":
 
     visualize_3d(new_iter_options, method_res2.evaluated_points, fair_sols, n)
 
+    """
     fairmm = regret_values_dict["nash"]
     # fairmm = regret_values_dict["min"]
     print(fairmm)
@@ -648,3 +666,5 @@ if __name__ == "__main__":
     fig = ex.scatter(x, y)
     # fig.write_image(f"/home/jp/tyot/mop/desdeo/DESDEO/experiment/code/generic_method/fairness_tests/fairlinmm.png")
     fig.show("browser")
+    """
+    print("done")

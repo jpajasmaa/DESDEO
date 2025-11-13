@@ -63,8 +63,7 @@ def get_top_n_fair_solutions(solutions, fairness_values, n):
     for i in range(n):
         fair_sols.append(solutions[idxs[i]])
 
-    return fair_sols
-    # return fair_sols if len(fair_sols) < 2 else fair_sols[0]
+    return fair_sols, idxs
 
 # TODO: comments
 def scale_rp(problem: Problem, reference_point, ideal, nadir, maximize):
