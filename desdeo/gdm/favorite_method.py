@@ -22,11 +22,11 @@ from pydantic import Field, ConfigDict
 from desdeo.gdm.gdmtools import (dict_of_rps_to_list_of_rps, agg_aspbounds, alpha_fairness, min_max_regret, min_max_regret_no_impro, scale_rp, get_top_n_fair_solutions,
                                  max_min_regret, min_max_regret_no_impro, average_pareto_regret, inequality_in_pareto_regret)
 
-# from desdeo.gdm.preference_aggregation import find_GRP
+from desdeo.gdm.preference_aggregation import find_GRP
 
 
 # TODO: now for easier testing. REMOVE THIS GLOBAL VAR
-num_of_runs = 10
+num_of_runs = 100
 
 # TODO: create two versions with version1 options and version2 options
 
@@ -142,6 +142,16 @@ def visualize_3d(options, evaluated_points, fair_sols, n):
             z=[options.most_preferred_solutions[dm]["f_3"]],
             mode="markers", name=dm, marker_symbol="square", opacity=0.9)
 
+    # TODO: improve, this only works if n == 1
+    fair_crits = [fair_sols[i].fairness_criterion for i in range(len(fair_sols))]
+    for i, fc in enumerate(fair_crits):
+        fig = fig.add_scatter3d(
+            x=[fair_sols[i].objective_values["f_1"]],
+            y=[fair_sols[i].objective_values["f_2"]],
+            z=[fair_sols[i].objective_values["f_3"]],
+            mode="markers", name=fc, marker_symbol="x", opacity=0.9)
+
+    """
     # Add maxfair points
     fig = fig.add_scatter3d(
         x=fair_sols[:n, 0],
@@ -183,7 +193,7 @@ def visualize_3d(options, evaluated_points, fair_sols, n):
         y=fair_sols[6*n:, 1],
         z=fair_sols[6*n:, 2],
         mode="markers", name="cones", marker_symbol="x", opacity=0.9)
-
+    """
     """
     fig.update_layout(
         scene={
@@ -340,25 +350,37 @@ def find_group_solutions(problem: Problem, evaluated_points: list[_EvaluatedPoin
     # TODO: find out what is the bug here. returns arrays
     # alpha_r = get_top_n_fair_solutions(eval_sols_in_objs, alpha_regrets, n)
 
-    print("indexes", min_no_regrets[min_no_i[0]])
-    """
-    Maxmin-cones
+    # SOLVE MAXMIN CONES
+    # TODO: all this needs to be inside its own function after find_GRP has been rewritten for usability
+    # for dtlz2
     cip = np.array([np.max(norm_mps_arr[:, 0]) + 0.001, np.max(norm_mps_arr[:, 1]) + 0.001, np.max(norm_mps_arr[:, 2]) + 0.001])
     ideal_arr = np.array([np.min(norm_mps_arr[:, 0]), np.min(norm_mps_arr[:, 1]), np.min(norm_mps_arr[:, 2])])
 
-    k = 3
-    q = 3
+    # for river_pollution
+    # cip = np.array([np.max(norm_mps_arr[:, 0]) + 0.001, np.max(norm_mps_arr[:, 1]) + 0.001,
+    #               np.max(norm_mps_arr[:, 2]) + 0.001, np.max(norm_mps_arr[:, 3]) + 0.001])
+    # ideal_arr = np.array([np.min(norm_mps_arr[:, 0]), np.min(norm_mps_arr[:, 1]), np.min(norm_mps_arr[:, 2]), np.min(norm_mps_arr[:, 3])])
+
+    print(norm_mps_arr)
+    print("starting")
+    print(cip)
+    print(ideal_arr)
+
+    k = len(problem.objectives)
+    q = len(norm_mps_arr)
     pa = "eq_maxmin_cones"
     # pa = "eq_maxmin"
     all_rps = norm_mps_arr
-    GRP, _ = find_GRP(all_rps, cip, k, q, ideal_arr, all_rps, pa)
+    GRP, s_values = find_GRP(all_rps, cip, k, q, ideal_arr, all_rps, pa)
+    print("SVALUES", s_values)
     # GRP = GRP - cip
     print("MAXMIN cones GRP", GRP)
     # Find PO solution with conesGRP
+    # GRP_dict = {"f_1": GRP[0], "f_2": GRP[1], "f_3": GRP[2], "f_4": GRP[3]} # for river pollution,
     GRP_dict = {"f_1": GRP[0], "f_2": GRP[1], "f_3": GRP[2]}
 
     p, target = add_asf_diff(
-        dtlz2_problem,
+        problem,
         symbol=f"asf",
         reference_point=GRP_dict,
     )
@@ -368,9 +390,29 @@ def find_group_solutions(problem: Problem, evaluated_points: list[_EvaluatedPoin
     fs = res.optimal_objectives
     GRP_po = objective_dict_to_numpy_array(problem, fs)
 
-    """
+    # SOLVE MAXMIN
+    pa = "eq_maxmin"
+    GRPmm, mm_s_values = find_GRP(all_rps, cip, k, q, ideal_arr, all_rps, pa)
+    print("SVALUES", mm_s_values)
+    # GRP = GRP - cip
+    print("MAXMIN GRP", GRPmm)
+    # Find PO solution with conesGRP
+    # GRPmm_dict = {"f_1": GRPmm[0], "f_2": GRPmm[1], "f_3": GRPmm[2], "f_4": GRPmm[3]}
+    GRPmm_dict = {"f_1": GRPmm[0], "f_2": GRPmm[1], "f_3": GRPmm[2]}
+
+    p, target = add_asf_diff(
+        problem,
+        symbol=f"asf",
+        reference_point=GRPmm_dict,
+    )
+    # scaled_problem, target = add_asf_diff(self.problem, "asf", refp)
+    solver = PyomoIpoptSolver(p)
+    resmm = solver.solve(target)
+    fsmm = resmm.optimal_objectives
+    GRPmm_po = objective_dict_to_numpy_array(problem, fsmm)
+
     # top_fair = np.concatenate((min_r_no, min_r, avg_r, gini_r, util_r, nash_r, [GRP_po]))
-    top_fair = np.concatenate((min_r_no, min_r, avg_r, gini_r, util_r, nash_r))
+    top_fair = np.concatenate((min_r_no, min_r, avg_r, gini_r, util_r, nash_r, [GRP_po], [GRPmm_po]))
     # TODO: smarter way instead of this monstrosity
     # Adds the top fair solution's fairness value to a np.array of lists, similar to top_fair, to be added to FairSolution objects.
     top_fair_values = np.concatenate((
@@ -380,9 +422,11 @@ def find_group_solutions(problem: Problem, evaluated_points: list[_EvaluatedPoin
         [gini_regrets[gini_i[0]]],
         [utilitarian[util_i[0]]],
         [nash[nash_i[0]]],
+        [np.max(s_values)],
+        [np.max(mm_s_values)],
     ))
     # top_fair = np.stack(top_fair)
-    fairness_criteria = ["min_no", "min", "avg", "gini", "util", "nash"]  # need to get this elsewhere
+    fairness_criteria = ["min_no", "min", "avg", "gini", "util", "nash", "cones", "maxmin"]  # need to get this elsewhere
     FairSolutions_arr = []
     for i, fair_solution in enumerate(top_fair):
         fair_sol = FairSolution(
@@ -393,7 +437,7 @@ def find_group_solutions(problem: Problem, evaluated_points: list[_EvaluatedPoin
         FairSolutions_arr.append(fair_sol)
 
     regret_values = {"min_no": min_no_regrets, "min": min_regrets, "avg": avg_regrets, "gini": gini_regrets,
-                     "util": utilitarian, "nash": nash, }  # "cones": GRP_po}
+                     "util": utilitarian, "nash": nash, "cones": GRP_po, "maxmin": GRPmm_po}
 
     print(FairSolutions_arr)
 
@@ -463,8 +507,6 @@ def get_representative_set(problem: Problem, options: MethodOptions) -> tuple[pl
     fav_res = IPR_Results(
         evaluated_points=evaluated_points,
         most_preferred_solutions=options.most_preferred_solutions,
-        # fair_solutions=fair_sols,
-        # fairness_metrics=options.fairness_metrics,
     )
 
     return (df, fav_res)
@@ -505,17 +547,19 @@ if __name__ == "__main__":
 
     # MethodOptions = IPR_Options | EMOOptions
     # MethodResults = IPR_Results | EMOResult
+
     from desdeo.problem.testproblems.dtlz2_problem import dtlz2
     dtlz2_problem = dtlz2(8, 3)
     ideal = dtlz2_problem.get_ideal_point()
     nadir = dtlz2_problem.get_nadir_point()
 
-    n_of_dms = 3
+    n_of_dms = 4
 
     evaluated_points = []
     most_preferred_solutions = {'DM1': {'f_1': 0.17049589013991726, 'f_2': 0.17049589002331159, 'f_3': 0.9704959056742878},
                                 'DM2': {'f_1': 0.17049589008489896, 'f_2': 0.9704959056849697, 'f_3': 0.17049589001752685},
-                                'DM3': {'f_1': 0.9704959057874635, 'f_2': 0.17049588971897997, 'f_3': 0.1704958898000307}}
+                                'DM3': {'f_1': 0.17049589008489896, 'f_2': 0.9704959056849697, 'f_3': 0.17049589001752685},
+                                'DM4': {'f_1': 0.9704959057874635, 'f_2': 0.17049588971897997, 'f_3': 0.1704958898000307}}
     """
 # random rps
     reference_points = {}
@@ -607,15 +651,17 @@ if __name__ == "__main__":
     from desdeo.gdm.voting_rules import majority_rule
 
     votes_idx = {
-        "DM1": 1,
-        "DM2": 1,
-        "DM3": 2
+        "DM1": 6,
+        "DM2": 6,
+        "DM3": 2,
+        "DM4": 6
     }
     winner_idx = majority_rule(votes_idx)
     print(winner_idx)
 
     # TODO: either convert or return fair solutions in dictionary format
-    group_preferred_solution = {"f_1": fair_sols[winner_idx][0], "f_2": fair_sols[winner_idx][1], "f_3": fair_sols[winner_idx][2]}
+    group_preferred_solution = fair_sols[winner_idx].objective_values
+    # group_preferred_solution = {"f_1": fair_sols[winner_idx][0], "f_2": fair_sols[winner_idx][1], "f_3": fair_sols[winner_idx][2]}
     print(group_preferred_solution)
 
     """

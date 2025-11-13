@@ -3,7 +3,7 @@
 from desdeo.problem import Problem
 from numba import njit  # type: ignore
 
-# from preference_aggregation import eval_RP, maxmin_criterion
+from preference_aggregation import eval_RP, maxmin_criterion
 import numpy as np
 
 # Below two are tools for GDM, have needed them in both projects
