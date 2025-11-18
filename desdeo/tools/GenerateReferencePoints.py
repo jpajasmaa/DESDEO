@@ -138,7 +138,7 @@ def generate_points(
     np.ndarray,
     np.ndarray,
 ]:
-    """Generate reference points for the IPA algorithm.
+    """Generate reference points for the IPR algorithm.
 
     Creates a (large) number of reference points on a plane perpendicular to the largest space diagonal of the unit
     hypercube in the num_dims-dimensional space. First, the vertices of the unit hypercube are generated. Then, the
@@ -158,7 +158,6 @@ def generate_points(
     Returns:
         np.ndarray: A (num_points) x (num_dims-1) array of reference points.
     """
-
     bounding_box, A, b, _ = get_reference_hull(num_dims, reference_points)
     points = numba_random_gen(num_points, bounding_box, A, b)
     # Project vertices onto plane perpendicular to largest space diagonal

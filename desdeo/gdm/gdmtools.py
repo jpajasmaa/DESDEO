@@ -3,7 +3,7 @@
 from desdeo.problem import Problem
 from numba import njit  # type: ignore
 
-from preference_aggregation import eval_RP, maxmin_criterion
+from .preference_aggregation import eval_RP, maxmin_criterion
 import numpy as np
 
 # Below two are tools for GDM, have needed them in both projects
@@ -73,6 +73,7 @@ def scale_rp(problem: Problem, reference_point, ideal, nadir, maximize):
     # nadir = problem.get_nadir_point()
 
     # scaling to [0,1], when maximizing objective functions
+    # TODO (@jpajasmaa) Why not use problem.objective[..].maximize?
     for obj in problem.objectives:
         if maximize:
             rp.update({obj.symbol: (reference_point[obj.symbol] - nadir[obj.symbol]) / (ideal[obj.symbol] - nadir[obj.symbol])})

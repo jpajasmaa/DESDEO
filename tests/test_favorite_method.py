@@ -1,4 +1,3 @@
-
 """Tests related to the Favorite method."""
 
 import pytest
@@ -8,6 +7,7 @@ from desdeo.problem import (
     numpy_array_to_objective_dict,
     objective_dict_to_numpy_array,
 )
+
 
 @pytest.mark.favorite
 def test_fairness_funcs():
@@ -25,9 +25,11 @@ def test_favorite_method_iteration():
     nadir = dtlz2_problem.get_nadir_point()
 
     evaluated_points = []
-    most_preferred_solutions = {'DM1': {'f_1': 0.17049589013991726, 'f_2': 0.17049589002331159, 'f_3': 0.9704959056742878},
-                                'DM2': {'f_1': 0.17049589008489896, 'f_2': 0.9704959056849697, 'f_3': 0.17049589001752685},
-                                'DM3': {'f_1': 0.9704959057874635, 'f_2': 0.17049588971897997, 'f_3': 0.1704958898000307}}
+    most_preferred_solutions = {
+        "DM1": {"f_1": 0.17049589013991726, "f_2": 0.17049589002331159, "f_3": 0.9704959056742878},
+        "DM2": {"f_1": 0.17049589008489896, "f_2": 0.9704959056849697, "f_3": 0.17049589001752685},
+        "DM3": {"f_1": 0.9704959057874635, "f_2": 0.17049588971897997, "f_3": 0.1704958898000307},
+    }
 
     # TODO: get fake_ideal and fake_nadir
 
@@ -35,10 +37,10 @@ def test_favorite_method_iteration():
         fake_ideal=ideal,
         fake_nadir=nadir,
         most_preferred_solutions=most_preferred_solutions,
-        total_points=10000,
+        num_initial_reference_points=10000,
         num_points_to_evaluate=100,
         EvaluatedPoints=evaluated_points,
-        version="convex_hull"
+        version="convex_hull",
         # version="fake"
     )
     df, res = get_representative_set(dtlz2_problem, options)
@@ -57,7 +59,9 @@ def test_favorite_method_iteration():
     normalized_most_preferred_solutions = rp_arr
 
     solution_selector = ["regret"]
-    fair_sols = find_group_solutions(dtlz2_problem, res.evaluated_points, normalized_most_preferred_solutions, solution_selector)
+    fair_sols = find_group_solutions(
+        dtlz2_problem, res.evaluated_points, normalized_most_preferred_solutions, solution_selector
+    )
     print(fair_sols)
 
     assert fair_sols is not None
