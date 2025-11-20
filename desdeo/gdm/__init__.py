@@ -7,6 +7,11 @@ __all__ = [
     "plurality_rule",
     "agg_aspbounds",
     "scale_delta",
+    "find_group_solutions",
+    "find_GRP",
+    "get_representative_set",
+    "IPR_Options",
+
 ]
 
 from .gdmtools import (
@@ -19,4 +24,14 @@ from .gdmtools import (
 from .voting_rules import (
     majority_rule,
     plurality_rule,
+)
+
+from .preference_aggregation import (
+    find_GRP
+)
+
+from .favorite_method import (
+    find_group_solutions,
+    get_representative_set,
+    IPR_Options,
 )
