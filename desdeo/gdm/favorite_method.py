@@ -1,5 +1,7 @@
 """The Favorite method, a general method for group decision making in multiobjective optimization"""
 
+from typing import Literal
+
 import numpy as np
 import plotly.express as ex
 import polars as pl
@@ -45,13 +47,16 @@ class IPR_Options(pydantic.BaseModel):
 
     model_config = ConfigDict(use_attribute_docstrings=True)
 
-    num_initial_reference_points: int
+    num_initial_reference_points: int = Field(default=10000, ge=1)
     """Big number"""
-    version: str
-    """Version 1: evaluate in the convex hull of MPS. Version 2: evaluate in the box of fake_ideal and fake_nadir."""
+    version: Literal["convex_hull", "box"] = "convex_hull"
+    (
+        """Version "convex_hull": evaluate in the convex hull of MPS."""
+        """ Version "box": evaluate in the box of fake_ideal and fake_nadir."""
+    )
     # fairness_metrics: list[str]
-    most_preferred_solutions: dict[str, dict[str, float]]
-    """Most preferred solutions of the decision makers. Should not be a part of this class. Only used in version 1."""
+    most_preferred_solutions: dict[str, dict[str, float]] | None = None
+    """Most preferred solutions of the decision makers. Should be filled in by code, not by user."""
 
 
 class GPRMOptions(pydantic.BaseModel):
@@ -59,13 +64,13 @@ class GPRMOptions(pydantic.BaseModel):
 
     model_config = ConfigDict(use_attribute_docstrings=True)
 
-    method_options: IPR_Options | None
+    method_options: IPR_Options | None = Field(default_factory=IPR_Options)
     """Options specific to the selected method. None for EMO"""
-    fake_ideal: dict[str, float]
-    """Fake ideal point."""
-    fake_nadir: dict[str, float]
-    """Fake nadir point."""
-    num_points_to_evaluate: int
+    fake_ideal: dict[str, float] | None = None
+    """Fake ideal point. Should be filled in by code, not by user."""
+    fake_nadir: dict[str, float] | None = None
+    """Fake nadir point. Should be filled in by code, not by user."""
+    num_points_to_evaluate: int = Field(default=100, ge=1)
     """Number of points to evaluate in the IPR method, or population size in EMO methods."""
 
 
@@ -298,7 +303,7 @@ class ProblemWrapper:
 
 # TODO: this to be re-written after UFs are implemented as polars expressions
 def find_group_solutions(
-    problem: Problem, evaluated_points: list[_EvaluatedPoint], mps: list[np.ndarray], selectors: list[str], n: int = 1
+    problem: Problem, evaluated_points: pl.DataFrame, mps: list[np.ndarray], selectors: list[str], n: int = 1
 ) -> tuple[list[FairSolution], list[float]]:
     """Find n fair group solutions according to different fairness criteria.
 
@@ -316,7 +321,7 @@ def find_group_solutions(
 
     Args:
         problem: DESDEO Problem object
-        evaluated_points: list of evaluated points from IPR
+        evaluated_points: DataFrame of objective values of evaluated points
         mps: list of most preferred solutions as numpy arrays
         selectors: list of strings indicating which fairness metrics to apply
         n: number of fair solutions to return for each fairness metric
@@ -638,13 +643,19 @@ def get_representative_set_EMO(problem: Problem, options: GPRMOptions, results_l
     for obj in problem.objectives:
         if obj.maximize:
             solutions = solutions.filter(
-                (pl.col(obj.symbol) >= options.fake_nadir[obj.symbol])
-                & (pl.col(obj.symbol) <= options.fake_ideal[obj.symbol])
+                (
+                    pl.col(obj.symbol) >= options.fake_nadir[obj.symbol]
+                    # & (pl.col(obj.symbol) <= options.fake_ideal[obj.symbol])
+                    # uncomment for stricter filtering
+                )
             )
         else:
             solutions = solutions.filter(
-                (pl.col(obj.symbol) <= options.fake_nadir[obj.symbol])
-                & (pl.col(obj.symbol) >= options.fake_ideal[obj.symbol])
+                (
+                    pl.col(obj.symbol) <= options.fake_nadir[obj.symbol]
+                    # & (pl.col(obj.symbol) >= options.fake_ideal[obj.symbol])
+                    # uncomment for stricter filtering
+                )
             )
     return GPRMResults(
         raw_results=res,
@@ -676,6 +687,7 @@ def get_representative_set(problem: Problem, options: GPRMOptions, results_list:
     raise TypeError("Invalid MethodOptions type provided.")
 
 
+# TODO (@jpajasmaa): Not needed anymore.
 def handle_zooming(
     problem: Problem, res: list[GPRMResults], group_mps: dict[str, float], steps_remaining: int
 ) -> GPRMOptions:
@@ -710,6 +722,136 @@ def handle_zooming(
         # steps_remaining=steps_remaining,
     )
     return options
+
+
+class ZoomOptions(pydantic.BaseModel):
+    """Pydantic model to contain options for zooming strategy."""
+
+    method: Literal["nautilus"] = "nautilus"
+    """Zooming method to use."""
+    num_steps_remaining: int = Field(default=5, ge=1)
+    """Number of remaining zooming steps. Determines step size. Must be positive integer."""
+
+
+class FavOptions(pydantic.BaseModel):
+    """Pydantic model to contain options for the favorite method."""
+
+    GPRMoptions: GPRMOptions
+    """Options for the representative set method. EMO and IPR supported."""
+    candidate_generation_options: Literal["Not implemented yet"] = "Not implemented yet"
+    """Options for generating candidate fair solutions. Support more options later."""
+    zoom_options: ZoomOptions = Field(default_factory=ZoomOptions)
+    """Options for the zooming strategy. Support more options later."""
+    original_most_preferred_solutions: dict[str, dict[str, float]]
+    """Dictionary of the original most preferred solutions for each decision maker."""
+    votes: dict[str, int] | None = None
+    (
+        """The votes for each decision maker's most preferred solution."""
+        """ The candidates are from `fair_solutions` in FavResults of the previous iteration."""
+        """Not required for the first iteration."""
+    )
+
+
+class FavResults(pydantic.BaseModel):
+    """Pydantic model to contain results from one iteration of the favorite method."""
+
+    FavOptions: FavOptions
+    """Options used in this iteration of the favorite method."""
+    GPRMResults: GPRMResults
+    """Results from the representative set method."""
+    fair_solutions: list[FairSolution]
+    """List of candidate fair solutions found in this iteration."""
+
+
+def setup(problem: Problem, options: FavOptions, results_list: list[FavResults]) -> FavOptions:
+    """Setup function for favorite method.
+
+    Args:
+        problem: DESDEO Problem object
+        options: FavOptions for the favorite method.
+        results_list: List of previous FavResults.
+
+    Returns:
+        FavOptions: Updated options for the favorite method.
+    """
+    options = options.model_copy()
+    winner = None
+
+    orig_mps = options.original_most_preferred_solutions
+    orig_mps_list = dict_of_rps_to_list_of_rps(orig_mps)
+    fake_ideal, fake_nadir = agg_aspbounds(orig_mps_list, problem)
+    # first iteration
+    if not results_list:  # noqa:SIM102
+        if isinstance(options.GPRMoptions.method_options, IPR_Options):
+            options.GPRMoptions.method_options.most_preferred_solutions = orig_mps
+    if results_list:  # not the first iteration
+        if options.votes is None:
+            raise ValueError("Votes must be provided for iterations after the first.")
+        # handle voting
+        old_candidates = results_list[-1].fair_solutions
+        votes = options.votes
+        winner = majority_rule(votes=votes)
+        if winner is None:
+            raise ValueError("No winner could be determined from the votes provided.")
+        winner = old_candidates[winner]
+        fake_nadir = results_list[-1].FavOptions.GPRMoptions.fake_nadir
+        if fake_nadir is None:
+            raise ValueError("Previous fake_nadir is None, cannot proceed with zooming.")
+        fake_nadir = calculate_navigation_point(
+            problem=problem,
+            previous_navigation_point=fake_nadir,
+            # TODO (@jpajasmaa): I copied the above line from your code. However, "fake nadir" is not the
+            # "previous navigation point". To fix this, you should use results_list[-1].FavOptions.GPRMoptions.fake_nadir
+            reachable_objective_vector=winner.objective_values,
+            number_of_steps_remaining=options.zoom_options.num_steps_remaining,
+        )  # redefine fake_nadir based on winner. Note that fake_ideal stays the same.
+        shifted_mps = shift_points(
+            problem,
+            most_preferred_solutions=orig_mps,
+            group_preferred_solution=winner.objective_values,
+            steps_remaining=options.zoom_options.num_steps_remaining,
+        )
+        if isinstance(options.GPRMoptions.method_options, IPR_Options):
+            options.GPRMoptions.method_options.most_preferred_solutions = shifted_mps
+    # Common to both IPR and EMO
+    options.GPRMoptions.fake_ideal = fake_ideal
+    options.GPRMoptions.fake_nadir = fake_nadir
+    return options
+
+
+def favourite_method(problem: Problem, options: FavOptions, results_list: list[FavResults]) -> FavResults:
+    """Run one complete iteration of the favorite method.
+
+    For multiple iterations, call this function multiple times, passing the previous results in results_list.
+    Make note to change the votes in options for each iteration after the first.
+    Also change options.zoom_options.num_steps_remaining accordingly.
+
+    Args:
+        problem: DESDEO Problem object
+        options: FavOptions for the favorite method.
+        results_list: List of previous FavResults.
+
+    Returns:
+        FavResults: Results from this iteration of the favorite method. It also contains a filled up version of
+        FavOptions (which includes, e.g., updated most preferred solutions and fake_nadir after zooming)
+    """
+    # Getting representative set
+
+    # calculating candidate fair solutions
+    options = setup(problem, options, results_list)
+
+    gprm_results = get_representative_set(problem, options.GPRMoptions, [result.GPRMResults for result in results_list])
+
+    fair_solutions = []
+    # TODO (@jpajasmaa): many complicated things happening here. Rewrirte this function to be simpler.
+    # Know that you can find obj values in gprm_results.outputs (not normalized)
+    # fair_solutions, _ = find_group_solutions()
+
+    return FavResults(
+        FavOptions=options,
+        GPRMResults=gprm_results,
+        fair_solutions=fair_solutions,
+    )
 
 
 if __name__ == "__main__":
