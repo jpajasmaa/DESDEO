@@ -30,17 +30,19 @@ class _EvaluatedPoint(BaseModel):
 def choose_reference_point(
     refp_array: np.ndarray,
     evaluated_points: list[_EvaluatedPoint] | None = None,
-):
+    thickness: float = 0.02,
+) -> tuple[np.ndarray, np.ndarray | None]:
     """Choose the next reference point to evaluate using the Iterative Pareto Representer algorithm.
 
     Args:
         refp_array (np.ndarray): The reference points to choose from.
         evaluated_points (list[_EvaluatedPoint]): Already evaluated reference points and their targets.
             If None, a random reference point is chosen.
+        thickness (float): The thickness parameter for the ASF pruning rule.
     """
     if evaluated_points is None or len(evaluated_points) == 0:
         return refp_array[np.random.choice(refp_array.shape[0])], None
-    bad_points_mask = _find_bad_RPs(refp_array, evaluated_points)
+    bad_points_mask = _find_bad_RPs(refp_array, evaluated_points, thickness)
     available_points_mask = ~bad_points_mask
     solution_projections = _project(np.array([list(eval_result.targets.values()) for eval_result in evaluated_points]))
     return _DSS_with_pruning(
@@ -50,7 +52,7 @@ def choose_reference_point(
 
 
 def _find_bad_RPs(
-    reference_points_array: np.ndarray, eval_results: list[_EvaluatedPoint], thickness: float = 0.02
+    reference_points_array: np.ndarray, eval_results: list[_EvaluatedPoint], thickness: float
 ) -> np.ndarray:
     """Find the reference points that will lead to repeated evaluations according to the ASF pruning rule."""
     mask = np.zeros(reference_points_array.shape[0], dtype=bool)
@@ -70,17 +72,17 @@ def _find_bad_RPs(
 def _DSS_with_pruning(
     available: np.ndarray,
     taken: np.ndarray,
-) -> int:
+) -> np.ndarray:
     """One-liner implementation of the DSS algorithm using scipy."""
     assert len(available) > 0, "No reference points available."
 
-    assert np.allclose(
-        available.sum(axis=1), available.shape[1]
-    ), "Reference points must lie on plane perpendicular to ideal-nadir line."
+    assert np.allclose(available.sum(axis=1), available.shape[1]), (
+        "Reference points must lie on plane perpendicular to ideal-nadir line."
+    )
 
-    assert np.allclose(
-        taken.sum(axis=1), taken.shape[1]
-    ), "Reference points must lie on plane perpendicular to ideal-nadir line."
+    assert np.allclose(taken.sum(axis=1), taken.shape[1]), (
+        "Reference points must lie on plane perpendicular to ideal-nadir line."
+    )
 
     if taken is None or len(taken) == 0:
         return np.random.choice(available)

@@ -51,7 +51,7 @@ def rotate(initial_vector, rotated_vector, other_vectors):
     return rotated_vectors
 
 
-def get_reference_hull(num_dims):
+def get_reference_hull(num_dims, reference_points):
     """Get the convex hull of the valid reference points for IPA.
 
     This algorithm generates the vertices of the unit hypercube in the (num_dims)-dimensional space.
@@ -71,7 +71,13 @@ def get_reference_hull(num_dims):
         np.ndarray: A (num_dims-1) array of the constants of the hyperplanes defining the convex hull. See above.
         scipy.spatial.ConvexHull: The convex hull of the projected vertices/valid reference points.
     """
-    vertices = np.array(list(product([0, 1], repeat=num_dims)))
+    if reference_points is None:
+        vertices = np.array(list(product([0, 1], repeat=num_dims)))
+    # OPTION 1: give min and max of each objectives from the DMs prefs to rotate in
+
+    # OPTION 2: give normalized RPs from the DMs to the rotate in
+    else:
+        vertices = reference_points
 
     # Project vertices onto plane perpendicular to largest space diagonal, rotate to make one of the objectives zero.
     # Then flatten to (num_dims-1) dimensions.
@@ -127,12 +133,12 @@ def get_hull_equations(hull):
 
 
 def generate_points(
-    num_points: int, num_dims: int
+    num_points: int, num_dims: int, reference_points: np.ndarray | None,
 ) -> tuple[
     np.ndarray,
     np.ndarray,
 ]:
-    """Generate reference points for the IPA algorithm.
+    """Generate reference points for the IPR algorithm.
 
     Creates a (large) number of reference points on a plane perpendicular to the largest space diagonal of the unit
     hypercube in the num_dims-dimensional space. First, the vertices of the unit hypercube are generated. Then, the
@@ -147,12 +153,12 @@ def generate_points(
     Args:
         num_points (int): The number of reference points to generate.
         num_dims (int): The number of dimensions of the space in which the reference points are generated.
+        reference_points: The set of normalized reference points.
 
     Returns:
         np.ndarray: A (num_points) x (num_dims-1) array of reference points.
     """
-
-    bounding_box, A, b, _ = get_reference_hull(num_dims)
+    bounding_box, A, b, _ = get_reference_hull(num_dims, reference_points)
     points = numba_random_gen(num_points, bounding_box, A, b)
     # Project vertices onto plane perpendicular to largest space diagonal
     points_rotated = rotate_out(points)
