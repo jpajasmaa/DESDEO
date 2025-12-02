@@ -1,24 +1,49 @@
 """Tests related to the Favorite method."""
 
 import pytest
-from desdeo.gdm.favorite_method import find_group_solutions, scale_rp, get_representative_set, IPR_Options
+
+import polars as pl
+from desdeo.gdm import favorite_method
+from desdeo.tools.iterative_pareto_representer import _EvaluatedPoint, choose_reference_point
+from desdeo.gdm.favorite_method import (
+    FairSolution,
+    GPRMResults,
+    IPR_Results,
+    ZoomOptions,
+    setup,
+    FavOptions,
+    FavResults,
+    favorite_method,
+    GPRMOptions,
+    find_group_solutions,
+    scale_rp,
+    get_representative_set,
+    IPR_Options
+)
 from desdeo.problem.testproblems.dtlz2_problem import dtlz2
 from desdeo.problem import (
     numpy_array_to_objective_dict,
     objective_dict_to_numpy_array,
 )
+from desdeo.tools.iterative_pareto_representer import _EvaluatedPoint
 
 
 @pytest.mark.favorite
 def test_fairness_funcs():
     pass
 
+@ pytest.mark.favorite
+def test_zooming():
+    pass
+
+@pytest.mark.favorite
+def test_setup():
+    pass
+    # dtlz2_problem = dtlz2(8, 3)
+
 
 @pytest.mark.favorite
 def test_favorite_method_iteration():
-    """
-    Test favorite_method iteration, includes both get_representative_set and finding fair group solutions.
-    """
 
     dtlz2_problem = dtlz2(8, 3)
     ideal = dtlz2_problem.get_ideal_point()
@@ -30,44 +55,59 @@ def test_favorite_method_iteration():
         "DM2": {"f_1": 0.17049589008489896, "f_2": 0.9704959056849697, "f_3": 0.17049589001752685},
         "DM3": {"f_1": 0.9704959057874635, "f_2": 0.17049588971897997, "f_3": 0.1704958898000307},
     }
-
-    # TODO: get fake_ideal and fake_nadir
-
-    options = IPR_Options(
-        fake_ideal=ideal,
-        fake_nadir=nadir,
+    ipr_options = IPR_Options(
         most_preferred_solutions=most_preferred_solutions,
         num_initial_reference_points=10000,
-        num_points_to_evaluate=100,
-        EvaluatedPoints=evaluated_points,
-        version="convex_hull",
-        # version="fake"
+        version="box",
     )
-    df, res = get_representative_set(dtlz2_problem, options)
-    assert res is not None
-    # TODO: check for correct types in res
-
-    # need to scale the mpses for fairness
-    mps = {}
-    for dm in most_preferred_solutions:
-        mps.update({dm: scale_rp(dtlz2_problem, most_preferred_solutions[dm], ideal, nadir, False)})
-
-    # RPs as array for methods to come
-    rp_arr = []
-    for i, dm in enumerate(mps):
-        rp_arr.append(objective_dict_to_numpy_array(dtlz2_problem, mps[dm]).tolist())
-    normalized_most_preferred_solutions = rp_arr
-
-    solution_selector = ["regret"]
-    fair_sols = find_group_solutions(
-        dtlz2_problem, res.evaluated_points, normalized_most_preferred_solutions, solution_selector
+    grpmoptions = GPRMOptions(
+        method_options=ipr_options,
     )
-    print(fair_sols)
+    zoomoptions = ZoomOptions(num_steps_remaining=5)
 
-    assert fair_sols is not None
-    assert False
+    fav_options = FavOptions(
+        GPRMoptions=grpmoptions,
+        zoom_options=zoomoptions,
+        original_most_preferred_solutions=most_preferred_solutions,
+        votes=None,  # none in the first iteration
 
+    )
 
-@pytest.mark.favorite
-def test_zooming():
-    pass
+    grp_results = GPRMResults(
+        raw_results=IPR_Results(evaluated_points=[
+            _EvaluatedPoint(
+                reference_point=most_preferred_solutions["DM1"],
+                targets=most_preferred_solutions["DM1"],
+                objectives=most_preferred_solutions["DM1"],
+            )],
+        ),
+        solutions=None,
+        outputs=pl.DataFrame(),
+    )
+    # just to satisfy types, lets take the DM1's MPS as the fair solution
+    objs = most_preferred_solutions["DM1"]
+    fair_sols = [FairSolution(
+        objective_values=objs,
+        fairness_criterion="no_regret",
+        fairness_value=0.5,
+    )]
+    fav_results_e = [
+        FavResults(
+            FavOptions=fav_options,
+            GPRMResults=grp_results,
+            fair_solutions=fair_sols,
+        )
+    ]
+
+    # favorite_method(problem=dtlz2_problem, options=fav_options, results_list=fav_results)  # results_list is None in the first iteration
+    fav_results = favorite_method(problem=dtlz2_problem, options=fav_options, results_list=[])  # results_list is None in the first iteration
+
+    # Test second iteration
+    fav_options_2 = FavOptions(
+        GPRMoptions=fav_options.GPRMoptions,
+        zoom_options=fav_options.zoom_options,
+        original_most_preferred_solutions=fav_options.original_most_preferred_solutions,
+        votes={"DM1": 0, "DM2": 0, "DM3": 1},
+    )
+    fav_results_2 = favorite_method(problem=dtlz2_problem, options=fav_options_2, results_list=[fav_results])  # results_list is None in the first iteration
+    print(fav_results_2)

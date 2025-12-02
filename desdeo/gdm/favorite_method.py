@@ -23,6 +23,7 @@ from desdeo.gdm.gdmtools import (
     min_max_regret_no_impro,
     scale_rp,
 )
+from desdeo.gdm.voting_rules import majority_rule
 from desdeo.gdm.preference_aggregation import find_GRP
 from desdeo.mcdm.nautilus_navigator import calculate_navigation_point
 from desdeo.problem import (
@@ -37,7 +38,7 @@ from desdeo.tools.iterative_pareto_representer import _EvaluatedPoint, choose_re
 from desdeo.tools.scalarization import add_asf_diff
 
 # TODO: now for easier testing. REMOVE THIS GLOBAL VAR
-num_of_runs = 100
+num_of_runs = 10
 
 # TODO: create two versions with version1 options and version2 options
 
@@ -54,7 +55,6 @@ class IPR_Options(pydantic.BaseModel):
         """Version "convex_hull": evaluate in the convex hull of MPS."""
         """ Version "box": evaluate in the box of fake_ideal and fake_nadir."""
     )
-    # fairness_metrics: list[str]
     most_preferred_solutions: dict[str, dict[str, float]] | None = None
     """Most preferred solutions of the decision makers. Should be filled in by code, not by user."""
 
@@ -538,7 +538,6 @@ def shift_points(
 # evaluated_points: list(_EvaluatedPoint) = Field("The evaluated points.")
 
 
-# I dont know how to use this properly.
 def get_representative_set_IPR(problem: Problem, options: GPRMOptions, results_list: list[GPRMResults]) -> GPRMResults:
     """Get the representative set according to IPR_Options."""
     if not isinstance(options.method_options, IPR_Options):
@@ -682,8 +681,10 @@ def get_representative_set(problem: Problem, options: GPRMOptions, results_list:
     """
     if isinstance(options.method_options, IPR_Options):
         return get_representative_set_IPR(problem, options, results_list)
+        # return get_representative_set_IPR(problem, options, None)
     if options.method_options is None:
         return get_representative_set_EMO(problem, options, results_list)
+        # return get_representative_set_EMO(problem, options, None)
     raise TypeError("Invalid MethodOptions type provided.")
 
 
@@ -789,8 +790,11 @@ def setup(problem: Problem, options: FavOptions, results_list: list[FavResults])
             raise ValueError("Votes must be provided for iterations after the first.")
         # handle voting
         old_candidates = results_list[-1].fair_solutions
+        print(results_list)
+        print(old_candidates)
         votes = options.votes
         winner = majority_rule(votes=votes)
+        print("WINNER", winner)
         if winner is None:
             raise ValueError("No winner could be determined from the votes provided.")
         winner = old_candidates[winner]
@@ -819,7 +823,7 @@ def setup(problem: Problem, options: FavOptions, results_list: list[FavResults])
     return options
 
 
-def favourite_method(problem: Problem, options: FavOptions, results_list: list[FavResults]) -> FavResults:
+def favorite_method(problem: Problem, options: FavOptions, results_list: list[FavResults]) -> FavResults:
     """Run one complete iteration of the favorite method.
 
     For multiple iterations, call this function multiple times, passing the previous results in results_list.
@@ -829,7 +833,7 @@ def favourite_method(problem: Problem, options: FavOptions, results_list: list[F
     Args:
         problem: DESDEO Problem object
         options: FavOptions for the favorite method.
-        results_list: List of previous FavResults.
+        results_list: List of previous FavResults. Can be None in the first iteration.
 
     Returns:
         FavResults: Results from this iteration of the favorite method. It also contains a filled up version of
@@ -840,7 +844,10 @@ def favourite_method(problem: Problem, options: FavOptions, results_list: list[F
     # calculating candidate fair solutions
     options = setup(problem, options, results_list)
 
-    gprm_results = get_representative_set(problem, options.GPRMoptions, [result.GPRMResults for result in results_list])
+    # gprm_results = get_representative_set(problem, options.GPRMoptions, [result.GPRMResults for result in results_list])
+    # first iteration
+    gprm_results = get_representative_set(problem, options.GPRMoptions, [])
+    # gprm_results = get_representative_set(problem, options.GPRMoptions, None)
 
     fair_solutions = []
     # TODO (@jpajasmaa): many complicated things happening here. Rewrirte this function to be simpler.
