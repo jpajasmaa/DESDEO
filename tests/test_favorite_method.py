@@ -86,11 +86,18 @@ def test_favorite_method_iteration():
     )
     # just to satisfy types, lets take the DM1's MPS as the fair solution
     objs = most_preferred_solutions["DM1"]
-    fair_sols = [FairSolution(
-        objective_values=objs,
-        fairness_criterion="no_regret",
-        fairness_value=0.5,
-    )]
+    fair_sols = [
+        FairSolution(
+            objective_values=objs,
+            fairness_criterion="no_regret",
+            fairness_value=0.5,
+        ),
+        FairSolution(
+            objective_values=objs,
+            fairness_criterion="regret",
+            fairness_value=0.5,
+        ),
+    ]
     fav_results_e = [
         FavResults(
             FavOptions=fav_options,
@@ -111,3 +118,5 @@ def test_favorite_method_iteration():
     )
     fav_results_2 = favorite_method(problem=dtlz2_problem, options=fav_options_2, results_list=[fav_results])  # results_list is None in the first iteration
     print(fav_results_2)
+
+    assert False

@@ -3,6 +3,8 @@
 from desdeo.problem import Problem
 from numba import njit  # type: ignore
 
+import polars as pl
+
 from .preference_aggregation import eval_RP, maxmin_criterion
 import numpy as np
 
@@ -89,7 +91,7 @@ Utility funcs
 # So for 3 DMs, returns [p1, p2, p3]
 # The larger the value is, the more regret the DM has
 # Numba goes BRRRRRT
-@njit()
+# @njit()
 def regret_allDMs_no_impro(sol, mpses):
     uf_arr = []  # convert to numpy later for numba
 
@@ -195,22 +197,24 @@ def inequality_in_pareto_regret(all_sols, mpses):
 
 # See Bertsimas: On the Efficiency-Fairness Trade-off
 # Utilities must be strictly positive.
-def alpha_fairness(all_sols, mpses, alpha):
+def alpha_fairness(targets_df: pl.DataFrame, mpses: list[np.ndarray], alpha: float):
     alpha_fairs = []
+
+    # convert polars dataframes dictionaries to numpy arrays
+    all_sols = targets_df.to_numpy()
+    print(all_sols)
+
     M = len(mpses)  # number of DMs
     for i in range(len(all_sols)):
         # TODO: utilities must be [0, R^n_+]
-        # utilities = min_max_regret(all_sols[i], mpses)
         utilities = regret_allDMs_no_impro(all_sols[i], mpses)
-        # utilities = cones_preference_model(all_sols[i], mpses)
-        # utilities = additive_preference_model(all_sols, mpses)
         if alpha == 1:
             alpha_fairs.append(np.sum(np.log(utilities)))
         else:
             tops = []
             bottom = 1 - alpha
             if bottom == 0:  # this should not happen but just in case
-                bottom += 0.00001
+                bottom += 1e-6
             for m in range(M):
                 tops.append(utilities[m]**(1 - alpha))
             result = np.array(tops) / bottom
