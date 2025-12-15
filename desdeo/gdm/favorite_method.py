@@ -17,6 +17,7 @@ from desdeo.gdm.gdmtools import (
     average_pareto_regret,
     dict_of_rps_to_list_of_rps,
     get_top_n_fair_solutions,
+    get_top_n_fair_solutions_pl,
     inequality_in_pareto_regret,
     max_min_regret,
     min_max_regret,
@@ -338,6 +339,14 @@ def find_group_solutions(problem: Problem, solutions: pl.DataFrame, targets, mos
         normalized_mpses_arr.append(objective_dict_to_numpy_array(problem, normalized_mpses[dm]).tolist())
 
     # TODO: change this to match how many FairSolution we want
+    # For now, we just get a single one
+    ranking = alpha_fairness(targets, normalized_mpses_arr, alpha=0.0)  # utilitarian
+    # ranking = alpha_fairness(targets, normalized_mpses_arr, alpha=1)  # nash
+    # ranking = min_max_regret_no_impro(targets, normalized_mpses_arr)  # minmax regret no improvements
+
+    print(ranking)
+
+    """
     fairness_criteria = ["utilitarian", "nash", "minmax"]
     for i in range(len(fairness_criteria)):
         fairness_ranking = []
@@ -348,7 +357,6 @@ def find_group_solutions(problem: Problem, solutions: pl.DataFrame, targets, mos
             fairness_ranking.append(fairness_function(targets, normalized_mpses_arr, alpha=1.0))
         else:
             fairness_ranking.append(fairness_function(targets, normalized_mpses_arr))
-        """
         # TODO: figure out how to configure the helper
         fairness_function = helper(fairness_criterion=fairness_criteria[i])
 
@@ -357,15 +365,28 @@ def find_group_solutions(problem: Problem, solutions: pl.DataFrame, targets, mos
         print("fair sols ranmking", fairness_ranking)
         """
 
+    print("SOLUTIONS:\r\n", solutions)
+
+    # if solutions are dict, we need to convert them to array for top_n_fair_solutions
+    eval_sols_in_objs = []
+    # evaluated_points["targets"]
+    for i in range(len(solutions)):
+        eval_sols_in_objs.append(objective_dict_to_numpy_array(problem, solutions[i]))  # HOW THE HELL YOU ARE NOT A LIST???
+        # eval_sols_in_objs.append(objective_dict_to_numpy_array(problem, evaluated_points[i].objectives))
+        eval_sols_in_objs = np.stack(eval_sols_in_objs)
+
     # Return top fair solutions
+    ranking_r, ranking_i = get_top_n_fair_solutions(solutions, ranking, 1)
+    print("fairness rankings")
+    print(ranking_r, ranking_i)
 
     FairSolutions_arr = []
     # Loop
     FairSolutions_arr.append(
         FairSolution(
-            objective_values=fair_solution,
-            fairness_criterion="mean",
-            fairness_value=1,
+            objective_values=numpy_array_to_objective_dict(problem, ranking_r[0]),
+            fairness_criterion="test",
+            fairness_value=ranking_i[0],
         )
     )
     # TODO: regret values needed or?
