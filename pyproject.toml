@@ -1,6 +1,6 @@
 [project]
 name = "desdeo"
-version = "2.0.0"
+version = "2.1.0"
 description = "DESDEO is a modular and open source framework for interactive multiobjective optimization."
 authors = [
     {name="Giovanni Misitano",  email="giovanni.a.misitano@jyu.fi"},
@@ -227,10 +227,8 @@ ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 markers = [
-    "skip: stests marked to be skipped",
     "slow: mark test as slow",
     "nautilus_navigator: tests related to the NAUTILUS Navigator method",
-    "performance: tests that are related to performance. Skipped by default",
     "infix_parser: tests related to the infix parser",
     "pyomo: tests related to pyomo models, their parsing, and evaluation",
     "sympy: tests related to sympy expressions, their parsing, and evaluatio.",
@@ -252,7 +250,6 @@ markers = [
     "json: tests related to the Math JSON parser.",
     "schema: tests related to the Problem schema.",
     "utils: tests related to various utilities.",
-    "nogithub: tests that should not be run in GitHub actions.",
     "simulator_support: tests related to simulator and surrogate support",
     "explainer: tests related to explainers and related functionalities.",
     "explanation_utils: tests related to explanations module utilities.",
@@ -262,7 +259,9 @@ markers = [
     "enautilus: tests related to the E-NAUTILUS method.",
     "gdmtools: tests related to group decision making.",
     "gnimbus: tests related to group nimbus method.",
-    "external: tests related to providers interfacing to external problems."
+    "external: tests related to providers interfacing to external problems.",
+    "fixme: tests that are not passing, but maybe should, yet are ignored.",
+    "githubskip: skip these tests on GitHub workflows."
 ]
 pythonpath = "."
 asyncio_default_fixture_loop_scope = "function"
