@@ -1,5 +1,6 @@
 """The Favorite method, a general method for group decision making in multiobjective optimization"""
 
+import re
 from typing import Literal
 
 import numpy as np
@@ -384,218 +385,6 @@ def find_group_solutions(problem: Problem, solutions: pl.DataFrame, targets, mos
 
     return FairSolutions_arr, regret_values
 
-# TODO: this to be re-written after UFs are implemented as polars expressions
-def find_group_solutions_mess(
-    problem: Problem, evaluated_points: pl.DataFrame, mps: list[np.ndarray], selectors: list[str], n: int = 1
-) -> tuple[list[FairSolution], list[float]]:
-    """Find n fair group solutions according to different fairness criteria.
-
-    Assumes everything has been properly converted to minimization already.
-    TODO: extend to return any amount of fair solutions with some order such as:
-        1. Maxmin-cones solution
-        2. regret sum
-        3. regret maxmin
-
-        Maxmin-cones is a singular, for regret sum and regret maxmin can return multiple solutions.
-
-        mps must be np array for the below code !
-
-        Returns a list of FairSolutions
-
-    Args:
-        problem: DESDEO Problem object
-        evaluated_points: DataFrame of objective values of evaluated points
-        mps: list of most preferred solutions as numpy arrays
-        selectors: list of strings indicating which fairness metrics to apply
-        n: number of fair solutions to return for each fairness metric
-
-    Returns:
-        tuple: (list of FairSolution objects, dict of regret values for each solution)
-    """
-    # TODO: normalize the MPSses. TO its own function?
-    norm_mps = mps
-
-    norm_eval_sols = []
-    # evaluated_points["targets"]
-    for i in range(len(evaluated_points)):
-        norm_eval_sols.append(objective_dict_to_numpy_array(problem, evaluated_points[i].targets))
-    norm_eval_sols = np.stack(norm_eval_sols)
-
-    eval_sols_in_objs = []
-    # evaluated_points["targets"]
-    for i in range(len(evaluated_points)):
-        eval_sols_in_objs.append(objective_dict_to_numpy_array(problem, evaluated_points[i].objectives))
-    eval_sols_in_objs = np.stack(eval_sols_in_objs)
-
-    norm_mps_arr = np.array(norm_mps)  # P needs to be np.array for solve_UFs
-
-    #  apply the selectors string to determine which of the fairness_metrics to apply
-    print(selectors)
-    # add maxmin-cones, maybe maxmin also?
-
-    #  would be convenient to get all the parameter to some parameter dictionary etc that I can apply.
-    # Look for inspiration in Bhupinder's EMO stuff?
-    # Regret UFs, no achievement for aspiration. Sum over DMs.
-    #
-    # TODO: here the UF calculations. Start with something simple to get the structure right?
-    # Regret UFs, no achievement for aspiration. Take the DM that is worst-off. Min()
-    min_no_regrets = min_max_regret_no_impro(norm_eval_sols, norm_mps_arr)
-    print("min regrets no impro:", min(min_no_regrets), max(min_no_regrets))
-
-    # Regret UFs, achievement for aspiration.
-    min_regrets = min_max_regret(norm_eval_sols, norm_mps_arr)
-    print("chebyshev regret:", min(min_regrets), max(min_regrets))
-
-    # Avererage Pareto regret
-    avg_regrets = average_pareto_regret(norm_eval_sols, norm_mps_arr)
-    print("avg pareto regrets:", min(avg_regrets), max(avg_regrets))
-
-    # inequality in pareto regret
-    gini_regrets = inequality_in_pareto_regret(norm_eval_sols, norm_mps_arr)
-    print("gini pareto regrets:", min(gini_regrets), max(gini_regrets))
-
-    # maxmin in pareto regret
-    # maxmin_regrets = max_min_regret(norm_eval_sols, norm_mps_arr)
-    # print("maxmin regrets:", maxmin_regrets)
-
-    # alpha fairness with pareto regret
-    # alpha_regrets = alpha_fairness(norm_eval_sols, norm_mps_arr, alpha=0)
-    # print("alpha regrets:", alpha_regrets)
-
-    # lets test different values for alpha
-    # min_no_regrets = alpha_fairness(norm_eval_sols, norm_mps_arr, alpha=0.0)  # should match to the utilitarian fairness
-    utilitarian = alpha_fairness(norm_eval_sols, norm_mps_arr, alpha=0.0)  # some midway between nash and utilitarian
-    print("utilitarian regrets no impro:", min(utilitarian), max(utilitarian))
-    # avg_regrets = alpha_fairness(norm_eval_sols, norm_mps_arr, alpha=1)  # should match Nash (proportionally fair)
-    nash = alpha_fairness(norm_eval_sols, norm_mps_arr, alpha=1)  # alpha goes to infinity matches maxmin fair.
-    print("nash regrets no impro:", min(nash), max(nash))
-
-    # Regret UFs, no achievement for aspiration. Take the DM that is best-off. Max()
-    #
-    # TODO: to get fairness values for each solution, this topfair should also return the index.
-    min_r_no, min_no_i = get_top_n_fair_solutions(eval_sols_in_objs, min_no_regrets, n)
-    util_r, util_i = get_top_n_fair_solutions(eval_sols_in_objs, utilitarian, n)
-    min_r, min_i = get_top_n_fair_solutions(eval_sols_in_objs, min_regrets, n)
-    avg_r, avg_i = get_top_n_fair_solutions(eval_sols_in_objs, avg_regrets, n)
-    gini_r, gini_i = get_top_n_fair_solutions(eval_sols_in_objs, gini_regrets, n)
-    nash_r, nash_i = get_top_n_fair_solutions(eval_sols_in_objs, nash, n)
-    # TODO: find out what is the bug here. returns arrays
-    # alpha_r = get_top_n_fair_solutions(eval_sols_in_objs, alpha_regrets, n)
-
-    # SOLVE MAXMIN CONES
-    # TODO: all this needs to be inside its own function after find_GRP has been rewritten for usability
-    # for dtlz2
-    cip = np.array(
-        [np.max(norm_mps_arr[:, 0]) + 0.001, np.max(norm_mps_arr[:, 1]) + 0.001, np.max(norm_mps_arr[:, 2]) + 0.001]
-    )
-    ideal_arr = np.array([np.min(norm_mps_arr[:, 0]), np.min(norm_mps_arr[:, 1]), np.min(norm_mps_arr[:, 2])])
-
-    # for river_pollution
-    # cip = np.array([np.max(norm_mps_arr[:, 0]) + 0.001, np.max(norm_mps_arr[:, 1]) + 0.001,
-    #               np.max(norm_mps_arr[:, 2]) + 0.001, np.max(norm_mps_arr[:, 3]) + 0.001])
-    # ideal_arr = np.array([np.min(norm_mps_arr[:, 0]), np.min(norm_mps_arr[:, 1]), np.min(norm_mps_arr[:, 2]), np.min(norm_mps_arr[:, 3])])
-
-    print(norm_mps_arr)
-    print("starting")
-    print(cip)
-    print(ideal_arr)
-
-    k = len(problem.objectives)
-    q = len(norm_mps_arr)
-    pa = "eq_maxmin_cones"
-    # pa = "eq_maxmin"
-    all_rps = norm_mps_arr
-    GRP, s_values = find_GRP(all_rps, cip, k, q, ideal_arr, all_rps, pa)
-    print("SVALUES", s_values)
-    # GRP = GRP - cip
-    print("MAXMIN cones GRP", GRP)
-    # Find PO solution with conesGRP
-    # GRP_dict = {"f_1": GRP[0], "f_2": GRP[1], "f_3": GRP[2], "f_4": GRP[3]} # for river pollution,
-    GRP_dict = {"f_1": GRP[0], "f_2": GRP[1], "f_3": GRP[2]}
-
-    p, target = add_asf_diff(
-        problem,
-        symbol=f"asf",
-        reference_point=GRP_dict,
-    )
-    # scaled_problem, target = add_asf_diff(self.problem, "asf", refp)
-    solver = PyomoIpoptSolver(p)
-    res = solver.solve(target)
-    fs = res.optimal_objectives
-    GRP_po = objective_dict_to_numpy_array(problem, fs)
-
-    # SOLVE MAXMIN
-    pa = "eq_maxmin"
-    GRPmm, mm_s_values = find_GRP(all_rps, cip, k, q, ideal_arr, all_rps, pa)
-    print("SVALUES", mm_s_values)
-    # GRP = GRP - cip
-    print("MAXMIN GRP", GRPmm)
-    # Find PO solution with conesGRP
-    # GRPmm_dict = {"f_1": GRPmm[0], "f_2": GRPmm[1], "f_3": GRPmm[2], "f_4": GRPmm[3]}
-    GRPmm_dict = {"f_1": GRPmm[0], "f_2": GRPmm[1], "f_3": GRPmm[2]}
-
-    p, target = add_asf_diff(
-        problem,
-        symbol=f"asf",
-        reference_point=GRPmm_dict,
-    )
-    # scaled_problem, target = add_asf_diff(self.problem, "asf", refp)
-    solver = PyomoIpoptSolver(p)
-    resmm = solver.solve(target)
-    fsmm = resmm.optimal_objectives
-    GRPmm_po = objective_dict_to_numpy_array(problem, fsmm)
-
-    # top_fair = np.concatenate((min_r_no, min_r, avg_r, gini_r, util_r, nash_r, [GRP_po]))
-    top_fair = np.concatenate((min_r_no, min_r, avg_r, gini_r, util_r, nash_r, [GRP_po], [GRPmm_po]))
-    # TODO: smarter way instead of this monstrosity
-    # Adds the top fair solution's fairness value to a np.array of lists, similar to top_fair, to be added to FairSolution objects.
-    top_fair_values = np.concatenate(
-        (
-            [min_no_regrets[min_no_i[0]]],
-            [min_regrets[min_i[0]]],
-            [avg_regrets[avg_i[0]]],
-            [gini_regrets[gini_i[0]]],
-            [utilitarian[util_i[0]]],
-            [nash[nash_i[0]]],
-            [np.max(s_values)],
-            [np.max(mm_s_values)],
-        )
-    )
-    # top_fair = np.stack(top_fair)
-    fairness_criteria = [
-        "min_no",
-        "min",
-        "avg",
-        "gini",
-        "util",
-        "nash",
-        "cones",
-        "maxmin",
-    ]  # need to get this elsewhere
-    FairSolutions_arr = []
-    for i, fair_solution in enumerate(top_fair):
-        fair_sol = FairSolution(
-            objective_values=numpy_array_to_objective_dict(problem, fair_solution),
-            fairness_criterion=fairness_criteria[i],
-            fairness_value=top_fair_values[i],
-        )
-        FairSolutions_arr.append(fair_sol)
-
-    regret_values = {
-        "min_no": min_no_regrets,
-        "min": min_regrets,
-        "avg": avg_regrets,
-        "gini": gini_regrets,
-        "util": utilitarian,
-        "nash": nash,
-        "cones": GRP_po,
-        "maxmin": GRPmm_po,
-    }
-
-    print(FairSolutions_arr)
-
-    return FairSolutions_arr, regret_values
-
 
 def shift_points(
     problem: Problem, most_preferred_solutions, group_preferred_solution: dict[str, float], steps_remaining
@@ -893,16 +682,42 @@ def favorite_method(problem: Problem, options: FavOptions, results_list: list[Fa
     options = setup(problem, options, results_list)
 
     # first iteration
-    # gprm_results = get_representative_set(problem, options.GPRMoptions, [])
     gprm_results = get_representative_set(problem, options.GPRMoptions, [result.GPRMResults for result in results_list])
 
     fair_solutions = []
+
+    # Add previous iteration's winner solution
+    if results_list:
+        # Get the candidates from the previous iteration
+        previous_candidates = results_list[-1].fair_solutions
+
+        # Note: setup() ensures options.votes is not None if results_list exists
+        winner_idx = majority_rule(votes=options.votes)
+
+        if winner_idx is not None:
+            winner_solution = previous_candidates[winner_idx]
+            fair_solutions.append(winner_solution)
+        else:
+            # Fallback if voting fails (though setup() usually catches this)
+            raise ValueError("No winner could be determined from the votes provided.")
+
+    # TODO: append last iterations fiar solution to the fairREsults fair solutions
+    # if results_list is not empty, there is a most voted solution from last iteration.
+    # print(results_list)
+    # if len(results_list) != 0:
+    #    fair_solutions = results_list[0].fair_solutions[0]
+    #    print(fair_solutions)
+    # else:
+    #    fair_solutions = []
     targets = pl.DataFrame([point.targets for point in gprm_results.raw_results.evaluated_points])
     # print(targets)
-    fair_solutions, _ = find_group_solutions(problem, solutions=gprm_results.outputs, targets=targets,
-                                             most_preferred_solutions=options.original_most_preferred_solutions,
-                                             fairness_criterion=options.candidate_generation_options)
+    # fair_solutions, _ = find_group_solutions(problem, solutions=gprm_results.outputs, targets=targets,
+    new_fair_solutions_list, _ = find_group_solutions(problem, solutions=gprm_results.outputs, targets=targets,
+                                                      most_preferred_solutions=options.original_most_preferred_solutions,
+                                                      fairness_criterion=options.candidate_generation_options)
     # TODO: add last iteration's winner solution as a fair solution here?
+    # fair_solutions.append(new_fair_solution)
+    fair_solutions.extend(new_fair_solutions_list)
 
     return FavResults(
         FavOptions=options,
@@ -921,16 +736,38 @@ if __name__ == "__main__":
     ideal = dtlz2_problem.get_ideal_point()
     nadir = dtlz2_problem.get_nadir_point()
 
+    n_of_dms = 4
     most_preferred_solutions = {
         "DM1": {"f_1": 0.17049589013991726, "f_2": 0.17049589002331159, "f_3": 0.9704959056742878},
         "DM2": {"f_1": 0.17049589008489896, "f_2": 0.9704959056849697, "f_3": 0.17049589001752685},
         "DM3": {"f_1": 0.9704959057874635, "f_2": 0.17049588971897997, "f_3": 0.1704958898000307},
         "DM4": {"f_1": 0.9704959057874635, "f_2": 0.17049588971897997, "f_3": 0.1704958898000307},
     }
+
+    # random rps
+    reference_points = {}
+    for i in range(n_of_dms):
+        reference_points[f"DM{i+1}"] = {"f_1": np.random.random(), "f_2": np.random.random(), "f_3": np.random.random()}
+
+    print(reference_points)
+
+    most_preferred_solutions = {}
+    DMs = reference_points.keys()
+    for dm in DMs:
+        p, target = add_asf_diff(
+            dtlz2_problem,
+            symbol="asf",
+            reference_point=reference_points[dm],
+        )
+        solver = PyomoIpoptSolver(p)
+        res = solver.solve(target)
+        fs = res.optimal_objectives
+        most_preferred_solutions[f"{dm}"] = fs
+
     ipr_options = IPR_Options(
         most_preferred_solutions=most_preferred_solutions,
         num_initial_reference_points=10000,
-        version="convex_hull",
+        version="box",
     )
     grpmoptions = GPRMOptions(
         method_options=ipr_options,
@@ -977,12 +814,25 @@ if __name__ == "__main__":
     # Test second iteration
     fav_options_2 = FavOptions(
         GPRMoptions=fav_options.GPRMoptions,
+        # candidate_generation_options="utilitarian",
         candidate_generation_options="mm",
         zoom_options=fav_options.zoom_options,
         original_most_preferred_solutions=fav_options.original_most_preferred_solutions,
         votes={"DM1": 0, "DM2": 0, "DM3": 1, "DM4": 0},  # votes in the first iteration
     )
-    fav_results_2 = favorite_method(problem=dtlz2_problem, options=fav_options_2, results_list=[fav_results])  # results_list is None in the first iteration
+    fav_results_2 = favorite_method(problem=dtlz2_problem, options=fav_options_2, results_list=[fav_results])
     print(fav_results_2)
+
+    # Test thid iteration
+    fav_options_3 = FavOptions(
+        GPRMoptions=fav_options.GPRMoptions,
+        candidate_generation_options="nash",
+        # candidate_generation_options="mm",
+        zoom_options=fav_options.zoom_options,
+        original_most_preferred_solutions=fav_options.original_most_preferred_solutions,
+        votes={"DM1": 0, "DM2": 0, "DM3": 1, "DM4": 0},  # votes in the first iteration
+    )
+    fav_results_3 = favorite_method(problem=dtlz2_problem, options=fav_options_3, results_list=[fav_results_2])
+    print(fav_results_3)
 
     print("done")

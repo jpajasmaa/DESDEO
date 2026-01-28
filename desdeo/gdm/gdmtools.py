@@ -95,7 +95,7 @@ Utility funcs
 def regret_allDMs_no_impro(sol, mpses):
     uf_arr = []  # convert to numpy later for numba
 
-    zeros = np.zeros(len(sol)) + 1e-6
+    zeros = np.zeros(len(sol)) # + 1e-6 # removed from now here.
 
     for p in range(len(mpses)):
         uf_arr.append(np.sum(np.maximum(zeros, sol - mpses[p])))  # improvements do not count
@@ -138,8 +138,10 @@ def regret_allDMs_max(sol, mpses):
 # X: all solutions
 # P: MPSes
 # all solutions, MPSes, everything have to be scaled and converted to minimization
-def min_max_regret_no_impro(all_sols, mpses):
+def min_max_regret_no_impro(targets_df: pl.DataFrame, mpses: list[np.ndarray]):
     min_regrets = []
+    # convert polars dataframes dictionaries to numpy arrays
+    all_sols = targets_df.to_numpy()
     for i in range(len(all_sols)):
         per_sol = regret_allDMs_no_impro(all_sols[i], mpses)
 
