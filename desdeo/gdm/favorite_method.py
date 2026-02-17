@@ -3,6 +3,7 @@
 from typing import Literal, List, Dict
 import plotly.graph_objects as go
 from scipy.spatial.distance import cdist
+from scipy.spatial import ConvexHull
 import re
 from typing import Literal
 
@@ -36,14 +37,158 @@ from desdeo.problem import (
 )
 from desdeo.problem.schema import Problem
 from desdeo.tools import IpoptOptions, PyomoIpoptSolver
-from desdeo.tools.GenerateReferencePoints import generate_points
+from desdeo.tools.GenerateReferencePoints import generate_points, rotate_in, rotate_out, get_hull_equations, numba_random_gen
 from desdeo.tools.generics import EMOResult, SolverResults
-from desdeo.tools.iterative_pareto_representer import _EvaluatedPoint, choose_reference_point
+from desdeo.tools.iterative_pareto_representer import _EvaluatedPoint, choose_reference_point, _project
 from desdeo.tools.scalarization import add_asf_diff
 
 
 import plotly.io as pio
 pio.renderers.default = "browser"
+
+
+# TESTING
+
+
+# --- 3. 2D VISUALIZATION FUNCTION ---
+def visualize_selection_2d(all_points, seed_solutions, new_solutions, title):
+    """
+    Plots the candidate pool and selected points in 2D.
+    """
+    def get_coords(point_list, is_evaluated_point=True):
+        xs, ys = [], []
+        for p in point_list:
+            d = p.objectives if is_evaluated_point else p.objective_values
+            xs.append(d["f_1"])
+            ys.append(d["f_2"])
+        return xs, ys
+
+    fig = go.Figure()
+
+    # 1. Plot All Candidates (Grey Background)
+    cx, cy = get_coords(all_points, True)
+    fig.add_trace(go.Scatter(
+        x=cx, y=cy,
+        mode='markers',
+        name='Evaluated Points Space',
+        marker=dict(size=6, color='lightgrey', opacity=0.6)
+    ))
+
+    # 2. Plot Seed Solution (Red Star)
+    sx, sy = get_coords(seed_solutions, False)
+    fig.add_trace(go.Scatter(
+        x=sx, y=sy,
+        mode='markers',
+        name='Existing Fair Solution',
+        marker=dict(size=12, color='red', symbol='star')
+    ))
+
+    # 3. Plot Newly Selected Points (Blue Circles with Numbers)
+    nx, ny = get_coords(new_solutions, False)
+    fig.add_trace(go.Scatter(
+        x=nx, y=ny,
+        mode='markers+text',
+        name='Selected Candidates',
+        text=[str(i+1) for i in range(len(new_solutions))],
+        textposition="top center",
+        textfont=dict(size=14, color="black"),
+        marker=dict(size=10, color='blue', symbol='circle', line=dict(width=2, color='black'))
+    ))
+
+    fig.update_layout(
+        title=title,
+        xaxis_title='Objective f_1',
+        yaxis_title='Objective f_2',
+        width=800, height=600,
+        template="plotly_white"
+    )
+    fig.show(renderer="browser")
+
+# --- 3D VISUALIZATION ---
+def visualize_3d_clusters(options, points_arr, centers_arr, labels, n_predetermined):
+    """
+    Visualizes 3D clusters by coloring points.
+    """
+
+    ideal = [0, 0, 0]
+    nadir = [1, 1, 1]
+    fig = go.Figure()
+
+    # 1. Plot Evaluated Points (Colored by Cluster)
+    # We use the 'labels' array to determine color
+    fig.add_trace(go.Scatter3d(
+        x=points_arr[:, 0],
+        y=points_arr[:, 1],
+        z=points_arr[:, 2],
+        mode='markers',
+        name='Evaluated Points',
+        marker=dict(
+            size=4,
+            color=labels,      # Color by cluster ID
+            colorscale='Viridis',  # Distinct colors
+            opacity=0.6
+        ),
+        text=[f"Cluster: {l}" for l in labels]  # Hover info
+    ))
+
+    # 2. Plot Predetermined Centers (Red Squares)
+    pre_centers = centers_arr[:n_predetermined]
+    fig.add_trace(go.Scatter3d(
+        x=pre_centers[:, 0],
+        y=pre_centers[:, 1],
+        z=pre_centers[:, 2],
+        mode='markers+text',
+        name='Predetermined (Old)',
+        text=[f"Pre{i}" for i in range(len(pre_centers))],
+        textposition="top center",
+        marker=dict(size=10, color='red', symbol='square', line=dict(width=2, color='black'))
+    ))
+
+    # 3. Plot New Candidates (Blue Diamonds)
+    new_centers = centers_arr[n_predetermined:]
+    fig.add_trace(go.Scatter3d(
+        x=new_centers[:, 0],
+        y=new_centers[:, 1],
+        z=new_centers[:, 2],
+        mode='markers+text',
+        name='Hausdorff (New)',
+        text=[f"New{i}" for i in range(len(new_centers))],
+        textposition="top center",
+        marker=dict(size=10, color='blue', symbol='diamond', line=dict(width=2, color='white'))
+    ))
+
+    fig.add_trace(go.Scatter3d(
+        x=[options.fake_ideal["f_1"]],
+        y=[options.fake_ideal["f_2"]],
+        z=[options.fake_ideal["f_3"]],
+        mode="markers",
+        name="fake_ideal",
+        marker_symbol="diamond",
+        opacity=0.9,
+    )
+    )
+
+    fig.add_trace(go.Scatter3d(
+        x=[options.fake_nadir["f_1"]],
+        y=[options.fake_nadir["f_2"]],
+        z=[options.fake_nadir["f_3"]],
+        mode="markers",
+        name="fake_nadir",
+        marker_symbol="diamond",
+        opacity=0.9,
+    )
+    )
+
+    fig.update_layout(
+        title="3D Clustering of Solutions",
+        scene=dict(
+            xaxis_title='f_1',
+            yaxis_title='f_2',
+            zaxis_title='f_3'
+        ),
+        width=800, height=800
+    )
+    fig.show(renderer="browser")
 
 
 # TODO: udpate to handle the new format
@@ -297,24 +442,6 @@ class ProblemWrapper:
         )
         return self.evaluated_points
 
-def helper(fairness_criterion):
-    """
-    TODO: name properly
-    would be useful (or at least help with readability of the code) to have helper function that would work as below. Not sure how to use with alpha_fairness that requires different parameters..
-    I guess this may not be needed anymore (or yet).
-    """
-    match fairness_criterion:
-        case "utilitarian":
-            return alpha_fairness  # TODO: adjust to the new fucntion call and param=s
-        case "nash":
-            return alpha_fairness
-        case "regret":
-            return min_max_regret_no_impro
-
-        case _:
-            return "Not one of the implemented fairness_criteria."
-
-
 def find_group_solutions(problem: Problem, solutions: pl.DataFrame, targets, most_preferred_solutions: dict[str, dict[str, float]], fairness_criterion: str):
     """Find n fair group solutions according to different fairness criteria.
 
@@ -407,9 +534,6 @@ def shift_points(
         shifted_mps.update({dm: res.optimal_objectives})
 
     return shifted_mps
-
-
-# evaluated_points: list(_EvaluatedPoint) = Field("The evaluated points.")
 
 
 def get_representative_set_IPR(problem: Problem, options: GPRMOptions, results_list: list[GPRMResults]) -> GPRMResults:
@@ -704,7 +828,6 @@ def favorite_method(problem: Problem, options: FavOptions, results_list: list[Fa
 
     targets = pl.DataFrame([point.targets for point in gprm_results.raw_results.evaluated_points])
     # print(targets)
-    # fair_solutions, _ = find_group_solutions(problem, solutions=gprm_results.outputs, targets=targets,
     new_fair_solutions_list, _ = find_group_solutions(problem, solutions=gprm_results.outputs, targets=targets,
                                                       most_preferred_solutions=options.original_most_preferred_solutions,
                                                       fairness_criterion=options.candidate_generation_options)
@@ -717,28 +840,32 @@ def favorite_method(problem: Problem, options: FavOptions, results_list: list[Fa
     )
 
 
-# takes in one fair solution + one of last iter (if exists).
-# Finds X other candidate with hausdorff distance.pass
-# Returns X other candidates.
-def hausdorff_candidates(all_points: list[_EvaluatedPoint], fair_solutions: list[FairSolution], n_of_candidates: int, method: Literal["maximin", "average"] = "average") -> list[FairSolution]:
+def hausdorff_candidates(all_points: list[_EvaluatedPoint], fair_solutions: list[FairSolution], n_of_candidates: int) -> list[FairSolution]:
+    """
+        takes in one fair solution + one of last iter (if exists).
+        Finds X other candidate with hausdorff distance.pass
+        Returns X other candidates.
+    """
+
     new_candidates = []
 
     obj_keys = all_points[0].objectives.keys()
-    # Matrix of all candidate points (N, D)
     candidates_arr = np.array([
         [p.objectives[k] for k in obj_keys]
         for p in all_points
     ])
+    # if We need to be on the reference plane
+    # candidates_arr = np.array([
+    #    [p.reference_point[k] for k in obj_keys]
+    #    for p in all_points
+    # ])
 
-    # Matrix of existing fair solutions (M, D)
-    # These are our "seeds"
+    # use fair solutions as the seeds
     seeds_arr = np.array([
         [s.objective_values[k] for k in obj_keys]
         for s in fair_solutions
     ])
-    print("SEEDS", seeds_arr)
 
-    # 2. Initialize Distance Tracking
     # min_dists[i] = distance from point i to the nearest existing seed
     dists = cdist(candidates_arr, seeds_arr, metric='euclidean')
     min_dists = np.min(dists, axis=1)
@@ -748,41 +875,28 @@ def hausdorff_candidates(all_points: list[_EvaluatedPoint], fair_solutions: list
     is_selected = np.zeros(n_total, dtype=bool)
     selected_indices = []
 
-    # 3. Selection Loop
     for _ in range(n_of_candidates):
         best_idx = -1
 
-        if method == "maximin":
-            # --- Standard Hausdorff (Diversity) ---
-            # Pick point with LARGEST distance to nearest neighbor
-            masked_dists = min_dists.copy()
-            masked_dists[is_selected] = -1
-            best_idx = np.argmax(masked_dists)
+        # avg hausdorff: Pick point that minimizes the sum of distances for everyone
+        lowest_total_dist = float('inf')
 
-        elif method == "average":
-            # --- Average Hausdorff (Representativeness) ---
-            # Pick point that minimizes the SUM of distances for everyone
-            lowest_total_dist = float('inf')
+        # Identify candidates (indices not yet selected)
+        candidate_indices = np.where(~is_selected)[0]
 
-            # Identify candidates (indices not yet selected)
-            candidate_indices = np.where(~is_selected)[0]
+        for idx in candidate_indices:
+            cand_point = candidates_arr[idx].reshape(1, -1)
 
-            for idx in candidate_indices:
-                cand_point = candidates_arr[idx].reshape(1, -1)
+            # Distance from this specific candidate to everyone. Then, take min and sum the distances.
+            dists_from_cand = cdist(candidates_arr, cand_point, metric='euclidean').flatten()
+            potential_min_dists = np.minimum(min_dists, dists_from_cand)
+            total_dist = np.sum(potential_min_dists)
 
-                # Distance from this specific candidate to everyone
-                dists_from_cand = cdist(candidates_arr, cand_point, metric='euclidean').flatten()
+            if total_dist < lowest_total_dist:
+                lowest_total_dist = total_dist
+                best_idx = idx
 
-                potential_min_dists = np.minimum(min_dists, dists_from_cand)
-
-                # Score = Sum of all minimum distances (Lower is better)
-                total_dist = np.sum(potential_min_dists)
-
-                if total_dist < lowest_total_dist:
-                    lowest_total_dist = total_dist
-                    best_idx = idx
-
-        # 4. Update State with the Winner
+        #  Update State with the Winner
         if best_idx != -1:
             selected_indices.append(best_idx)
             is_selected[best_idx] = True
@@ -792,13 +906,13 @@ def hausdorff_candidates(all_points: list[_EvaluatedPoint], fair_solutions: list
             dists_to_winner = cdist(candidates_arr, winner_point, metric='euclidean').flatten()
             min_dists = np.minimum(min_dists, dists_to_winner)
 
-    # 5. Convert back to FairSolution objects
+    #  TODO: as fairness value or criterion is not relevant here, consider using some other type.
     new_candidates = []
     for idx in selected_indices:
         point = all_points[idx]
         new_sol = FairSolution(
             objective_values=point.objectives,
-            fairness_criterion=f"hausdorff_{method}",
+            fairness_criterion="avg_hausdorff",
             fairness_value=0.0
         )
         new_candidates.append(new_sol)
@@ -806,191 +920,121 @@ def hausdorff_candidates(all_points: list[_EvaluatedPoint], fair_solutions: list
     new_candidates = fair_solutions + new_candidates
     return new_candidates
 
-# TESTING
-
-
-# --- 3. 2D VISUALIZATION FUNCTION ---
-def visualize_selection_2d(all_points, seed_solutions, new_solutions, title):
-    """
-    Plots the candidate pool and selected points in 2D.
-    """
-    def get_coords(point_list, is_evaluated_point=True):
-        xs, ys = [], []
-        for p in point_list:
-            d = p.objectives if is_evaluated_point else p.objective_values
-            xs.append(d["f_1"])
-            ys.append(d["f_2"])
-        return xs, ys
-
-    fig = go.Figure()
-
-    # 1. Plot All Candidates (Grey Background)
-    cx, cy = get_coords(all_points, True)
-    fig.add_trace(go.Scatter(
-        x=cx, y=cy,
-        mode='markers',
-        name='Evaluated Points Space',
-        marker=dict(size=6, color='lightgrey', opacity=0.6)
-    ))
-
-    # 2. Plot Seed Solution (Red Star)
-    sx, sy = get_coords(seed_solutions, False)
-    fig.add_trace(go.Scatter(
-        x=sx, y=sy,
-        mode='markers',
-        name='Existing Fair Solution',
-        marker=dict(size=12, color='red', symbol='star')
-    ))
-
-    # 3. Plot Newly Selected Points (Blue Circles with Numbers)
-    nx, ny = get_coords(new_solutions, False)
-    fig.add_trace(go.Scatter(
-        x=nx, y=ny,
-        mode='markers+text',
-        name='Selected Candidates',
-        text=[str(i+1) for i in range(len(new_solutions))],
-        textposition="top center",
-        textfont=dict(size=14, color="black"),
-        marker=dict(size=10, color='blue', symbol='circle', line=dict(width=2, color='black'))
-    ))
-
-    fig.update_layout(
-        title=title,
-        xaxis_title='Objective f_1',
-        yaxis_title='Objective f_2',
-        width=800, height=600,
-        template="plotly_white"
-    )
-    fig.show(renderer="browser")
-
-# --- 3D VISUALIZATION ---
-def visualize_3d_clusters(options, points_arr, centers_arr, labels, n_predetermined):
-    """
-    Visualizes 3D clusters by coloring points.
-    """
-
-    ideal = [0, 0, 0]
-    nadir = [1, 1, 1]
-    fig = go.Figure()
-
-    # 1. Plot Evaluated Points (Colored by Cluster)
-    # We use the 'labels' array to determine color
-    fig.add_trace(go.Scatter3d(
-        x=points_arr[:, 0],
-        y=points_arr[:, 1],
-        z=points_arr[:, 2],
-        mode='markers',
-        name='Evaluated Points',
-        marker=dict(
-            size=4,
-            color=labels,      # Color by cluster ID
-            colorscale='Viridis',  # Distinct colors
-            opacity=0.6
-        ),
-        text=[f"Cluster: {l}" for l in labels]  # Hover info
-    ))
-
-    # 2. Plot Predetermined Centers (Red Squares)
-    pre_centers = centers_arr[:n_predetermined]
-    fig.add_trace(go.Scatter3d(
-        x=pre_centers[:, 0],
-        y=pre_centers[:, 1],
-        z=pre_centers[:, 2],
-        mode='markers+text',
-        name='Predetermined (Old)',
-        text=[f"Pre{i}" for i in range(len(pre_centers))],
-        textposition="top center",
-        marker=dict(size=10, color='red', symbol='square', line=dict(width=2, color='black'))
-    ))
-
-    # 3. Plot New Candidates (Blue Diamonds)
-    new_centers = centers_arr[n_predetermined:]
-    fig.add_trace(go.Scatter3d(
-        x=new_centers[:, 0],
-        y=new_centers[:, 1],
-        z=new_centers[:, 2],
-        mode='markers+text',
-        name='Hausdorff (New)',
-        text=[f"New{i}" for i in range(len(new_centers))],
-        textposition="top center",
-        marker=dict(size=10, color='blue', symbol='diamond', line=dict(width=2, color='white'))
-    ))
-
-    fig.add_trace(go.Scatter3d(
-        x=[options.fake_ideal["f_1"]],
-        y=[options.fake_ideal["f_2"]],
-        z=[options.fake_ideal["f_3"]],
-        mode="markers",
-        name="fake_ideal",
-        marker_symbol="diamond",
-        opacity=0.9,
-    )
-    )
-
-    fig.add_trace(go.Scatter3d(
-        x=[options.fake_nadir["f_1"]],
-        y=[options.fake_nadir["f_2"]],
-        z=[options.fake_nadir["f_3"]],
-        mode="markers",
-        name="fake_nadir",
-        marker_symbol="diamond",
-        opacity=0.9,
-    )
-    )
-
-    fig.update_layout(
-        title="3D Clustering of Solutions",
-        scene=dict(
-            xaxis_title='f_1',
-            yaxis_title='f_2',
-            zaxis_title='f_3'
-        ),
-        width=800, height=800
-    )
-    fig.show(renderer="browser")
-
-# takes in X other candidates
-# cluster (k-means or voronoi, use scipy), assigns all solutions to a cluster
-# returns clusters
 def cluster_points(all_points: List[_EvaluatedPoint], centers: List[FairSolution]):
     """
     Assigns each point in all_points to the cluster of the nearest center.
-    Returns the cluster labels (integers) for every point.
+    Returns the points, centres and cluster labels (integers) for every point.
     """
-    # 1. Extract Arrays
     obj_keys = all_points[0].objectives.keys()
 
     points_arr = np.array([[p.objectives[k] for k in obj_keys] for p in all_points])
+    # if wanting to be in the preference space
+    # points_arr = np.array([[p.reference_point[k] for k in obj_keys] for p in all_points])
     centers_arr = np.array([[c.objective_values[k] for k in obj_keys] for c in centers])
 
-    # 2. Calculate Distances (N_points x N_centers)
     dists = cdist(points_arr, centers_arr, metric='euclidean')
 
-    # 3. Assign to nearest center (Argmin)
     # labels[i] = index of the center closest to point i
     labels = np.argmin(dists, axis=1)
 
     return points_arr, centers_arr, labels
 
 
-# takes clusters. Basically simple version done above.
-# returns visualizations of the clusters or cluster cetnres
-def vis_cluster_centers():
-    pass
+def calculate_dist_to_hull(points_kminus: np.ndarray, hull: ConvexHull) -> np.ndarray:
+    """
+    TODO: check clanker explanation
+    Calculates the 'hyperplane distance' from points to the Convex Hull.
 
-# maybe split this to few functions
-# takes the voted cluster. parameter X
-# identify the convex hull of the region
-# expand chull:
-#   1 calc distance of all points from the chull to the voted cluster
-#   2 take the top X % of solutions closest to the chull.
-#   3 calc chull of the solutions from step above. also calc. the bounding box of this chull.
-#   4 Use desdeo.tools.GenerateReferencePoints.numba random gen to calculate reference points
-#      based on the info from Step 3.
-#   5 Use desdeo.tools.GenerateReferencePoints.rotate out to project the reference points back to the k-dimensional objective space
-# returns extended convex hull that IPR can be run again.
-def calculate_distance_from_chull():
-    pass
+    This is a fast vectorized approximation of distance.
+    - Value > 0: Point is outside the hull. (Distance to nearest face plane).
+    - Value <= 0: Point is inside the hull. (Distance to nearest face plane).
+
+    The distance to the hull is determined by the plane the point is
+    "most outside" of (the maximum positive value).
+    If all values are negative, it is inside, and the max value represents
+    how close it is to the boundary (least negative).
+
+    # Source - https://stackoverflow.com/q/41000123
+    # Posted by Woltan, modified by community. See post 'Timeline' for change history
+    # Retrieved 2026-02-11, License - CC BY-SA 3.0
+
+    np.max(np.dot(self.equations[:, :-1], points.T).T + self.equations[:, -1], axis=-1)
+
+    Args:
+        points_kminus (np.ndarray): N x (k-1) array of points.
+        hull (scipy.spatial.ConvexHull): The convex hull object.
+
+    Returns:
+        np.ndarray: Array of distances.
+    """
+    normals = hull.equations[:, :-1]
+    offsets = hull.equations[:, -1]
+    distances = np.max(np.dot(normals, points_kminus.T) + offsets[:, np.newaxis], axis=0)
+
+    return distances
+
+def expand_and_generate_candidates(
+    winning_cluster_k: np.ndarray,
+    all_points_k: np.ndarray,
+    fraction_keep: float = 0.8,
+    num_new_points: int = 1000
+) -> np.ndarray:
+    """
+        Expands the region of interest around a winning cluster and generates new candidate solutions.
+
+        This function implements the core expansion logic (Steps 1-5) of the Favorite Method:
+        1. Projects (rotates) points from k-dimensional space to a (k-1)-dimensional hyperplane.
+        2. Constructs a convex hull for the winning cluster and calculates the distance of all other points to this hull.
+        3. Selects the top `fraction_keep` of points closest to the hull to form an expanded set.
+        4. Constructs a new convex hull around the expanded set and generates uniform random points inside it.
+        5. Projects (rotates) the new points back to the original k-dimensional objective space.
+
+        Args:
+            winning_cluster_k (np.ndarray): An array of shape (N, k) containing the points of the winning cluster in the objective space.
+            all_points_k (np.ndarray): An array of shape (M, k) containing all available evaluated points in the objective space.
+            fraction_keep (float, optional): The fraction (0.0 to 1.0) of points from `all_points_k` to include in the expanded region.
+                Points are selected based on proximity to the winning cluster's hull. Defaults to 0.8.
+            num_new_points (int, optional): The number of new candidate points to generate within the expanded convex hull. Defaults to 1000.
+
+        Returns:
+            np.ndarray: An array of shape (num_new_points, k) containing the new candidate points projected back into the k-dimensional objective space.
+        """
+    # 1. Rotate In
+    cluster_kminus = rotate_in(winning_cluster_k)
+    all_kminus = rotate_in(all_points_k)
+
+    # 2. Calculate Hull of Winning Cluster
+    if len(cluster_kminus) > cluster_kminus.shape[1]:
+        win_hull = ConvexHull(cluster_kminus)
+        dists = calculate_dist_to_hull(all_kminus, win_hull)
+    else:
+        # Fallback if cluster is too small (e.g., 1 point): Use distance to mean. Should not happen?
+        center = np.mean(cluster_kminus, axis=0)
+        dists = np.linalg.norm(all_kminus - center, axis=1)
+
+    # 3. Top X% Closest
+    n_keep = max(int(np.ceil(len(all_kminus) * fraction_keep)), cluster_kminus.shape[1] + 1)
+
+    # Argsort gives indices of smallest distances first
+    top_indices = np.argsort(dists)[:n_keep]
+    expanded_set_kminus = all_kminus[top_indices]
+    print(f"Expanded set: {len(expanded_set_kminus)} points selected.")
+
+    # 4. Generate Random Points in Bounding Box using numba random gen
+    # need to create the convex hull
+    expanded_hull = ConvexHull(expanded_set_kminus, qhull_options='QJ')
+    A_exp, b_exp = get_hull_equations(expanded_hull)
+    # Bounding box: [min_coords, max_coords]
+    bounding_box = np.array([
+        np.min(expanded_set_kminus, axis=0),
+        np.max(expanded_set_kminus, axis=0)
+    ])
+    new_points_kminus = numba_random_gen(num_new_points, bounding_box, A_exp, b_exp)
+
+    # 5. Rotate Out (Project back to K-dims)
+    new_points_k = rotate_out(new_points_kminus)
+
+    return new_points_k
 
 
 if __name__ == "__main__":
@@ -1011,6 +1055,7 @@ if __name__ == "__main__":
         "DM4": {"f_1": 0.9704959057874635, "f_2": 0.17049588971897997, "f_3": 0.1704958898000307},
     }
 
+    """
     # random rps
     reference_points = {}
     for i in range(n_of_dms):
@@ -1030,6 +1075,8 @@ if __name__ == "__main__":
         res = solver.solve(target)
         fs = res.optimal_objectives
         most_preferred_solutions[f"{dm}"] = fs
+
+    """
 
     ipr_options = IPR_Options(
         most_preferred_solutions=most_preferred_solutions,
@@ -1052,30 +1099,6 @@ if __name__ == "__main__":
 
     total_n_of_candidates = 5
 
-    """
-# random rps
-    reference_points = {}
-    for i in range(n_of_dms):
-        reference_points[f"DM{i+1}"] = {"f_1": np.random.random(), "f_2": np.random.random(), "f_3": np.random.random()}
-
-    print(reference_points)
-    from desdeo.tools.scalarization import add_asf_nondiff, add_asf_diff
-    from desdeo.tools import ProximalSolver, GurobipySolver, PyomoIpoptSolver
-
-    most_preferred_solutions = {}
-    DMs = reference_points.keys()
-    for dm in DMs:
-        p, target = add_asf_diff(
-            dtlz2_problem,
-            symbol=f"asf",
-            reference_point=reference_points[dm],
-        )
-        solver = PyomoIpoptSolver(p)
-        res = solver.solve(target)
-        fs = res.optimal_objectives
-        most_preferred_solutions[f"{dm}"] = fs
-
-    """
     # first iteration
     fav_results = favorite_method(problem=dtlz2_problem, options=fav_options, results_list=[])  # results_list is None in the first iteration
     print(fav_results)
@@ -1086,17 +1109,125 @@ if __name__ == "__main__":
     n_of_candidates = total_n_of_candidates - len(fairs)
     # hcs = hausdorff_candidates(all_points, fairs, n_of_candidates)
     print(all_points)
-    candidates = hausdorff_candidates(all_points, fairs, n_of_candidates, method="average")
+    candidates = hausdorff_candidates(all_points, fairs, n_of_candidates)
     print(candidates)
     visualize_selection_2d(all_points, fairs, candidates, "2D Space: Average (Centers)")
 
     # Perform Clustering
     print("Assigning points to clusters...")
     points_matrix, centers_matrix, cluster_labels = cluster_points(all_points, candidates)
-
-    # Visualize
-    print("Visualizing...")
     visualize_3d_clusters(fav_options.GPRMoptions, points_matrix, centers_matrix, cluster_labels, len(fairs))
+
+    # TODO: voting to select the favorite cluster
+    # cluster_votes = {"DM1": 0, "DM2": 0, "DM3": 1, "DM4": 0}
+    # do voting procedure, return:
+    winning_idx = 0
+
+    # get winning cluster info
+    winning_points = points_matrix[cluster_labels == winning_idx]
+    winning_center = centers_matrix[winning_idx]
+    print(f"Cluster {winning_idx} selected with {len(winning_points)} points.")
+
+# --- START OF NEW EXPANSION CODE ---
+    print("\n--- Generating New Candidates via Convex Hull Expansion ---")
+
+    fraction_to_keep = 0.8   # Keep top X% closest points to form the expanded hull
+    num_new_points = 1000      # Number of new reference points to generate
+
+    # This kind of seems to work
+    new_candidates_k = expand_and_generate_candidates(
+        winning_cluster_k=winning_points,
+        all_points_k=points_matrix,
+        fraction_keep=fraction_to_keep,
+        num_new_points=num_new_points
+    )
+    print(f"Successfully generated {len(new_candidates_k)} new candidate points.")
+    print(f"Sample of new points:\n{new_candidates_k[:3]}")
+
+    next_iter_mps = {}
+    obj_names = [f"f_{i+1}" for i in range(new_candidates_k.shape[1])]
+
+    for i, point in enumerate(new_candidates_k):
+        # Create dict: {'f_1': 0.1, 'f_2': 0.5, ...}
+        point_dict = {name: val for name, val in zip(obj_names, point)}
+        next_iter_mps[f"gen_{i}"] = point_dict
+
+    # 2. Setup Options for Iteration 2
+    # We clone the previous options but inject our new "cloud" of points
+    fav_options_2 = fav_options.model_copy(deep=True)
+
+    # Update the IPR method to use these new points as the seed shape
+    fav_options_2.GPRMoptions.method_options.most_preferred_solutions = next_iter_mps
+    fav_options_2.GPRMoptions.method_options.version = "convex_hull"
+
+    # Update voting (Required for iteration > 1)
+    #    Example: DM1 won previous round (index 0 of the fair_solutions list)
+    # You need to define who votes for what among the *previous* candidates
+    fav_options_2.votes = {"DM1": 0, "DM2": 0, "DM3": 0, "DM4": 0}
+
+    # 3. Run Iteration 2
+    print("\n--- Running Iteration 2 with Extended Hull ---")
+    fav_results_2 = favorite_method(
+        problem=dtlz2_problem,
+        options=fav_options_2,
+        results_list=[fav_results]
+    )
+
+    print(fav_results_2)
+
+    # TODO: project to the PF with IPR
+    # projected = get_representative_set(dtlz2_problem, new_options, [])
+
+    # 3. Visualize the Expansion
+    # We plot the Original Cluster points and the New Generated Candidates to see the "Halo" effect
+    fig = go.Figure()
+
+    # Plot All Points (faint background)
+    fig.add_trace(go.Scatter3d(
+        x=points_matrix[:, 0], y=points_matrix[:, 1], z=points_matrix[:, 2],
+        mode='markers', name='All Evaluated Points',
+        marker=dict(size=3, color='lightgrey', opacity=0.3)
+    ))
+
+    # Plot Winning Cluster (Green)
+    fig.add_trace(go.Scatter3d(
+        x=winning_points[:, 0], y=winning_points[:, 1], z=winning_points[:, 2],
+        mode='markers', name=f'Winning Cluster (Idx {winning_idx})',
+        marker=dict(size=5, color='green', opacity=0.8)
+    ))
+
+    # Plot New Candidates (Red X)
+    fig.add_trace(go.Scatter3d(
+        x=new_candidates_k[:, 0], y=new_candidates_k[:, 1], z=new_candidates_k[:, 2],
+        mode='markers', name='New Expanded Candidates',
+        marker=dict(size=6, color='red', opacity=1.0)
+    ))
+    # Plot New Candidates (Red X)
+    # fig.add_trace(go.Scatter3d(
+    #    x=projected[:, 0], y=projected[:, 1], z=projected[:, 2],
+    #    mode='markers', name='New Expanded Candidates',
+    #    marker=dict(size=6, color='purple', symbol='x', opacity=1.0)
+    # ))
+
+    # Plot the Winning Center (for reference)
+    fig.add_trace(go.Scatter3d(
+        x=[winning_center[0]], y=[winning_center[1]], z=[winning_center[2]],
+        mode='markers', name='Winning Center',
+        marker=dict(size=10, color='gold', symbol='diamond')
+    ))
+
+    fig.update_layout(
+        title=f"Convex Hull Expansion (Top {fraction_to_keep*100}%)",
+        scene=dict(xaxis_title='f_1', yaxis_title='f_2', zaxis_title='f_3'),
+        width=900, height=800
+    )
+    fig.show(renderer="browser")
+    # --- END OF NEW EXPANSION CODE ---
+
+    # get_convex_hull(all_points, points_matrix, winning_points, winning_center)
+    # Visualize
+    # print("Visualizing...")
+    # visualize_3d_clusters(fav_options.GPRMoptions, points_matrix, centers_matrix, cluster_labels, len(fairs))
 
     # Just to look visually that they look correct
     # 4. Run Average (Centers)
@@ -1105,6 +1236,7 @@ if __name__ == "__main__":
     # selected_avg = hausdorff_candidates(all_points, fairs, n_of_candidates, method="average")
     # visualize_selection_2d(all_points, fairs, selected_avg, "2D Space: Average (Centers)")
 
+    """
     # Test second iteration
     fav_options_2 = FavOptions(
         GPRMoptions=fav_options.GPRMoptions,
@@ -1131,9 +1263,8 @@ if __name__ == "__main__":
     print("Assigning points to clusters...")
     points_matrix, centers_matrix, cluster_labels = cluster_points(all_points, candidates)
     print("Visualizing...")
-    visualize_3d_clusters(fav_options.GPRMoptions, points_matrix, centers_matrix, cluster_labels, len(fairs2))
+    # visualize_3d_clusters(fav_options.GPRMoptions, points_matrix, centers_matrix, cluster_labels, len(fairs2))
 
-    """
     # Test thid iteration
     fav_options_3 = FavOptions(
         GPRMoptions=fav_options.GPRMoptions,
