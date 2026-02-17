@@ -1,6 +1,6 @@
 """The Favorite method, a general method for group decision making in multiobjective optimization"""
 
-from typing import Literal, List, Dict
+from typing import Literal, List, Dict, Tuple
 from scipy.spatial.distance import cdist
 from scipy.spatial import ConvexHull
 from typing import Literal
@@ -549,6 +549,20 @@ def favorite_method(problem: Problem, options: FavOptions, results_list: list[Fa
         GPRMResults=gprm_results,
         fair_solutions=fair_solutions,
     )
+
+
+def find_candidates(fav_results: FavResults, total_n_of_candidates: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Calls first hausdorff_candidates and then clusters the points.
+    """
+    all_points = fav_results.GPRMResults.raw_results.evaluated_points
+    n_of_candidates = total_n_of_candidates - len(fav_results.fair_solutions)
+
+    print("\nFinding Candidates & Clustering...")
+    candidates = hausdorff_candidates(all_points, fav_results.fair_solutions, n_of_candidates)
+
+    points_matrix, centers_matrix, cluster_labels = cluster_points(all_points, candidates)
+    return points_matrix, centers_matrix, cluster_labels
 
 
 def hausdorff_candidates(all_points: list[_EvaluatedPoint], fair_solutions: list[FairSolution], n_of_candidates: int) -> list[FairSolution]:
