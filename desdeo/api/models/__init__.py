@@ -9,11 +9,17 @@ __all__ = [  # noqa: RUF022
     "EMOSaveState",
     "EMOSolveRequest",
     "EMOIterateState",
+    "ENautilusDecisionEventResponse",
+    "ENautilusFinalizeRequest",
+    "ENautilusFinalizeResponse",
+    "ENautilusFinalState",
     "ENautilusRepresentativeSolutionsResponse",
+    "ENautilusSessionTreeResponse",
     "ENautilusState",
     "ENautilusStateResponse",
     "ENautilusStepRequest",
     "ENautilusStepResponse",
+    "ENautilusTreeNodeResponse",
     "ExtraFunctionDB",
     "ForestProblemMetaData",
     "GenericIntermediateSolutionResponse",
@@ -140,10 +146,15 @@ from .emo import (
     Solution,
 )
 from .enautilus import (
+    ENautilusDecisionEventResponse,
+    ENautilusFinalizeRequest,
+    ENautilusFinalizeResponse,
     ENautilusRepresentativeSolutionsResponse,
+    ENautilusSessionTreeResponse,
     ENautilusStateResponse,
     ENautilusStepRequest,
     ENautilusStepResponse,
+    ENautilusTreeNodeResponse,
 )
 from .gdm.gdm_aggregate import (
     Group,
@@ -251,6 +262,7 @@ from .session import (
 from .state import (
     EMOIterateState,
     EMOSaveState,
+    ENautilusFinalState,
     ENautilusState,
     GNIMBUSEndState,
     GNIMBUSOptimizationState,

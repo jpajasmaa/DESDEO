@@ -110,8 +110,8 @@
 	const methods = $derived(
 		baseMethods.map(method => ({
 			...method,
-			path: method.supportsGroups && data.groupId 
-				? `${method.path}?group=${data.groupId}` 
+			path: method.supportsGroups && data.groupId
+				? `${method.path}?group=${data.groupId}`
 				: method.path
 		}))
 	);
@@ -130,9 +130,9 @@
 			data: {
 				problems: ProblemInfo[],
 				groupId?: string // This exists only in GDM when user comes to this page through group selecting page.
-			} 
+			}
 		}>();
-	let problemList = data.problems ?? [];
+	let problemList = $derived(data.problems ?? []);
 
 	const preferenceTypes = [...new Set(baseMethods.flatMap((m) => m.preferencesType))];
 
@@ -153,11 +153,15 @@
 
 			const matchesPreference =
 				selectedPreferenceType === 'all' || method.preferencesType.includes(selectedPreferenceType);
-			
+
 			const matchesGroupMode = data.groupId ? method.supportsGroups === true : method.supportsGroups !== true;
 
 			return matchesSearch && matchesPreference && matchesGroupMode;
 		})
+	);
+
+	const hasRepresentativeSets = $derived(
+		(problem?.problem_metadata?.representative_nd_metadata?.length ?? 0) > 0
 	);
 
 	// Button enable logic: for group methods, enable if groupId exists; for individual methods, enable if problem exists
@@ -165,10 +169,21 @@
 		if (method.supportsGroups && data.groupId) {
 			// Group method: enable if we have a groupId (DM users can access group problems they don't own)
 			return true;
+		} else if (!problem) {
+			return false;
+		} else if (method.name === 'E-NAUTILUS' && !hasRepresentativeSets) {
+			return false;
 		} else {
-			// Individual method: enable only if problem exists in user's problem list
-			return !!problem;
+			return true;
 		}
+	};
+
+	const getDisabledHint = (method: Method): string | null => {
+		if (!problem) return null;
+		if (method.name === 'E-NAUTILUS' && !hasRepresentativeSets) {
+			return 'Requires representative solution sets';
+		}
+		return null;
 	};
 
 	onMount(() => {
@@ -219,7 +234,7 @@
 		{:else if data.groupId}
 			<div class="bg-info/10 flex items-center justify-between rounded-lg px-4 py-2">
 				<p class="text-sm">
-					Group mode: <span class="text-primary font-bold">Group ID {data.groupId}</span> 
+					Group mode: <span class="text-primary font-bold">Group ID {data.groupId}</span>
 					- Group methods are available for collaborative decision making
 				</p>
 				<Button variant="outline" size="sm" href="/groups">Back to Groups</Button>
@@ -282,6 +297,9 @@
 						<p class="text-muted-foreground text-sm">{method.description}</p>
 					</div>
 					<div class="flex items-center gap-2">
+						{#if getDisabledHint(method)}
+							<span class="text-xs text-amber-600">{getDisabledHint(method)}</span>
+						{/if}
 						<Button
 							variant="outline"
 							size="sm"
@@ -328,7 +346,7 @@
 						{/if}
 					</Card.Content>
 
-					<Card.Footer class="pt-4">
+					<Card.Footer class="flex-col gap-1 pt-4">
 						<Button
 							variant="default"
 							disabled={!isMethodEnabled(method)}
@@ -339,6 +357,9 @@
 							<Play class="mr-2" size={18} />
 							Use {method.name}
 						</Button>
+						{#if getDisabledHint(method)}
+							<p class="text-xs text-amber-600">{getDisabledHint(method)}</p>
+						{/if}
 					</Card.Footer>
 				</Card.Root>
 			{/each}

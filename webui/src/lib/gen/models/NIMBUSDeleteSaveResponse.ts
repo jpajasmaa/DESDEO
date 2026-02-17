@@ -11,5 +11,5 @@
  */
 export interface NIMBUSDeleteSaveResponse {
 	response_type?: string;
-	message: string | null;
+	message?: string | null;
 }
