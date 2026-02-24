@@ -461,13 +461,14 @@ def setup(problem: Problem, options: FavOptions, results_list: list[FavResults])
         if isinstance(options.GPRMoptions.method_options, IPR_Options):
             options.GPRMoptions.method_options.most_preferred_solutions = orig_mps
 
+    # TODO: currently assumes most_preferred solutions are set manually. To add them here.
     if results_list:  # not the first iteration
         if options.votes is None:
             raise ValueError("Votes must be provided for iterations after the first.")
         # handle voting
         old_candidates = results_list[-1].fair_solutions
-        print(results_list)
-        print(old_candidates)
+        # print(results_list)
+        # print(old_candidates)
         votes = options.votes
         winner = majority_rule(votes=votes)
         print("WINNER", winner)
@@ -482,7 +483,10 @@ def setup(problem: Problem, options: FavOptions, results_list: list[FavResults])
             previous_navigation_point=fake_nadir,
             reachable_objective_vector=winner.objective_values,
             number_of_steps_remaining=options.zoom_options.num_steps_remaining,
-        )  # TODO: Is this still needed? -> redefine fake_nadir based on winner. Note that fake_ideal stays the same.
+        )
+        # TODO: Is this still needed? -> redefine fake_nadir based on winner. Note that fake_ideal stays the same.
+        # Shifting is not needed anymore
+        """
         shifted_mps = shift_points(
             problem,
             most_preferred_solutions=orig_mps,
@@ -491,6 +495,7 @@ def setup(problem: Problem, options: FavOptions, results_list: list[FavResults])
         )
         if isinstance(options.GPRMoptions.method_options, IPR_Options):
             options.GPRMoptions.method_options.most_preferred_solutions = shifted_mps
+        """
 
     options.GPRMoptions.fake_ideal = fake_ideal
     options.GPRMoptions.fake_nadir = fake_nadir

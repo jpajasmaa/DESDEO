@@ -53,8 +53,8 @@ def scale_delta(problem: Problem, d: float):
 
 def get_top_n_fair_solutions(solutions, fairness_values, n):
     """
-    Numpy docs about argpartition: The returned indices are not guaranteed to be sorted according to the values. Furthermore, 
-    the default selection algorithm introselect is unstable, and hence the returned indices are not guaranteed to be 
+    Numpy docs about argpartition: The returned indices are not guaranteed to be sorted according to the values. Furthermore,
+    the default selection algorithm introselect is unstable, and hence the returned indices are not guaranteed to be
     the earliest/latest occurrence of the element.
 
     Basically this may frick up
@@ -93,15 +93,47 @@ Utility funcs
 # Numba goes BRRRRRT
 # @njit()
 def regret_allDMs_no_impro(sol, mpses):
+    """
+    Calculates the Utility (regret) for all DMs to be used in the alpha-fairness function. L1 norm
+    Utility = (Max Possible Regret - Actual Regret) + epsilon
+    """
     uf_arr = []  # convert to numpy later for numba
-
-    zeros = np.zeros(len(sol)) # + 1e-6 # removed from now here.
+    zeros = np.zeros(len(sol))
+    epsilon = 1e-6  # need this to not break the alpha fairness.
+    max_possible_regret = len(sol)  # max possible regret is the number of obj, assuming everything is normalized.
 
     for p in range(len(mpses)):
-        uf_arr.append(np.sum(np.maximum(zeros, sol - mpses[p])))  # improvements do not count
-        # uf_arr.append(np.sum(sol - mpses[p]))  # improvements do count
+        regret = np.sum(np.maximum(zeros, sol - mpses[p]))  # improvements do not count
+        utility = (max_possible_regret - regret) + epsilon
+        uf_arr.append(utility)
 
     return uf_arr
+
+def utility_allDMs_no_impro(sol, mpses):
+    """
+    Calculates the Utility for all DMs using Euclidean (L2) Regret.
+    """
+    uf_arr = []
+    zeros = np.zeros(len(sol))
+
+    # Max possible L2 regret is sqrt(1^2 + 1^2 + ...)
+    # For 3 objectives, this is sqrt(3) ≈ 1.732
+    max_possible_regret = np.sqrt(len(sol))
+
+    epsilon = 1e-6
+
+    for p in range(len(mpses)):
+        # 1. Calculate L2 Regret (Euclidean Distance)
+        # We square the differences, sum them, then take the square root
+        deviations = np.maximum(zeros, sol - mpses[p])
+        regret = np.sqrt(np.sum(deviations**2))
+
+        # 2. Convert to Utility
+        utility = (max_possible_regret - regret) + epsilon
+        uf_arr.append(utility)
+
+    return uf_arr
+
 
 @njit()
 def regret_allDMs(sol, mpses):
@@ -209,7 +241,8 @@ def alpha_fairness(targets_df: pl.DataFrame, mpses: list[np.ndarray], alpha: flo
     M = len(mpses)  # number of DMs
     for i in range(len(all_sols)):
         # TODO: utilities must be [0, R^n_+]
-        utilities = regret_allDMs_no_impro(all_sols[i], mpses)
+        utilities = regret_allDMs_no_impro(all_sols[i], mpses)  # Use L1
+        # utilities = utility_allDMs_no_impro(all_sols[i], mpses) # use L2
         if alpha == 1:
             alpha_fairs.append(np.sum(np.log(utilities)))
         else:
