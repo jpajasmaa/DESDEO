@@ -121,6 +121,8 @@ class FavOptions(pydantic.BaseModel):
     """Options for the zooming strategy. Support more options later."""
     original_most_preferred_solutions: dict[str, dict[str, float]]
     """Dictionary of the original most preferred solutions for each decision maker."""
+    total_n_of_candidates: int = Field(default=5, ge=1)
+    """The total number of candidate solutions to present to the DMs."""
     votes: dict[str, int] | None = None
     (
         """The votes for each decision maker's most preferred solution."""
@@ -467,8 +469,8 @@ def setup(problem: Problem, options: FavOptions, results_list: list[FavResults])
             raise ValueError("Votes must be provided for iterations after the first.")
         # handle voting
         old_candidates = results_list[-1].fair_solutions
-        # print(results_list)
-        # print(old_candidates)
+        print(results_list)
+        print(old_candidates)
         votes = options.votes
         winner = majority_rule(votes=votes)
         print("WINNER", winner)
@@ -549,6 +551,14 @@ def favorite_method(problem: Problem, options: FavOptions, results_list: list[Fa
     )
     fair_solutions.extend(new_fair_solutions_list)
 
+    # --- NEW: Generate Hausdorff Candidates Inside the Core Method ---
+    all_points = gprm_results.raw_results.evaluated_points
+    n_missing = options.total_n_of_candidates - len(fair_solutions)
+    
+    if n_missing > 0:
+        # hausdorff_candidates returns the existing fairs + the new ones
+        fair_solutions = hausdorff_candidates(all_points, fair_solutions, n_missing)
+
     return FavResults(
         FavOptions=options,
         GPRMResults=gprm_results,
@@ -556,15 +566,16 @@ def favorite_method(problem: Problem, options: FavOptions, results_list: list[Fa
     )
 
 
-def find_candidates(fav_results: FavResults, total_n_of_candidates: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+def find_candidates(fav_results: FavResults) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Calls first hausdorff_candidates and then clusters the points.
     """
     all_points = fav_results.GPRMResults.raw_results.evaluated_points
-    n_of_candidates = total_n_of_candidates - len(fav_results.fair_solutions)
+    candidates = fav_results.fair_solutions # Now contains ALL candidates
+    #n_of_candidates = total_n_of_candidates - len(fav_results.fair_solutions)
 
-    print("\nFinding Candidates & Clustering...")
-    candidates = hausdorff_candidates(all_points, fav_results.fair_solutions, n_of_candidates)
+    #print("\nFinding Candidates & Clustering...")
+    #candidates = hausdorff_candidates(all_points, fav_results.fair_solutions, n_of_candidates)
 
     points_matrix, centers_matrix, cluster_labels = cluster_points(all_points, candidates)
     return points_matrix, centers_matrix, cluster_labels
@@ -752,6 +763,7 @@ def expand_and_generate_candidates(
         dists = calculate_dist_to_hull(all_kminus, win_hull)
     else:
         # Fallback if cluster is too small (e.g., 1 point): Use distance to mean. Should not happen?
+        print("using FALLBACK")
         center = np.mean(cluster_kminus, axis=0)
         dists = np.linalg.norm(all_kminus - center, axis=1)
 
