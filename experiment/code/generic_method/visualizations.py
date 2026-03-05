@@ -1,0 +1,316 @@
+import plotly.graph_objects as go
+import plotly.express as ex
+import plotly.io as pio
+import polars as pl
+import numpy as np
+
+# Set default renderer
+#pio.renderers.default = "browser"
+
+def visualize_selection_2d(all_points, seed_solutions, new_solutions, title):
+    """
+    Plots the candidate pool and selected points in 2D.
+    """
+    def get_coords(point_list, is_evaluated_point=True):
+        xs, ys = [], []
+        for p in point_list:
+            d = p.objectives if is_evaluated_point else p.objective_values
+            xs.append(d["f_1"])
+            ys.append(d["f_2"])
+        return xs, ys
+
+    fig = go.Figure()
+
+    # 1. Plot All Candidates (Grey Background)
+    cx, cy = get_coords(all_points, True)
+    fig.add_trace(go.Scatter(
+        x=cx, y=cy,
+        mode='markers',
+        name='Evaluated Points Space',
+        marker=dict(size=6, color='lightgrey', opacity=0.6)
+    ))
+
+    # 2. Plot Seed Solution (Red Star)
+    sx, sy = get_coords(seed_solutions, False)
+    fig.add_trace(go.Scatter(
+        x=sx, y=sy,
+        mode='markers',
+        name='Existing Fair Solution',
+        marker=dict(size=12, color='red', symbol='star')
+    ))
+
+    # 3. Plot Newly Selected Points (Blue Circles with Numbers)
+    nx, ny = get_coords(new_solutions, False)
+    fig.add_trace(go.Scatter(
+        x=nx, y=ny,
+        mode='markers+text',
+        name='Selected Candidates',
+        text=[str(i+1) for i in range(len(new_solutions))],
+        textposition="top center",
+        textfont=dict(size=14, color="black"),
+        marker=dict(size=10, color='blue', symbol='circle', line=dict(width=2, color='black'))
+    ))
+
+    fig.update_layout(
+        title=title,
+        xaxis_title='Objective f_1',
+        yaxis_title='Objective f_2',
+        width=800, height=600,
+        template="plotly_white"
+    )
+    fig.show(renderer="browser")
+
+
+def visualize_3d_clusters(options, points_arr, centers_arr, labels, n_predetermined, iter_n, axis_limits=[0.0, 1.]):
+    """
+    Visualizes 3D clusters by coloring points.
+    """
+    fig = go.Figure()
+
+    # 1. Plot Evaluated Points (Colored by Cluster)
+    fig.add_trace(go.Scatter3d(
+        x=points_arr[:, 0],
+        y=points_arr[:, 1],
+        z=points_arr[:, 2],
+        mode='markers',
+        name='Evaluated Points',
+        marker=dict(
+            size=4,
+            color=labels,       # Color by cluster ID
+            colorscale='Viridis',  # Distinct colors
+            opacity=0.6
+        ),
+        text=[f"Cluster: {l}" for l in labels]  # Hover info
+    ))
+
+    # 2. Plot Predetermined Centers (Red Squares)
+    pre_centers = centers_arr[:n_predetermined]
+    fig.add_trace(go.Scatter3d(
+        x=pre_centers[:, 0],
+        y=pre_centers[:, 1],
+        z=pre_centers[:, 2],
+        mode='markers+text',
+        name='Fair Solutions',
+        text=[f"Pre{i}" for i in range(len(pre_centers))],
+        textposition="top center",
+        marker=dict(size=10, color='red', symbol='square', line=dict(width=2, color='black'))
+    ))
+
+    # 3. Plot New Candidates (Blue Diamonds)
+    new_centers = centers_arr[n_predetermined:]
+    fig.add_trace(go.Scatter3d(
+        x=new_centers[:, 0],
+        y=new_centers[:, 1],
+        z=new_centers[:, 2],
+        mode='markers+text',
+        name='New Candidates',
+        text=[f"New{i}" for i in range(len(new_centers))],
+        textposition="top center",
+        marker=dict(size=10, color='blue', symbol='diamond', line=dict(width=2, color='white'))
+    ))
+
+    # 4. Fake Ideal/Nadir
+    fig.add_trace(go.Scatter3d(
+        x=[options.fake_ideal["f_1"]], y=[options.fake_ideal["f_2"]], z=[options.fake_ideal["f_3"]],
+        mode="markers", name="fake_ideal", marker_symbol="diamond", opacity=0.9
+    ))
+
+    fig.add_trace(go.Scatter3d(
+        x=[options.fake_nadir["f_1"]], y=[options.fake_nadir["f_2"]], z=[options.fake_nadir["f_3"]],
+        mode="markers", name="fake_nadir", marker_symbol="diamond", opacity=0.9
+    ))
+
+    fig.update_layout(
+        title=f"Iteration {iter_n}: Clusters",
+        scene=dict(
+            xaxis=dict(title='f_1', range=axis_limits),
+            yaxis=dict(title='f_2', range=axis_limits),
+            zaxis=dict(title='f_3', range=axis_limits)
+        ),
+        width=1200, height=1000
+    )
+    # fig.show(renderer="browser")
+    fig.show()
+
+
+def visualize_3d(options, evaluated_points, fair_sols, n):
+    fig = ex.scatter_3d()
+
+    # Add reference points
+    chosen_refps = pl.DataFrame([point.reference_point for point in evaluated_points])
+    # rescale reference points
+    chosen_refps = chosen_refps.with_columns(
+        [
+            (pl.col(obj) * (options.fake_nadir[obj] - options.fake_ideal[obj]) + options.fake_ideal[obj]).alias(obj)
+            for obj in options.fake_ideal.keys()
+        ]
+    )
+
+    fig = fig.add_scatter3d(
+        x=chosen_refps["f_1"].to_numpy(),
+        y=chosen_refps["f_2"].to_numpy(),
+        z=chosen_refps["f_3"].to_numpy(),
+        name="Reference Points",
+        mode="markers",
+        marker_symbol="circle",
+        opacity=0.8,
+    )
+    # Add front
+    front = pl.DataFrame([point.objectives for point in evaluated_points])
+    fig = fig.add_scatter3d(
+        x=front["f_1"].to_numpy(),
+        y=front["f_2"].to_numpy(),
+        z=front["f_3"].to_numpy(),
+        mode="markers",
+        name="Front",
+        marker_symbol="circle",
+        opacity=0.9,
+    )
+    fig = fig.add_scatter3d(
+        x=[options.fake_ideal["f_1"]], y=[options.fake_ideal["f_2"]], z=[options.fake_ideal["f_3"]],
+        mode="markers", name="fake_ideal", marker_symbol="diamond", opacity=0.9,
+    )
+    fig = fig.add_scatter3d(
+        x=[options.fake_nadir["f_1"]], y=[options.fake_nadir["f_2"]], z=[options.fake_nadir["f_3"]],
+        mode="markers", name="fake_nadir", marker_symbol="diamond", opacity=0.9,
+    )
+    DMs = options.most_preferred_solutions.keys()
+    for dm in DMs:
+        fig = fig.add_scatter3d(
+            x=[options.most_preferred_solutions[dm]["f_1"]],
+            y=[options.most_preferred_solutions[dm]["f_2"]],
+            z=[options.most_preferred_solutions[dm]["f_3"]],
+            mode="markers", name=dm, marker_symbol="square", opacity=0.9,
+        )
+
+    fair_crits = [fair_sols[i].fairness_criterion for i in range(len(fair_sols))]
+    for i, fc in enumerate(fair_crits):
+        fig = fig.add_scatter3d(
+            x=[fair_sols[i].objective_values["f_1"]],
+            y=[fair_sols[i].objective_values["f_2"]],
+            z=[fair_sols[i].objective_values["f_3"]],
+            mode="markers", name=fc, marker_symbol="x", opacity=0.9,
+        )
+
+    fig.layout.scene.camera.projection.type = "orthographic"
+    fig.update_layout(autosize=False, width=1200, height=1200)
+    fig.show(renderer="browser")
+
+
+def visualize_expansion(points_matrix, winning_points, new_candidates, winning_center, winning_idx, fraction_to_keep, axis_limits=[-0.2, 2]):
+    """Visualizes the Original Cluster points and the New Generated Candidates."""
+    fig = go.Figure()
+
+    # Plot All Points (faint background)
+    fig.add_trace(go.Scatter3d(
+        x=points_matrix[:, 0], y=points_matrix[:, 1], z=points_matrix[:, 2],
+        mode='markers', name='All Evaluated Points',
+        marker=dict(size=3, color='grey', opacity=0.4)
+    ))
+
+    # Plot Winning Cluster (Green)
+    fig.add_trace(go.Scatter3d(
+        x=winning_points[:, 0], y=winning_points[:, 1], z=winning_points[:, 2],
+        mode='markers', name=f'Winning Cluster (Idx {winning_idx})',
+        marker=dict(size=5, color='green', opacity=0.8)
+    ))
+
+    # Plot New Candidates (Red X)
+    fig.add_trace(go.Scatter3d(
+        x=new_candidates[:, 0], y=new_candidates[:, 1], z=new_candidates[:, 2],
+        mode='markers', name='New Expanded Candidates',
+        marker=dict(size=6, color='red', opacity=1.0)
+    ))
+
+    # Plot the Winning Center (for reference)
+    fig.add_trace(go.Scatter3d(
+        x=[winning_center[0]], y=[winning_center[1]], z=[winning_center[2]],
+        mode='markers', name='Winning Center',
+        marker=dict(size=10, color='gold', symbol='diamond')
+    ))
+    from scipy.spatial import ConvexHull
+    from scipy.spatial.distance import cdist
+    # 5. Calculate Hulls for Edges
+    try:
+        hull_inner = ConvexHull(winning_points, qhull_options='QJ')
+        hull_outer = ConvexHull(new_candidates, qhull_options='QJ')
+
+        inner_verts = winning_points[hull_inner.vertices]
+        outer_verts = new_candidates[hull_outer.vertices]
+
+        line_x, line_y, line_z = [], [], []
+        text_x, text_y, text_z = [], [], []
+        text_labels = []
+
+        # Helper to add a link
+        def add_link(v_from, v_to):
+            # Line Geometry
+            line_x.extend([v_from[0], v_to[0], None])
+            line_y.extend([v_from[1], v_to[1], None])
+            line_z.extend([v_from[2], v_to[2], None])
+
+            # Angle Calculation
+            vec_c_from = v_from - winning_center
+            vec_c_to = v_to - winning_center
+            norm_from = np.linalg.norm(vec_c_from)
+            norm_to = np.linalg.norm(vec_c_to)
+
+            angle_deg = 0.0
+            if norm_from > 1e-9 and norm_to > 1e-9:
+                cos_theta = np.clip(np.dot(vec_c_from, vec_c_to) / (norm_from * norm_to), -1.0, 1.0)
+                angle_deg = np.degrees(np.arccos(cos_theta))
+
+            midpoint = (v_from + v_to) / 2
+            text_x.append(midpoint[0])
+            text_y.append(midpoint[1])
+            text_z.append(midpoint[2])
+            text_labels.append(f"{angle_deg:.0f}°")
+
+        # --- DIRECTION 1: Outer -> Nearest Inner ---
+        dists_out_to_in = cdist(outer_verts, inner_verts)
+        closest_inner_indices = np.argmin(dists_out_to_in, axis=1)
+
+        for i, inner_idx in enumerate(closest_inner_indices):
+            add_link(inner_verts[inner_idx], outer_verts[i])
+
+        # --- DIRECTION 2: Inner -> Nearest Outer ---
+        # We assume symmetry is desired: ensure every inner vertex also links to its closest outer neighbor
+        dists_in_to_out = cdist(inner_verts, outer_verts)
+        closest_outer_indices = np.argmin(dists_in_to_out, axis=1)
+
+        for i, outer_idx in enumerate(closest_outer_indices):
+            # Optional: Check if we already drew this line to avoid duplicates?
+            # For visualization, drawing twice is harmless and simpler.
+            add_link(inner_verts[i], outer_verts[outer_idx])        # Add Lines Trace
+
+        fig.add_trace(go.Scatter3d(
+            x=line_x, y=line_y, z=line_z,
+            mode='lines',
+            name='Expansion Links',
+            line=dict(color='black', width=2, dash='dot')
+        ))
+
+        # Add Angle Labels Trace
+        fig.add_trace(go.Scatter3d(
+            x=text_x, y=text_y, z=text_z,
+            mode='text',
+            name='Angles',
+            text=text_labels,
+            textfont=dict(color='black', size=10)
+        ))
+
+    except Exception as e:
+        print(f"Could not visualize hull edges: {e}")
+
+    fig.update_layout(
+        title=f"Convex Hull Expansion (Top {fraction_to_keep*100}%)",
+        scene=dict(
+            xaxis=dict(title='f_1', range=axis_limits),
+            yaxis=dict(title='f_2', range=axis_limits),
+            zaxis=dict(title='f_3', range=axis_limits)
+        ),
+        width=1200, height=1000
+    )
+    # fig.write_html("extended_cvh.html")
+    # fig.show(renderer="browser")
+    fig.show()
