@@ -5,17 +5,30 @@
 	import GalleryVerticalEndIcon from '@lucide/svelte/icons/orbit';
 	import main_image from '$lib/assets/main.jpg';
 	import { superForm } from 'sveltekit-superforms';
+	import LoadingSpinner from '$lib/components/custom/notifications/loading-spinner.svelte';
+	import { zod4 } from 'sveltekit-superforms/adapters';
+	import { loginSchema } from './loginSchema';
+
 
 	let { data } = $props();
-	const { form, enhance } = $derived(superForm(data.form));
+	const { form, enhance, errors, submitting } = $derived(superForm(data.form,{
+		validators: zod4(loginSchema),
+		validationMethod: 'onblur'
+	}
+	));
 
 	let loginError: string | null = null; // whether login is successful or not
 </script>
 
+<svelte:head>
+	<title>Login | DESDEO</title>
+	<meta name="description" content="user login page" />
+</svelte:head>
+
 <div class="grid min-h-svh lg:grid-cols-2">
 	<div class="left-inner-shadow flex flex-col gap-4 p-6 md:p-10">
 		<div class="flex justify-center gap-2 md:justify-start">
-			<a href="##" class="flex items-center gap-2 font-medium">
+			<a href="https://desdeo.it.jyu.fi/" class="flex items-center gap-2 font-medium">
 				<div
 					class="bg-primary text-primary-foreground flex size-6 items-center justify-center rounded-md"
 				>
@@ -35,13 +48,23 @@
 					</div>
 					<div class="grid gap-6">
 						<div class="grid gap-3">
-							<Label for="username">Username</Label>
-							<Input id="username" name="username" bind:value={$form.username} required />
+							<Label for="username">Username<span class="text-red-500">*</span></Label>
+							<Input 
+								id="username" 
+								name="username" 
+								placeholder="Enter your username" 
+								bind:value={$form.username} 
+								class={$errors.username ? 'border-red-500' : ''} 
+								required 
+							/>
+							{#if $errors.username}
+								<small class="text-red-500">{$errors.username}</small>
+							{/if}
 						</div>
 						<div class="grid gap-3">
 							<div class="flex items-center">
-								<Label for="password">Password</Label>
-								<a href="##" class="ml-auto text-sm underline-offset-4 hover:underline">
+								<Label for="password">Password<span class="text-red-500">*</span></Label>
+								<a href="/home/forgot-password" class="ml-auto text-sm underline-offset-4 hover:underline">
 									Forgot your password?
 								</a>
 							</div>
@@ -49,18 +72,31 @@
 								id="password"
 								type="password"
 								name="password"
+								placeholder="Enter your password"
 								bind:value={$form.password}
+								class={$errors.password ? 'border-red-500' : ''}
 								required
 							/>
+							{#if $errors.password}
+								<small class="text-red-500">{$errors.password}</small>
+							{/if}
 						</div>
-						<Button type="submit" class="w-full">Login</Button>
+						<Button type="submit" class="w-full" disabled={$submitting}>
+							{#if $submitting}
+								<LoadingSpinner/>
+								Logging in...
+							{:else}
+								Login
+							{/if}
+						</Button>
+
 						{#if loginError}
 							<p class="text-center text-sm text-red-500">{loginError}</p>
 						{/if}
 					</div>
 					<div class="text-center text-sm">
 						Don&apos;t have an account?
-						<a href="##" class="underline underline-offset-4"> Sign up </a>
+						<a href="/home/registration" class="underline underline-offset-4"> Sign up </a>
 						or
 						<a href="/dashboard" class="underline underline-offset-4">
 							explore DESDEO as a guest.
