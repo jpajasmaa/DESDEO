@@ -297,7 +297,11 @@ def get_representative_set_IPR(problem: Problem, options: GPRMOptions, results_l
     if not isinstance(options.method_options, IPR_Options):
         raise TypeError("Expected IPR_Options for IPR method.")
 
-    evaluated_points = []
+    evaluated_points = None
+    if len(results_list) == 0:
+        evaluated_points = []
+    else:
+        evaluated_points = results_list[-1].raw_results.evaluated_points
 
     # Normalize mps for fairness and IPR. Convert to array for now.
     mps = {}
@@ -480,6 +484,7 @@ def setup(problem: Problem, options: FavOptions, results_list: list[FavResults])
         fake_nadir = results_list[-1].FavOptions.GPRMoptions.fake_nadir
         if fake_nadir is None:
             raise ValueError("Previous fake_nadir is None, cannot proceed with zooming.")
+        """
         fake_nadir = calculate_navigation_point(
             problem=problem,
             previous_navigation_point=fake_nadir,
@@ -488,7 +493,6 @@ def setup(problem: Problem, options: FavOptions, results_list: list[FavResults])
         )
         # TODO: Is this still needed? -> redefine fake_nadir based on winner. Note that fake_ideal stays the same.
         # Shifting is not needed anymore
-        """
         shifted_mps = shift_points(
             problem,
             most_preferred_solutions=orig_mps,
@@ -554,7 +558,7 @@ def favorite_method(problem: Problem, options: FavOptions, results_list: list[Fa
     # --- NEW: Generate Hausdorff Candidates Inside the Core Method ---
     all_points = gprm_results.raw_results.evaluated_points
     n_missing = options.total_n_of_candidates - len(fair_solutions)
-    
+
     if n_missing > 0:
         # hausdorff_candidates returns the existing fairs + the new ones
         fair_solutions = hausdorff_candidates(all_points, fair_solutions, n_missing)
@@ -571,11 +575,11 @@ def find_candidates(fav_results: FavResults) -> Tuple[np.ndarray, np.ndarray, np
     Calls first hausdorff_candidates and then clusters the points.
     """
     all_points = fav_results.GPRMResults.raw_results.evaluated_points
-    candidates = fav_results.fair_solutions # Now contains ALL candidates
-    #n_of_candidates = total_n_of_candidates - len(fav_results.fair_solutions)
+    candidates = fav_results.fair_solutions  # Now contains ALL candidates
+    # n_of_candidates = total_n_of_candidates - len(fav_results.fair_solutions)
 
-    #print("\nFinding Candidates & Clustering...")
-    #candidates = hausdorff_candidates(all_points, fav_results.fair_solutions, n_of_candidates)
+    # print("\nFinding Candidates & Clustering...")
+    # candidates = hausdorff_candidates(all_points, fav_results.fair_solutions, n_of_candidates)
 
     points_matrix, centers_matrix, cluster_labels = cluster_points(all_points, candidates)
     return points_matrix, centers_matrix, cluster_labels
@@ -762,10 +766,10 @@ def expand_and_generate_candidates(
         win_hull = ConvexHull(cluster_kminus)
         dists = calculate_dist_to_hull(all_kminus, win_hull)
     else:
-        # Fallback if cluster is too small (e.g., 1 point): Use distance to mean. Should not happen?
-        print("using FALLBACK")
-        center = np.mean(cluster_kminus, axis=0)
-        dists = np.linalg.norm(all_kminus - center, axis=1)
+        # Fallback if cluster is too small (e.g., 1 point): Use distance to mean. Should not happen? lets just call ValueError
+        raise ValueError("Cluster too small ERROR")
+        # center = np.mean(cluster_kminus, axis=0)
+        # dists = np.linalg.norm(all_kminus - center, axis=1)
 
     # 3. Top X% Closest
     n_keep = max(int(np.ceil(len(all_kminus) * fraction_keep)), cluster_kminus.shape[1] + 1)

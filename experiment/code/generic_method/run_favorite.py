@@ -45,7 +45,7 @@ if __name__ == "__main__":
     ipr_options = IPR_Options(
         most_preferred_solutions=most_preferred_solutions,
         num_initial_reference_points=10000,
-        version="box",
+        version="convex_hull",
     )
     grpmoptions = GPRMOptions(method_options=ipr_options)
     zoomoptions = ZoomOptions(num_steps_remaining=4)
@@ -56,7 +56,7 @@ if __name__ == "__main__":
         zoom_options=zoomoptions,
         original_most_preferred_solutions=most_preferred_solutions,
         votes=None,
-        total_n_of_candidates=5 
+        total_n_of_candidates=5
     )
 
     total_n_of_candidates = 5
@@ -78,11 +78,11 @@ if __name__ == "__main__":
     # =========================================================================
     all_points = fav_results.GPRMResults.raw_results.evaluated_points
     fairs = fav_results.fair_solutions
-    #n_of_candidates = total_n_of_candidates - len(fairs)
-    #candidates = hausdorff_candidates(all_points, fairs, n_of_candidates)
+    # n_of_candidates = total_n_of_candidates - len(fairs)
+    # candidates = hausdorff_candidates(all_points, fairs, n_of_candidates)
     # Visualization 1
     # visualize_selection_2d(all_points, fairs, candidates, "2D Space: Average (Centers)")
-    #points_matrix, centers_matrix, cluster_labels = cluster_points(all_points, candidates)
+    # points_matrix, centers_matrix, cluster_labels = cluster_points(all_points, candidates)
     # Visualization 2
     visualize_3d_clusters(fav_options.GPRMoptions, points_matrix, centers_matrix, cluster_labels, len(fairs), 1)
     # TODO: remove later
@@ -147,7 +147,7 @@ if __name__ == "__main__":
     # TODO: here, repeat earlier steps of clustering, voting, expanding
     # --- 4. CLUSTERING & SELECTION ---
     # handled now in one function
-    points_matrix, centers_matrix, cluster_labels = find_candidates(fav_results_2, total_n_of_candidates)
+    points_matrix, centers_matrix, cluster_labels = find_candidates(fav_results_2)
 
     # TODO: these are repeated solely for ease of visualization in development.
     # =========================================================================
@@ -209,8 +209,8 @@ if __name__ == "__main__":
     fav_results_3 = favorite_method(
         problem=dtlz2_problem,
         options=fav_options_3,
-        # results_list=[fav_results_2, fav_results]
-        results_list=[fav_results_2]
+        results_list=[fav_results, fav_results_2]
+        # results_list=[fav_results_2]
     )
 
     print("Iter 3 Complete.")
@@ -218,7 +218,7 @@ if __name__ == "__main__":
 
     # --- 4. CLUSTERING & SELECTION ---
     # handled now in one function
-    points_matrix, centers_matrix, cluster_labels = find_candidates(fav_results_3, total_n_of_candidates)
+    points_matrix, centers_matrix, cluster_labels = find_candidates(fav_results_3)
 
     # TODO: these are repeated solely for ease of visualization in development.
     # =========================================================================
@@ -281,8 +281,8 @@ if __name__ == "__main__":
     fav_results_4 = favorite_method(
         problem=dtlz2_problem,
         options=fav_options_4,
-        # results_list=[fav_results, fav_results_2, fav_results_3]
-        results_list=[fav_results_3]
+        results_list=[fav_results, fav_results_2, fav_results_3]
+        # results_list=[fav_results_3]
     )
 
     print("Iter 4 Complete.")
@@ -290,7 +290,7 @@ if __name__ == "__main__":
 
     # --- 4. CLUSTERING & SELECTION ---
     # handled now in one function
-    points_matrix, centers_matrix, cluster_labels = find_candidates(fav_results_4, total_n_of_candidates)
+    points_matrix, centers_matrix, cluster_labels = find_candidates(fav_results_4)
 
     # TODO: these are repeated solely for ease of visualization in development.
     # =========================================================================
