@@ -226,13 +226,10 @@ def find_group_solutions(
         ranking = min_max_regret_no_impro(targets, normalized_mpses_arr)  # minmax regret no improvements
     else:
         raise NotImplementedError("Given fairness criterion not implemented.")
-    print(ranking)
 
     # convert to numpy array for get top fair solutions
     solutions_arr = solutions.to_numpy()
     ranking_r, ranking_i = get_top_n_fair_solutions(solutions_arr, ranking, 1)
-    print("fairness rankings")
-    print(ranking_r, ranking_i)
 
     FairSolutions_arr = []
     # Loop for more
@@ -473,11 +470,8 @@ def setup(problem: Problem, options: FavOptions, results_list: list[FavResults])
             raise ValueError("Votes must be provided for iterations after the first.")
         # handle voting
         old_candidates = results_list[-1].fair_solutions
-        print(results_list)
-        print(old_candidates)
         votes = options.votes
         winner = majority_rule(votes=votes)
-        print("WINNER", winner)
         if winner is None:
             raise ValueError("No winner could be determined from the votes provided.")
         winner = old_candidates[winner]
@@ -555,7 +549,7 @@ def favorite_method(problem: Problem, options: FavOptions, results_list: list[Fa
     )
     fair_solutions.extend(new_fair_solutions_list)
 
-    # --- NEW: Generate Hausdorff Candidates Inside the Core Method ---
+    # Generate Hausdorff Candidates
     all_points = gprm_results.raw_results.evaluated_points
     n_missing = options.total_n_of_candidates - len(fair_solutions)
 
@@ -568,21 +562,6 @@ def favorite_method(problem: Problem, options: FavOptions, results_list: list[Fa
         GPRMResults=gprm_results,
         fair_solutions=fair_solutions,
     )
-
-
-def find_candidates(fav_results: FavResults) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """
-    Calls first hausdorff_candidates and then clusters the points.
-    """
-    all_points = fav_results.GPRMResults.raw_results.evaluated_points
-    candidates = fav_results.fair_solutions  # Now contains ALL candidates
-    # n_of_candidates = total_n_of_candidates - len(fav_results.fair_solutions)
-
-    # print("\nFinding Candidates & Clustering...")
-    # candidates = hausdorff_candidates(all_points, fav_results.fair_solutions, n_of_candidates)
-
-    points_matrix, centers_matrix, cluster_labels = cluster_points(all_points, candidates)
-    return points_matrix, centers_matrix, cluster_labels
 
 
 def hausdorff_candidates(all_points: list[_EvaluatedPoint], fair_solutions: list[FairSolution], n_of_candidates: int) -> list[FairSolution]:
@@ -607,11 +586,6 @@ def hausdorff_candidates(all_points: list[_EvaluatedPoint], fair_solutions: list
         [p.objectives[k] for k in obj_keys]
         for p in all_points
     ])
-    # if We need to be on the reference plane
-    # candidates_arr = np.array([
-    #    [p.reference_point[k] for k in obj_keys]
-    #    for p in all_points
-    # ])
 
     # use fair solutions as the seeds
     seeds_arr = np.array([
@@ -673,34 +647,32 @@ def hausdorff_candidates(all_points: list[_EvaluatedPoint], fair_solutions: list
     new_candidates = fair_solutions + new_candidates
     return new_candidates
 
-def cluster_points(all_points: List[_EvaluatedPoint], centers: List[FairSolution]):
+def cluster_points(fav_results: FavResults) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
-    Assigns each point in `all_points` to the cluster of the nearest center (Voronoi partition).
+    Assigns each point in evaluated_points to the cluster of the nearest candidate(Voronoi partition).
     Returns the points, centres and cluster labels (integers) for every point.
 
     Args:
-        all_points: List of evaluated points.
-        centers: List of selected candidate solutions acting as cluster centers.
+        fav_results: FavResults
 
     Returns:
         tuple: (points_array, centers_array, labels_array)
     """
+    all_points = fav_results.GPRMResults.raw_results.evaluated_points
+    candidates = fav_results.fair_solutions
     obj_keys = all_points[0].objectives.keys()
 
     points_arr = np.array([[p.objectives[k] for k in obj_keys] for p in all_points])
-    # if wanting to be in the preference space
-    # points_arr = np.array([[p.reference_point[k] for k in obj_keys] for p in all_points])
-    centers_arr = np.array([[c.objective_values[k] for k in obj_keys] for c in centers])
+    candidates_arr = np.array([[c.objective_values[k] for k in obj_keys] for c in candidates])
 
-    dists = cdist(points_arr, centers_arr, metric='euclidean')
+    dists = cdist(points_arr, candidates_arr, metric='euclidean')
     # labels[i] = index of the center closest to point i
     labels = np.argmin(dists, axis=1)
-    return points_arr, centers_arr, labels
+    return points_arr, candidates_arr, labels
 
 
 def calculate_dist_to_hull(points_kminus: np.ndarray, hull: ConvexHull) -> np.ndarray:
     """
-    TODO: check clanker explanation
     Calculates the algebraic distance from points to a Convex Hull.
 
     This is a fast vectorized approximation of distance.
@@ -794,6 +766,58 @@ def expand_and_generate_candidates(
     new_points_k = rotate_out(new_points_kminus)
 
     return new_points_k
+
+def generate_next_iteration_mps(
+    fav_results: FavResults,
+    votes: dict[str, int],
+    fraction_to_keep: float = 0.8,
+    num_new_points: int = 1000
+) -> tuple[dict[str, dict[str, float]], np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Clusters the current points, identifies the winning cluster from votes,
+    expands the convex hull in the reference space,
+    and returns the properly formatted MPS dictionary for the next iteration.
+
+    Returns:
+        tuple: (next_iter_mps_dict, points_matrix, centers_matrix, cluster_labels)
+               (The matrices are returned so you can still pass them to visualizations if desired).
+    """
+    # 1. Cluster points and find the winner
+    points_matrix, centers_matrix, cluster_labels = cluster_points(fav_results)
+    winning_idx = majority_rule(votes)
+
+    # 2. Extract reference points dynamically
+    all_points = fav_results.GPRMResults.raw_results.evaluated_points
+    obj_names = list(fav_results.FavOptions.GPRMoptions.fake_ideal.keys())
+
+    ref_matrix = np.array([
+        [p.reference_point[k] for k in obj_names]
+        for p in all_points
+    ])
+
+    winning_refs = ref_matrix[cluster_labels == winning_idx]
+
+    # 3. Expand the hull in the flat reference space
+    new_candidates_scaled = expand_and_generate_candidates(
+        winning_cluster_k=winning_refs,
+        all_points_k=ref_matrix,
+        fraction_keep=fraction_to_keep,
+        num_new_points=num_new_points
+    )
+
+    # 4. Scale candidates back to the Objective Space bounds
+    fake_ideal_arr = np.array([fav_results.FavOptions.GPRMoptions.fake_ideal[k] for k in obj_names])
+    fake_nadir_arr = np.array([fav_results.FavOptions.GPRMoptions.fake_nadir[k] for k in obj_names])
+
+    new_candidates_obj = new_candidates_scaled * (fake_nadir_arr - fake_ideal_arr) + fake_ideal_arr
+
+    # 5. Build the dictionary for IPR Options
+    next_iter_mps = {}
+    for i, point in enumerate(new_candidates_obj):
+        point_dict = {name: val for name, val in zip(obj_names, point)}
+        next_iter_mps[f"gen_{i}"] = point_dict
+
+    return next_iter_mps, points_matrix, centers_matrix, cluster_labels
 
 
 if __name__ == "__main__":
