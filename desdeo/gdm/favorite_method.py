@@ -769,10 +769,11 @@ def expand_and_generate_candidates(
 
 def generate_next_iteration_mps(
     fav_results: FavResults,
-    votes: dict[str, int],
+    cluster_labels: np.ndarray,
+    winning_idx: int,
     fraction_to_keep: float = 0.8,
     num_new_points: int = 1000
-) -> tuple[dict[str, dict[str, float]], np.ndarray, np.ndarray, np.ndarray]:
+) -> dict[str, dict[str, float]]:
     """
     Clusters the current points, identifies the winning cluster from votes,
     expands the convex hull in the reference space,
@@ -783,8 +784,8 @@ def generate_next_iteration_mps(
                (The matrices are returned so you can still pass them to visualizations if desired).
     """
     # 1. Cluster points and find the winner
-    points_matrix, centers_matrix, cluster_labels = cluster_points(fav_results)
-    winning_idx = majority_rule(votes)
+    #points_matrix, centers_matrix, cluster_labels = cluster_points(fav_results)
+    #winning_idx = majority_rule(votes)
 
     # 2. Extract reference points dynamically
     all_points = fav_results.GPRMResults.raw_results.evaluated_points
@@ -817,7 +818,7 @@ def generate_next_iteration_mps(
         point_dict = {name: val for name, val in zip(obj_names, point)}
         next_iter_mps[f"gen_{i}"] = point_dict
 
-    return next_iter_mps, points_matrix, centers_matrix, cluster_labels
+    return next_iter_mps
 
 
 if __name__ == "__main__":

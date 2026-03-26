@@ -129,8 +129,8 @@ def visualize_3d_clusters(options, points_arr, centers_arr, labels, n_predetermi
         ),
         width=1200, height=1000
     )
-    fig.show(renderer="browser")
-    # fig.show()
+    #fig.show(renderer="browser")
+    fig.show()
 
 
 def visualize_3d(options, evaluated_points, fair_sols, n):
