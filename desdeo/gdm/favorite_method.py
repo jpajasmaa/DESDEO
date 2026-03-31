@@ -458,7 +458,9 @@ def setup(problem: Problem, options: FavOptions, results_list: list[FavResults])
 
     orig_mps = options.original_most_preferred_solutions
     orig_mps_list = dict_of_rps_to_list_of_rps(orig_mps)
-    fake_ideal, fake_nadir = agg_aspbounds(orig_mps_list, problem)
+    # TODO: switching for real ideal and nadir.
+    fake_ideal, fake_nadir = problem.get_ideal_point(), problem.get_nadir_point()
+    #fake_ideal, fake_nadir = agg_aspbounds(orig_mps_list, problem)
     # first iteration
     if not results_list:  # noqa:SIM102
         if isinstance(options.GPRMoptions.method_options, IPR_Options):
