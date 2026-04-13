@@ -2,6 +2,8 @@
 
 __all__ = [  # noqa: RUF022
     "Bounds",
+    "ConstrainedVariantRequest",
+    "ConstrainedVariantResponse",
     "ConstantDB",
     "ConstraintDB",
     "CreateSessionRequest",
@@ -15,12 +17,22 @@ __all__ = [  # noqa: RUF022
     "ENautilusFinalState",
     "ENautilusRepresentativeSolutionsResponse",
     "ENautilusSessionTreeResponse",
+    "ENautilusSimulateRequest",
+    "ENautilusSimulateResponse",
+    "ENautilusSimulateStepResult",
     "ENautilusState",
     "ENautilusStateResponse",
     "ENautilusStepRequest",
     "ENautilusStepResponse",
     "ENautilusTreeNodeResponse",
     "ExtraFunctionDB",
+    "NautilusNavigatorInitializationState",
+    "NautilusNavigatorInitRequest",
+    "NautilusNavigatorInitResponse",
+    "NautilusNavigatorNavigateRequest",
+    "NautilusNavigatorNavigateResponse",
+    "NautilusNavigatorNavigationState",
+    "NautilusNavigatorStep",
     "ForestProblemMetaData",
     "GenericIntermediateSolutionResponse",
     "GNIMBUSOptimizationState",
@@ -79,6 +91,7 @@ __all__ = [  # noqa: RUF022
     "UserPublic",
     "UserRole",
     "VariableDB",
+    "VariableFixing",
     "ProblemMetaDataDB",
     "BaseProblemMetaData",
     "ForestProblemMetaData",
@@ -107,6 +120,7 @@ __all__ = [  # noqa: RUF022
     "SolutionReference",
     "SolutionReferenceLite",
     "SolutionReferenceResponse",
+    "SiteSelectionMetaData",
     "SolverSelectionMetadata",
     "UserSavedEMOResults",
     "UserSavedSolutionDB",
@@ -151,6 +165,9 @@ from .enautilus import (
     ENautilusFinalizeResponse,
     ENautilusRepresentativeSolutionsResponse,
     ENautilusSessionTreeResponse,
+    ENautilusSimulateRequest,
+    ENautilusSimulateResponse,
+    ENautilusSimulateStepResult,
     ENautilusStateResponse,
     ENautilusStepRequest,
     ENautilusStepResponse,
@@ -206,6 +223,15 @@ from .generic_states import (
     StateDB,
     UserSavedSolutionDB,
 )
+from .nautilus_navigator import (
+    NautilusNavigatorInitializationState,
+    NautilusNavigatorInitRequest,
+    NautilusNavigatorInitResponse,
+    NautilusNavigatorNavigateRequest,
+    NautilusNavigatorNavigateResponse,
+    NautilusNavigatorNavigationState,
+    NautilusNavigatorStep,
+)
 from .nimbus import (
     NIMBUSClassificationRequest,
     NIMBUSClassificationResponse,
@@ -232,6 +258,8 @@ from .preference import (
 )
 from .problem import (
     ConstantDB,
+    ConstrainedVariantRequest,
+    ConstrainedVariantResponse,
     ConstraintDB,
     DiscreteRepresentationDB,
     ExtraFunctionDB,
@@ -247,10 +275,12 @@ from .problem import (
     RepresentativeNonDominatedSolutions,
     ScalarizationFunctionDB,
     SimulatorDB,
+    SiteSelectionMetaData,
     SolverSelectionMetadata,
     TensorConstantDB,
     TensorVariableDB,
     VariableDB,
+    VariableFixing,
 )
 from .reference_point_method import RPMSolveRequest
 from .session import (
