@@ -3,9 +3,274 @@ import plotly.express as ex
 import plotly.io as pio
 import polars as pl
 import numpy as np
+import plotly.colors as pcolors
 
 # Set default renderer
 # pio.renderers.default = "browser"
+
+def visualize_pcp_clusters(options, points_arr, centers_arr, labels, n_predetermined, iter_n, current_mps=None):
+    """
+    Visualizes the multi-objective space using a Custom Parallel Coordinates Plot (PCP).
+    Each axis is independently scaled between its Ideal and Nadir values.
+    """
+    fig = go.Figure()
+    obj_names = list(options.fake_ideal.keys())
+    x_vals = obj_names
+    cluster_colors = pcolors.qualitative.Plotly  # Standard discrete colors
+
+    # ---------------------------------------------------------
+    # 1. INDEPENDENT AXIS SCALING (Normalization)
+    # ---------------------------------------------------------
+    ideal = options.fake_ideal
+    nadir = options.fake_nadir
+
+    # Define the absolute bottom and top for each axis
+    mins = {k: min(ideal[k], nadir[k]) for k in obj_names}
+    maxs = {k: max(ideal[k], nadir[k]) for k in obj_names}
+    ranges = {k: (maxs[k] - mins[k]) if (maxs[k] - mins[k]) != 0 else 1e-9 for k in obj_names}
+
+    # Translates real numbers into a 0-to-1 scale for the shared plot
+    def norm_point(p_array):
+        return [(p_array[i] - mins[name]) / ranges[name] for i, name in enumerate(obj_names)]
+
+    # Creates a hover tooltip showing the REAL unscaled numbers
+    def make_hover(p_array, label_prefix):
+        return "<br>".join([f"{name}: {val:.3f}" for name, val in zip(obj_names, p_array)])
+
+    # ---------------------------------------------------------
+    # 2. DRAW BACKGROUND AXES & REAL-VALUE LABELS
+    # ---------------------------------------------------------
+    for name in obj_names:
+        # Draw the vertical axis line
+        fig.add_trace(go.Scatter(
+            x=[name, name], y=[0, 1], mode='lines',
+            line=dict(color='lightgrey', width=2), showlegend=False, hoverinfo='skip'
+        ))
+        # Add the Real Numbers to the top and bottom of each independent axis
+        fig.add_annotation(x=name, y=1.05, text=f"{maxs[name]:.2f}", showarrow=False, font=dict(size=12, color='black'))
+        fig.add_annotation(x=name, y=-0.05, text=f"{mins[name]:.2f}", showarrow=False, font=dict(size=12, color='black'))
+
+    # ---------------------------------------------------------
+    # 3. EVALUATED POINTS (Faint lines colored by Cluster ID)
+    # ---------------------------------------------------------
+    added_clusters_to_legend = set()
+
+    for i, p in enumerate(points_arr):
+        cluster_idx = labels[i]
+        c_color = cluster_colors[cluster_idx % len(cluster_colors)]
+        normed_p = norm_point(p)  # Scale to independent axis
+
+        show_in_legend = cluster_idx not in added_clusters_to_legend
+        if show_in_legend:
+            added_clusters_to_legend.add(cluster_idx)
+
+        fig.add_trace(go.Scatter(
+            x=x_vals, y=normed_p, mode='lines',
+            line=dict(color=c_color, width=1.5),
+            opacity=0.20,
+            text=[make_hover(p, "Evaluated")] * len(x_vals),
+            hoverinfo='text',
+            name=f'Cluster {cluster_idx} Points',
+            legendgroup=f'points_{cluster_idx}',  # Toggle all lines at once
+            showlegend=show_in_legend
+        ))
+
+    # ---------------------------------------------------------
+    # 4. FAIR SOLUTIONS (Pre-centers) - Matches Cluster Color
+    # ---------------------------------------------------------
+    pre_centers = centers_arr[:n_predetermined]
+    for i, p in enumerate(pre_centers):
+        c_color = cluster_colors[i % len(cluster_colors)]
+        normed_p = norm_point(p)
+
+        fig.add_trace(go.Scatter(
+            x=x_vals, y=normed_p, mode='lines+markers',
+            line=dict(color=c_color, width=4),
+            marker=dict(symbol='square', size=10, color=c_color, line=dict(color='black', width=2)),
+            name=f'Pre{i} (Fair Center)',
+            text=[make_hover(p, f"Pre{i}")] * len(x_vals),
+            hoverinfo='text+name',
+            opacity=1.0
+        ))
+
+    # ---------------------------------------------------------
+    # 5. NEW CANDIDATES - Dashed Blue Lines
+    # ---------------------------------------------------------
+    new_centers = centers_arr[n_predetermined:]
+    for i, p in enumerate(new_centers):
+        normed_p = norm_point(p)
+        fig.add_trace(go.Scatter(
+            x=x_vals, y=normed_p, mode='lines+markers',
+            line=dict(color='blue', width=3, dash='dash'),
+            marker=dict(symbol='diamond', size=10, color='blue', line=dict(color='white', width=2)),
+            name=f'New{i} (Candidate)',
+            text=[make_hover(p, f"New{i}")] * len(x_vals),
+            hoverinfo='text+name',
+            opacity=1.0
+        ))
+
+    # ---------------------------------------------------------
+    # 6. FAKE IDEAL / NADIR BOUNDARIES
+    # ---------------------------------------------------------
+    fake_ideal_arr = [options.fake_ideal[k] for k in obj_names]
+    fake_nadir_arr = [options.fake_nadir[k] for k in obj_names]
+
+    fig.add_trace(go.Scatter(
+        x=x_vals, y=norm_point(fake_ideal_arr), mode='lines+markers',
+        line=dict(color='green', width=2, dash='dot'),
+        marker=dict(symbol='triangle-down', size=12),
+        name='fake_ideal',
+        text=[make_hover(fake_ideal_arr, "Ideal")] * len(x_vals),
+        hoverinfo='text+name'
+    ))
+    fig.add_trace(go.Scatter(
+        x=x_vals, y=norm_point(fake_nadir_arr), mode='lines+markers',
+        line=dict(color='orange', width=2, dash='dot'),
+        marker=dict(symbol='triangle-up', size=12),
+        name='fake_nadir',
+        text=[make_hover(fake_nadir_arr, "Nadir")] * len(x_vals),
+        hoverinfo='text+name'
+    ))
+
+    # ---------------------------------------------------------
+    # 7. CURRENT DM ANCHORS (Distinct Colors)
+    # ---------------------------------------------------------
+    if current_mps is not None:
+        dm_colors = pcolors.qualitative.Vivid
+
+        for idx, (dm_name, obj_vals) in enumerate(current_mps.items()):
+            mps_arr = [obj_vals[k] for k in obj_names]
+            normed_mps = norm_point(mps_arr)
+            dm_color = dm_colors[idx % len(dm_colors)]
+
+            fig.add_trace(go.Scatter(
+                x=x_vals, y=normed_mps, mode='markers',
+                marker=dict(symbol='x', size=16, color=dm_color, line=dict(width=3, color='black')),
+                name=f'{dm_name} Preferred',
+                text=[make_hover(mps_arr, dm_name)] * len(x_vals),
+                hoverinfo='text+name'
+            ))
+
+    # ---------------------------------------------------------
+    # 8. LAYOUT FORMATTING
+    # ---------------------------------------------------------
+    fig.update_layout(
+        title=f"Iteration {iter_n})",
+        xaxis=dict(title="Objectives", showgrid=False),
+        yaxis=dict(
+            title="",
+            showgrid=False,
+            zeroline=False,
+            showticklabels=False,  # Hide the fake 0-to-1 scale!
+            range=[-0.15, 1.15]   # Pad the top and bottom so our text annotations fit perfectly
+        ),
+        width=1200, height=1000,
+        hovermode="closest",
+        template="plotly_white"
+    )
+
+    return fig
+
+def visualize_pcp_clusters_old(options, points_arr, centers_arr, labels, n_predetermined, iter_n, current_mps=None):
+    """
+    Visualizes the multi-objective space using a Custom Parallel Coordinates Plot (PCP).
+    Supports any number of dimensions (e.g., the 5-objective River Pollution Problem).
+    """
+    fig = go.Figure()
+    obj_names = list(options.fake_ideal.keys())
+    x_vals = obj_names
+
+    cluster_colors = pcolors.qualitative.Plotly  # Standard discrete colors
+
+    # 1. Evaluated Points (Faint lines colored by Cluster ID & Grouped in Legend)
+    added_clusters_to_legend = set()
+
+    for i, p in enumerate(points_arr):
+        cluster_idx = labels[i]
+        c_color = cluster_colors[cluster_idx % len(cluster_colors)]
+
+        # Only show the legend entry for the first line of each cluster
+        show_in_legend = cluster_idx not in added_clusters_to_legend
+        if show_in_legend:
+            added_clusters_to_legend.add(cluster_idx)
+
+        fig.add_trace(go.Scatter(
+            x=x_vals, y=p, mode='lines',
+            line=dict(color=c_color, width=1.5),
+            opacity=0.25,
+            hoverinfo='skip',  # Speeds up performance for 1000s of lines
+            name=f'Cluster {cluster_idx} Points',
+            legendgroup=f'points_{cluster_idx}',  # Links all lines in this cluster to one toggle!
+            showlegend=show_in_legend
+        ))
+
+    # 2. Fair Solutions (Pre-centers) - Colored to match their cluster!
+    pre_centers = centers_arr[:n_predetermined]
+    for i, p in enumerate(pre_centers):
+        c_color = cluster_colors[i % len(cluster_colors)]  # Match exact color of the point cloud
+
+        fig.add_trace(go.Scatter(
+            x=x_vals, y=p, mode='lines+markers',
+            line=dict(color=c_color, width=4),
+            marker=dict(symbol='square', size=10, color=c_color, line=dict(color='black', width=2)),
+            name=f'Candidate {i}',
+            opacity=1.0
+        ))
+
+    # 3. New Candidates - Dashed Blue Lines with Diamonds
+    new_centers = centers_arr[n_predetermined:]
+    for i, p in enumerate(new_centers):
+        fig.add_trace(go.Scatter(
+            x=x_vals, y=p, mode='lines+markers',
+            line=dict(color='blue', width=3, dash='dash'),
+            marker=dict(symbol='diamond', size=10, color='blue', line=dict(color='white', width=2)),
+            name=f'New{i} (Candidate)',
+            opacity=1.0
+        ))
+
+    # 4. Fake Ideal / Nadir Boundaries
+    fake_ideal_arr = [options.fake_ideal[k] for k in obj_names]
+    fake_nadir_arr = [options.fake_nadir[k] for k in obj_names]
+
+    fig.add_trace(go.Scatter(
+        x=x_vals, y=fake_ideal_arr, mode='lines+markers',
+        line=dict(color='green', width=2, dash='dot'),
+        marker=dict(symbol='triangle-down', size=12),
+        name='ideal'
+    ))
+    fig.add_trace(go.Scatter(
+        x=x_vals, y=fake_nadir_arr, mode='lines+markers',
+        line=dict(color='orange', width=2, dash='dot'),
+        marker=dict(symbol='triangle-up', size=12),
+        name='nadir'
+    ))
+
+    # 5. Current DM Anchors (Magenta Crosses)
+    if current_mps is not None:
+        # Use a secondary, vibrant palette so DMs don't visually blend into the clusters
+        dm_colors = pcolors.qualitative.Vivid
+        for idx, (dm_name, obj_vals) in enumerate(current_mps.items()):
+            mps_arr = [obj_vals[k] for k in obj_names]
+            dm_color = dm_colors[idx % len(dm_colors)]  # Grab a unique color
+
+            fig.add_trace(go.Scatter(
+                x=x_vals, y=mps_arr, mode='markers',
+                # Black outline added to the cross to make it "pop" on top of the lines
+                marker=dict(symbol='x', size=14, color=dm_color, line=dict(width=3, color='black')),
+                name=f'{dm_name} Preferred'
+            ))
+
+    fig.update_layout(
+        title=f"Iteration {iter_n}",
+        xaxis_title="Objectives",
+        yaxis_title="Objective Values",
+        width=1200, height=1000,
+        hovermode="x unified",  # Tooltip draws a vertical line to compare points easily
+        template="plotly_white"
+    )
+
+    return fig
+
 
 def visualize_selection_2d(all_points, seed_solutions, new_solutions, title):
     """
@@ -129,7 +394,7 @@ def visualize_3d_clusters(options, points_arr, centers_arr, labels, n_predetermi
         ),
         width=1200, height=1000
     )
-    #fig.show(renderer="browser")
+    # fig.show(renderer="browser")
     fig.show()
 
 

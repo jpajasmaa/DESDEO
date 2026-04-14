@@ -209,11 +209,20 @@ def find_group_solutions(
     """
 
     # TODO: Normalize MPSes
-    normalized_mpses = most_preferred_solutions
+    # normalized_mpses = most_preferred_solutions
+    ideal = problem.get_ideal_point()
+    nadir = problem.get_nadir_point()
+    normalized_mpses = {}
+    for dm, mps in most_preferred_solutions.items():
+        normalized_mpses[dm] = {
+            obj: (mps[obj] - ideal[obj]) / (nadir[obj] - ideal[obj])
+            for obj in mps.keys()
+        }
 
     # convert to numpy array for numba in UFs
     normalized_mpses_arr = []
     for i, dm in enumerate(normalized_mpses):
+        # normalized_mpses_arr.append(objective_dict_to_numpy_array(problem, scale_rp(problem, normalized_mpses[dm], problem.get_ideal_point(), problem.get_nadir_point(), True)).tolist())
         normalized_mpses_arr.append(objective_dict_to_numpy_array(problem, normalized_mpses[dm]).tolist())
 
     # TODO: change this to match how many FairSolution we want. For now, we just get a single one
@@ -460,7 +469,7 @@ def setup(problem: Problem, options: FavOptions, results_list: list[FavResults])
     orig_mps_list = dict_of_rps_to_list_of_rps(orig_mps)
     # TODO: switching for real ideal and nadir.
     fake_ideal, fake_nadir = problem.get_ideal_point(), problem.get_nadir_point()
-    #fake_ideal, fake_nadir = agg_aspbounds(orig_mps_list, problem)
+    # fake_ideal, fake_nadir = agg_aspbounds(orig_mps_list, problem)
     # first iteration
     if not results_list:  # noqa:SIM102
         if isinstance(options.GPRMoptions.method_options, IPR_Options):
@@ -786,8 +795,8 @@ def generate_next_iteration_mps(
                (The matrices are returned so you can still pass them to visualizations if desired).
     """
     # 1. Cluster points and find the winner
-    #points_matrix, centers_matrix, cluster_labels = cluster_points(fav_results)
-    #winning_idx = majority_rule(votes)
+    # points_matrix, centers_matrix, cluster_labels = cluster_points(fav_results)
+    # winning_idx = majority_rule(votes)
 
     # 2. Extract reference points dynamically
     all_points = fav_results.GPRMResults.raw_results.evaluated_points
