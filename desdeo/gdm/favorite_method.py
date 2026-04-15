@@ -193,7 +193,7 @@ def find_group_solutions(
     targets: pl.DataFrame,
     most_preferred_solutions: dict[str, dict[str, float]],
     fairness_criterion: str
-) -> tuple[list[FairSolution], dict]:
+) -> list[FairSolution]:
     """
         Identifies a fair compromise solution from a set of generated solutions based on a criterion.
 
@@ -209,10 +209,8 @@ def find_group_solutions(
     """
 
     # TODO: Normalize MPSes
-    # normalized_mpses = most_preferred_solutions
-    ideal = problem.get_ideal_point()
-    nadir = problem.get_nadir_point()
     normalized_mpses = {}
+    ideal, nadir = problem.get_ideal_point(), problem.get_nadir_point()
     for dm, mps in most_preferred_solutions.items():
         normalized_mpses[dm] = {
             obj: (mps[obj] - ideal[obj]) / (nadir[obj] - ideal[obj])
@@ -221,8 +219,7 @@ def find_group_solutions(
 
     # convert to numpy array for numba in UFs
     normalized_mpses_arr = []
-    for i, dm in enumerate(normalized_mpses):
-        # normalized_mpses_arr.append(objective_dict_to_numpy_array(problem, scale_rp(problem, normalized_mpses[dm], problem.get_ideal_point(), problem.get_nadir_point(), True)).tolist())
+    for _, dm in enumerate(normalized_mpses):
         normalized_mpses_arr.append(objective_dict_to_numpy_array(problem, normalized_mpses[dm]).tolist())
 
     # TODO: change this to match how many FairSolution we want. For now, we just get a single one
@@ -238,7 +235,7 @@ def find_group_solutions(
 
     # convert to numpy array for get top fair solutions
     solutions_arr = solutions.to_numpy()
-    ranking_r, ranking_i = get_top_n_fair_solutions(solutions_arr, ranking, 1)
+    ranking_r, ranking_i = get_top_n_fair_solutions(solutions_arr, ranking, 1)  # get the top fair
 
     FairSolutions_arr = []
     # Loop for more
@@ -249,12 +246,7 @@ def find_group_solutions(
             fairness_value=ranking_i[0],
         )
     )
-    # TODO: regret values needed or?
-    regret_values = {
-        "mean": [],
-    }
-
-    return FairSolutions_arr, regret_values
+    return FairSolutions_arr
 
 
 def shift_points(
@@ -551,7 +543,7 @@ def favorite_method(problem: Problem, options: FavOptions, results_list: list[Fa
             raise ValueError("No winner could be determined from the votes provided.")
 
     targets = pl.DataFrame([point.targets for point in gprm_results.raw_results.evaluated_points])
-    new_fair_solutions_list, _ = find_group_solutions(
+    new_fair_solutions_list = find_group_solutions(
         problem,
         solutions=gprm_results.outputs,
         targets=targets,
