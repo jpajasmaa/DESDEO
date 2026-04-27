@@ -72,7 +72,8 @@ def visualize_pcp_clusters(options, points_arr, centers_arr, labels, n_predeterm
             hoverinfo='text',
             name=f'Cluster {cluster_idx} Points',
             legendgroup=f'points_{cluster_idx}',  # Toggle all lines at once
-            showlegend=show_in_legend
+            showlegend=show_in_legend,
+            visible="legendonly"
         ))
 
     # ---------------------------------------------------------
@@ -87,7 +88,7 @@ def visualize_pcp_clusters(options, points_arr, centers_arr, labels, n_predeterm
             x=x_vals, y=normed_p, mode='lines+markers',
             line=dict(color=c_color, width=4),
             marker=dict(symbol='square', size=10, color=c_color, line=dict(color='black', width=2)),
-            name=f'Pre{i} (Fair Center)',
+            name=f'Candidate {i})',
             text=[make_hover(p, f"Pre{i}")] * len(x_vals),
             hoverinfo='text+name',
             opacity=1.0
@@ -103,7 +104,7 @@ def visualize_pcp_clusters(options, points_arr, centers_arr, labels, n_predeterm
             x=x_vals, y=normed_p, mode='lines+markers',
             line=dict(color='blue', width=3, dash='dash'),
             marker=dict(symbol='diamond', size=10, color='blue', line=dict(color='white', width=2)),
-            name=f'New{i} (Candidate)',
+            name=f'New Candidate {i}',
             text=[make_hover(p, f"New{i}")] * len(x_vals),
             hoverinfo='text+name',
             opacity=1.0
@@ -118,16 +119,16 @@ def visualize_pcp_clusters(options, points_arr, centers_arr, labels, n_predeterm
     fig.add_trace(go.Scatter(
         x=x_vals, y=norm_point(fake_ideal_arr), mode='lines+markers',
         line=dict(color='green', width=2, dash='dot'),
-        marker=dict(symbol='triangle-down', size=12),
-        name='fake_ideal',
+        marker=dict(symbol='triangle-up', size=12),
+        name='ideal',
         text=[make_hover(fake_ideal_arr, "Ideal")] * len(x_vals),
         hoverinfo='text+name'
     ))
     fig.add_trace(go.Scatter(
         x=x_vals, y=norm_point(fake_nadir_arr), mode='lines+markers',
-        line=dict(color='orange', width=2, dash='dot'),
-        marker=dict(symbol='triangle-up', size=12),
-        name='fake_nadir',
+        line=dict(color='red', width=2, dash='dot'),
+        marker=dict(symbol='triangle-down', size=12),
+        name='nadir',
         text=[make_hover(fake_nadir_arr, "Nadir")] * len(x_vals),
         hoverinfo='text+name'
     ))

@@ -67,20 +67,16 @@ def get_top_n_fair_solutions(solutions, fairness_values, n):
 
     return fair_sols, idxs
 
-# TODO: comments
-def scale_rp(problem: Problem, reference_point, ideal, nadir, maximize):
+def scale_rp(
+    problem: Problem,
+    reference_point: dict[str, float],
+    ideal: dict[str, float],
+    nadir: dict[str, float]
+) -> dict[str, float]:
     """Scales a reference point to [0,1]"""
     rp = {}
-    # ideal = problem.get_ideal_point()
-    # nadir = problem.get_nadir_point()
-
-    # scaling to [0,1], when maximizing objective functions
-    # TODO (@jpajasmaa) Why not use problem.objective[..].maximize?
     for obj in problem.objectives:
-        if maximize:
-            rp.update({obj.symbol: (reference_point[obj.symbol] - nadir[obj.symbol]) / (ideal[obj.symbol] - nadir[obj.symbol])})
-        else:
-            rp.update({obj.symbol: (reference_point[obj.symbol] - ideal[obj.symbol]) / (nadir[obj.symbol] - ideal[obj.symbol])})  # when minimizing
+        rp[obj.symbol] = (reference_point[obj.symbol] - nadir[obj.symbol]) / (ideal[obj.symbol] - nadir[obj.symbol])
     return rp
 
 
@@ -235,12 +231,12 @@ def alpha_fairness(targets_df: pl.DataFrame, mpses: list[np.ndarray], alpha: flo
     alpha_fairs = []
 
     # convert polars dataframes dictionaries to numpy arrays
+    print("at alpha fairness")
     all_sols = targets_df.to_numpy()
     print(all_sols)
 
     M = len(mpses)  # number of DMs
     for i in range(len(all_sols)):
-        # TODO: utilities must be [0, R^n_+]
         utilities = regret_allDMs_no_impro(all_sols[i], mpses)  # Use L1
         # utilities = utility_allDMs_no_impro(all_sols[i], mpses) # use L2
         if alpha == 1:
