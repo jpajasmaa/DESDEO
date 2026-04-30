@@ -59,8 +59,8 @@ def _(
     nadir = problem.get_nadir_point()
     print(ideal, nadir)
 
-    fractions = [0.8, 0.6, 0.4, 0.2]
-    MAX_ITERS = 4
+    #fractions = [0.8, 0.6, 0.4, 0.2]
+    MAX_ITERS = 5
 
     n_of_dms = 5
     rp = {
@@ -110,15 +110,7 @@ def _(
         "ultimate_winner": None,
         "current_dm_preferred": most_preferred_solutions
     })
-    return (
-        MAX_ITERS,
-        fractions,
-        get_state,
-        n_of_dms,
-        obj_symbols,
-        problem,
-        set_state,
-    )
+    return MAX_ITERS, get_state, n_of_dms, obj_symbols, problem, set_state
 
 
 @app.cell
@@ -263,7 +255,6 @@ def _(
     current_options,
     fav_results,
     final_candidates,
-    fractions,
     generate_next_iteration_mps,
     iter_idx,
     labels,
@@ -281,7 +272,7 @@ def _(
         dm_names = list(fav_results.FavOptions.original_most_preferred_solutions.keys())
         votes = {dm_names[i]: vote_form.value[i] for i in range(len(dm_names))}
         winning_idx = majority_rule(votes)
-    
+
         compromise_solution = None
         candidates_pool = fav_results.fair_solutions if iter_idx < MAX_ITERS else final_candidates
         if winning_idx is None:
@@ -297,16 +288,18 @@ def _(
         new_dm_preferred = {}
         for dm, v_idx in votes.items():
             new_dm_preferred[dm] = candidates_pool[v_idx].objective_values
-    
+
         if iter_idx < MAX_ITERS - 1:
+            rs = MAX_ITERS - iter_idx
+            dynamic_fraction = (rs - 1) / rs
             # Phase 1: Normal zoom/expansion
             next_mps = generate_next_iteration_mps(
-                fav_results=fav_results, cluster_labels=labels, winning_idx=winning_idx, fraction_to_keep=fractions[iter_idx]
+                fav_results=fav_results, cluster_labels=labels, winning_idx=winning_idx, fraction_to_keep=dynamic_fraction
             )
             new_options = current_options.model_copy(deep=True)
             new_options.GPRMoptions.method_options.most_preferred_solutions = next_mps
             new_options.GPRMoptions.method_options.version = "convex_hull"
-            new_options.zoom_options.num_steps_remaining = max(1, 4 - iter_idx - 1)
+            new_options.zoom_options.num_steps_remaining = max(1, rs - 1)
             new_options.votes = votes
 
             set_state({
