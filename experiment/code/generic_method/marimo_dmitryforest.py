@@ -11,7 +11,6 @@ def _():
     from desdeo.problem.testproblems import river_pollution_problem, dmitry_forest_problem_disc
     from desdeo.tools import PyomoIpoptSolver, ProximalSolver
     from desdeo.tools.scalarization import add_asf_diff, add_asf_nondiff
-
     from desdeo.gdm.favorite_method import (
         IPR_Options, GPRMOptions, ZoomOptions, FavOptions,
         favorite_method, generate_next_iteration_mps, cluster_points, select_final_candidates, tie_breaker_avgproj
@@ -63,7 +62,14 @@ def _(
     fractions = [0.8, 0.6, 0.4, 0.2]
     MAX_ITERS = 4
 
-    n_of_dms = 3
+    n_of_dms = 5
+    rp = {
+        "DM1": {'Rev': 240., 'HA': 12225, 'Carb': 2944, 'DW': 180},
+        "DM2": {'Rev': 111, 'HA': 18225, 'Carb': 3200, 'DW': 200},
+        "DM3": {'Rev': 160, 'HA': 15232, 'Carb': 4000, 'DW': 90},
+        "DM4": {'Rev': 120, 'HA': 14232, 'Carb': 4100, 'DW': 190},
+        "DM5": {'Rev': 120, 'HA': 13232, 'Carb': 3300, 'DW': 140},
+    }
     """
     for i in range(n_of_dms):
         dm_name = f"DM{i+1}"
@@ -72,19 +78,13 @@ def _(
             for name in obj_symbols
         }
     """
-    rp = {
-        "DM1": {'Rev': 240., 'HA': 12225, 'Carb': 2944, 'DW': 180},
-        "DM2": {'Rev': 111, 'HA': 18225, 'Carb': 3200, 'DW': 200},
-        "DM3": {'Rev': 160, 'HA': 15232, 'Carb': 4000, 'DW': 90},
-    }
 
     most_preferred_solutions = {}
     for i in range(n_of_dms):
-        dm_name = f"DM{i+1}"
-        p, target = add_asf_nondiff(problem, symbol="asf", reference_point=rp[dm_name])
+        p, target = add_asf_nondiff(problem, symbol="asf", reference_point=rp[f"DM{i+1}"])
         solver = ProximalSolver(p)
         res = solver.solve(target)
-        most_preferred_solutions[dm_name] = res.optimal_objectives
+        most_preferred_solutions[f"DM{i+1}"] = res.optimal_objectives
 
     # 3. Configure the Initial Engine Options
     ipr_options = IPR_Options(
@@ -107,9 +107,18 @@ def _(
         "current_options": initial_fav_options,
         "results_history": [],
         "final_candidates": None,
-        "ultimate_winner": None
+        "ultimate_winner": None,
+        "current_dm_preferred": most_preferred_solutions
     })
-    return MAX_ITERS, fractions, get_state, obj_symbols, problem, set_state
+    return (
+        MAX_ITERS,
+        fractions,
+        get_state,
+        n_of_dms,
+        obj_symbols,
+        problem,
+        set_state,
+    )
 
 
 @app.cell
@@ -128,6 +137,7 @@ def _(
     results_history = state["results_history"]
     final_candidates = state["final_candidates"]
     ultimate_winner = state["ultimate_winner"]
+    current_dm_preferred = state["current_dm_preferred"]
 
     if iter_idx < MAX_ITERS:
         # Evaluate Points & Generate Candidates normally
@@ -153,6 +163,7 @@ def _(
             n_predetermined = len(final_candidates)
     return (
         cents_mat,
+        current_dm_preferred,
         current_options,
         fav_results,
         final_candidates,
@@ -169,6 +180,7 @@ def _(
 def _(
     MAX_ITERS,
     cents_mat,
+    current_dm_preferred,
     current_options,
     fav_results,
     iter_idx,
@@ -189,7 +201,8 @@ def _(
             labels=labels,
             n_predetermined=n_pred,
             iter_n=iter_idx + 1 if iter_idx < MAX_ITERS else "FINAL PHASE",
-            current_mps=fav_results.FavOptions.original_most_preferred_solutions
+            #current_mps=fav_results.FavOptions.original_most_preferred_solutions
+            current_mps=current_dm_preferred,
         )
         output = mo.ui.plotly(plot)
     else:
@@ -200,7 +213,15 @@ def _(
 
 
 @app.cell
-def _(MAX_ITERS, fav_results, final_candidates, iter_idx, mo, ultimate_winner):
+def _(
+    MAX_ITERS,
+    fav_results,
+    final_candidates,
+    iter_idx,
+    mo,
+    n_of_dms,
+    ultimate_winner,
+):
     if ultimate_winner is None and fav_results is not None:
 
         if iter_idx < MAX_ITERS:
@@ -214,11 +235,13 @@ def _(MAX_ITERS, fav_results, final_candidates, iter_idx, mo, ultimate_winner):
 
         dropdown_options = {f"Candidate {i}": i for i in range(n_candidates)}
 
-        dm1_vote = mo.ui.dropdown(options=dropdown_options, value="Candidate 0", label="DM1 Vote")
-        dm2_vote = mo.ui.dropdown(options=dropdown_options, value="Candidate 0", label="DM2 Vote")
-        dm3_vote = mo.ui.dropdown(options=dropdown_options, value="Candidate 0", label="DM3 Vote")
+        dmvote_arr = []
+        for ii in range(n_of_dms):
+            dmvote_arr.append(mo.ui.dropdown(options=dropdown_options, value="Candidate 0", label=f"DM{ii+1} Vote"))
+        #dm2_vote = mo.ui.dropdown(options=dropdown_options, value="Candidate 0", label="DM2 Vote")
+        #dm3_vote = mo.ui.dropdown(options=dropdown_options, value="Candidate 0", label="DM3 Vote")
 
-        vote_inputs = mo.ui.array([dm1_vote, dm2_vote, dm3_vote])
+        vote_inputs = mo.ui.array(dmvote_arr)
 
         vote_form = mo.ui.form(element=vote_inputs, submit_button_label=btn_label)
         ui_layout = mo.vstack([mo.md(title), vote_form])
@@ -255,13 +278,15 @@ def _(
     vote_form,
 ):
     if vote_form is not None and vote_form.value is not None:
-        votes = {"DM1": vote_form.value[0], "DM2": vote_form.value[1], "DM3": vote_form.value[2]}
+        dm_names = list(fav_results.FavOptions.original_most_preferred_solutions.keys())
+        votes = {dm_names[i]: vote_form.value[i] for i in range(len(dm_names))}
         winning_idx = majority_rule(votes)
+    
         compromise_solution = None
+        candidates_pool = fav_results.fair_solutions if iter_idx < MAX_ITERS else final_candidates
         if winning_idx is None:
-            candidates_pool = fav_results.fair_solutions if iter_idx < MAX_ITERS else final_candidates
             compromise_solution = tie_breaker_avgproj(problem, votes, candidates_pool)
-        
+
             # To seamlessly integrate the new compromise into our spatial expansion (Phase 1 & 2),
             # we find the existing cluster that is geometrically closest to this new mathematical compromise.
             if iter_idx < MAX_ITERS:
@@ -269,6 +294,10 @@ def _(
                 comp_arr = np.array([[compromise_solution.objective_values[k] for k in obj_symbols]])
                 winning_idx = int(np.argmin(np.linalg.norm(candidates_arr - comp_arr, axis=1)))
 
+        new_dm_preferred = {}
+        for dm, v_idx in votes.items():
+            new_dm_preferred[dm] = candidates_pool[v_idx].objective_values
+    
         if iter_idx < MAX_ITERS - 1:
             # Phase 1: Normal zoom/expansion
             next_mps = generate_next_iteration_mps(
@@ -283,20 +312,21 @@ def _(
             set_state({
                 "iter_idx": iter_idx + 1, "current_options": new_options,
                 "results_history": results_history + [fav_results],
-                "final_candidates": None, "ultimate_winner": None
+                "final_candidates": None, "ultimate_winner": None,
+                "current_dm_preferred": new_dm_preferred,
             })
 
         elif iter_idx == MAX_ITERS - 1:
             # Phase 2: We just voted on the LAST zoomed clusters. Generate the 5 final candidates!
             final_cands = select_final_candidates(fav_results, labels, winning_idx, n_candidates=5)
-            # If a tie-breaker occurred, force the core candidate to be our new compromise!
+            # If a tie-brConduct a deepdive on ARE (the reit). Include evaluation of the latest earnings, guidance, analyst targets, evaluate how realistic is it to keep the current dividend (and how much is it). Evaluate intrinsic and fair value and create bear and bull scenarios with price targets for end of 2026 and 2030.eaker occurred, force the core candidate to be our new compromise!
             if compromise_solution is not None:
                 final_cands[0] = compromise_solution
-            
+
             set_state({
                 "iter_idx": iter_idx + 1, "current_options": current_options,
                 "results_history": results_history + [fav_results],
-                "final_candidates": final_cands, "ultimate_winner": None
+                "final_candidates": final_cands, "ultimate_winner": None, "current_dm_preferred": new_dm_preferred,
             })
 
         elif iter_idx == MAX_ITERS:
@@ -307,7 +337,7 @@ def _(
             set_state({
                 "iter_idx": iter_idx + 1, "current_options": current_options,
                 "results_history": results_history,
-                "final_candidates": final_candidates, "ultimate_winner": winner
+                "final_candidates": final_candidates, "ultimate_winner": winner, "current_dm_preferred": new_dm_preferred,
             })
     return
 

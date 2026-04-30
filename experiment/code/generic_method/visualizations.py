@@ -145,7 +145,9 @@ def visualize_pcp_clusters(options, points_arr, centers_arr, labels, n_predeterm
             dm_color = dm_colors[idx % len(dm_colors)]
 
             fig.add_trace(go.Scatter(
-                x=x_vals, y=normed_mps, mode='markers',
+                x=x_vals, y=normed_mps, mode='lines+markers',
+                line=dict(color=dm_color, width=2, dash='dash'),
+                opacity=0.6,
                 marker=dict(symbol='x', size=16, color=dm_color, line=dict(width=3, color='black')),
                 name=f'{dm_name} Preferred',
                 text=[make_hover(mps_arr, dm_name)] * len(x_vals),
