@@ -62,13 +62,13 @@ def _(
     #fractions = [0.8, 0.6, 0.4, 0.2]
     MAX_ITERS = 5
 
-    n_of_dms = 5
+    n_of_dms = 4
     rp = {
         "DM1": {'Rev': 240., 'HA': 12225, 'Carb': 2944, 'DW': 180},
         "DM2": {'Rev': 111, 'HA': 18225, 'Carb': 3200, 'DW': 200},
         "DM3": {'Rev': 160, 'HA': 15232, 'Carb': 4000, 'DW': 90},
         "DM4": {'Rev': 120, 'HA': 14232, 'Carb': 4100, 'DW': 190},
-        "DM5": {'Rev': 120, 'HA': 13232, 'Carb': 3300, 'DW': 140},
+        #"DM5": {'Rev': 120, 'HA': 13232, 'Carb': 3300, 'DW': 140},
     }
     """
     for i in range(n_of_dms):
@@ -175,6 +175,7 @@ def _(
     current_dm_preferred,
     current_options,
     fav_results,
+    final_candidates,
     iter_idx,
     labels,
     mo,
@@ -196,7 +197,39 @@ def _(
             #current_mps=fav_results.FavOptions.original_most_preferred_solutions
             current_mps=current_dm_preferred,
         )
-        output = mo.ui.plotly(plot)
+
+        table_data = []
+        # 1. Ideal & Nadir Bounds
+        ideal_row = {"Name": "Ideal"}
+        ideal_row.update({k: round(v, 3) for k, v in current_options.GPRMoptions.fake_ideal.items()})
+        table_data.append(ideal_row)
+
+        nadir_row = {"Name": "Nadir"}
+        nadir_row.update({k: round(v, 3) for k, v in current_options.GPRMoptions.fake_nadir.items()})
+        table_data.append(nadir_row)
+
+        # Candidates
+        candidates_pool_visu = fav_results.fair_solutions if iter_idx < MAX_ITERS else final_candidates
+        if candidates_pool_visu is not None:
+            for ic, cand in enumerate(candidates_pool_visu):
+                cand_row = {"Name": f"Candidate {ic}"}
+                cand_row.update({k: round(v, 3) for k, v in cand.objective_values.items()})
+                table_data.append(cand_row)
+
+        # DM Preferred Solutions
+        if current_dm_preferred is not None:
+            for dm_name, obj_vals in current_dm_preferred.items():
+                dm_row = {"Name": f"{dm_name} Preferred"}
+                dm_row.update({k: round(v, 3) for k, v in obj_vals.items()})
+                table_data.append(dm_row)
+
+        data_table = mo.ui.table(table_data, selection=None, pagination=False)
+        plot_ui = mo.ui.plotly(plot)
+
+        # Combine horizontally. [1, 2] means the plot gets twice the width of the table.
+        output = mo.hstack([data_table, plot_ui], widths=[1, 3], align="center")
+
+        #output = mo.ui.plotly(plot)
     else:
         output = mo.md("# Waiting...")
 
@@ -290,8 +323,14 @@ def _(
             new_dm_preferred[dm] = candidates_pool[v_idx].objective_values
 
         if iter_idx < MAX_ITERS - 1:
+            # NAUTILI shrinking
             rs = MAX_ITERS - iter_idx
             dynamic_fraction = (rs - 1) / rs
+            # power decay func
+            #prog = iter_idx / (MAX_ITERS - 1)
+            #decay = 1.5
+            #dynamic_fraction = (MAX_ITERS - iter_idx) * (1.0 - (prog**decay))
+            print(dynamic_fraction)
             # Phase 1: Normal zoom/expansion
             next_mps = generate_next_iteration_mps(
                 fav_results=fav_results, cluster_labels=labels, winning_idx=winning_idx, fraction_to_keep=dynamic_fraction
@@ -312,7 +351,7 @@ def _(
         elif iter_idx == MAX_ITERS - 1:
             # Phase 2: We just voted on the LAST zoomed clusters. Generate the 5 final candidates!
             final_cands = select_final_candidates(fav_results, labels, winning_idx, n_candidates=5)
-            # If a tie-brConduct a deepdive on ARE (the reit). Include evaluation of the latest earnings, guidance, analyst targets, evaluate how realistic is it to keep the current dividend (and how much is it). Evaluate intrinsic and fair value and create bear and bull scenarios with price targets for end of 2026 and 2030.eaker occurred, force the core candidate to be our new compromise!
+            # If a tie-breaker occurred, force the core candidate to be our new compromise!
             if compromise_solution is not None:
                 final_cands[0] = compromise_solution
 
@@ -332,6 +371,16 @@ def _(
                 "results_history": results_history,
                 "final_candidates": final_candidates, "ultimate_winner": winner, "current_dm_preferred": new_dm_preferred,
             })
+    return
+
+
+@app.cell
+def _():
+    return
+
+
+@app.cell
+def _():
     return
 
 
