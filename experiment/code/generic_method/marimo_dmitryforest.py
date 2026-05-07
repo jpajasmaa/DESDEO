@@ -60,14 +60,17 @@ def _(
     print(ideal, nadir)
 
     #fractions = [0.8, 0.6, 0.4, 0.2]
+    #new_list = [1.**4, 0.8**4, 0.6**4, 0.4**4, 0.2**4, 0**4]
+    # raise nautilus fractions to power of nunmber of obje
+    #new2list = [(new_list[i+1]/new_list[i]) for i, _ in range(len(new_list)-1) ]
     MAX_ITERS = 5
 
     n_of_dms = 4
     rp = {
-        "DM1": {'Rev': 240., 'HA': 12225, 'Carb': 2944, 'DW': 180},
+        "DM1": {'Rev': 230., 'HA': 20215, 'Carb': 2944, 'DW': 180},
         "DM2": {'Rev': 111, 'HA': 18225, 'Carb': 3200, 'DW': 200},
-        "DM3": {'Rev': 160, 'HA': 15232, 'Carb': 4000, 'DW': 90},
-        "DM4": {'Rev': 120, 'HA': 14232, 'Carb': 4100, 'DW': 190},
+        "DM3": {'Rev': 160, 'HA': 11232, 'Carb': 4000, 'DW': 90},
+        "DM4": {'Rev': 140, 'HA': 14232, 'Carb': 4100, 'DW': 190},
         #"DM5": {'Rev': 120, 'HA': 13232, 'Carb': 3300, 'DW': 140},
     }
     """
@@ -323,17 +326,27 @@ def _(
             new_dm_preferred[dm] = candidates_pool[v_idx].objective_values
 
         if iter_idx < MAX_ITERS - 1:
+            # TODO: move inside the real favorite code
             # NAUTILI shrinking
+            # NP LINSCAPE
+            #dynamic_fraction = dynamic_fraction - 0.2
             rs = MAX_ITERS - iter_idx
-            dynamic_fraction = (rs - 1) / rs
-            # power decay func
+            #new_list = [1.**4, 0.8**4, 0.6**4, 0.4**4, 0.2**4, 0**4]
+            new_list = [1.**3, 0.8**3, 0.6**3, 0.4**3, 0.2**3, 0**3]
+            # raise nautilus fractions to power of nunmber of obje - 1
+            new2list = [(new_list[i+1]/new_list[i]) for i in range(len(new_list)-1) ]
+            #dynamic_fraction3 = (rs - 1) / rs
+            #dynamic_fraction = dynamic_fraction3**4
+
+            # power decay func DOES NOT WORK how I want
             #prog = iter_idx / (MAX_ITERS - 1)
-            #decay = 1.5
-            #dynamic_fraction = (MAX_ITERS - iter_idx) * (1.0 - (prog**decay))
-            print(dynamic_fraction)
+            #decay = 1
+            #dynamic_fraction = 1.0 - (prog**decay)
+            #print(dynamic_fraction)
             # Phase 1: Normal zoom/expansion
             next_mps = generate_next_iteration_mps(
-                fav_results=fav_results, cluster_labels=labels, winning_idx=winning_idx, fraction_to_keep=dynamic_fraction
+                fav_results=fav_results, cluster_labels=labels, winning_idx=winning_idx, fraction_to_keep = new2list[iter_idx]
+                #fraction_to_keep=dynamic_fraction
             )
             new_options = current_options.model_copy(deep=True)
             new_options.GPRMoptions.method_options.most_preferred_solutions = next_mps
@@ -376,6 +389,13 @@ def _(
 
 @app.cell
 def _():
+    41,31, 20
+    return
+
+
+@app.cell
+def _():
+    52,43,30,13
     return
 
 

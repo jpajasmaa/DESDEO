@@ -30,7 +30,7 @@ class _EvaluatedPoint(BaseModel):
 def choose_reference_point(
     refp_array: np.ndarray,
     evaluated_points: list[_EvaluatedPoint] | None = None,
-    thickness: float = 0.02,
+    thickness: float = 0.0002,
 ) -> tuple[np.ndarray, np.ndarray | None]:
     """Choose the next reference point to evaluate using the Iterative Pareto Representer algorithm.
 
@@ -56,7 +56,7 @@ def _find_bad_RPs(
 ) -> np.ndarray:
     """Find the reference points that will lead to repeated evaluations according to the ASF pruning rule."""
     mask = np.zeros(reference_points_array.shape[0], dtype=bool)
-    dict_to_numpy = lambda x: np.array(list(x.values()))
+    def dict_to_numpy(x): return np.array(list(x.values()))
     for eval_result in eval_results:
         bad_indices, _, _ = find_bad_indicesREF(
             dict_to_numpy(eval_result.targets),

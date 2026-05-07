@@ -229,7 +229,7 @@ def find_group_solutions(
         ranking = min_max_regret_no_impro(targets, normalized_mpses_arr)  # minmax regret no improvements
     else:
         raise NotImplementedError("Given fairness criterion not implemented.")
-    print(ranking)
+    # print(ranking)
 
     # convert to numpy array for get top fair solutions
     solutions_arr = solutions.to_numpy()
@@ -321,8 +321,6 @@ def get_representative_set_IPR(problem: Problem, options: GPRMOptions, results_l
     # set n or the possibilities of n according to the num points to evaluate
     for n in [options.num_points_to_evaluate, options.num_points_to_evaluate / 2, 10]:
         try:
-            # TODO: this is not needed nor work currently.
-            """
             if options.method_options.version == "convex_hull":
                 _, refp = generate_points(
                     num_points=options.method_options.num_initial_reference_points,
@@ -330,17 +328,16 @@ def get_representative_set_IPR(problem: Problem, options: GPRMOptions, results_l
                     reference_points=rp_arr,
                 )
             else:
-            """
-            _, refp = generate_points(
-                num_points=options.method_options.num_initial_reference_points, num_dims=dims, reference_points=None
-            )
+                _, refp = generate_points(
+                    num_points=options.method_options.num_initial_reference_points, num_dims=dims, reference_points=None
+                )
 
             num_runs = n
             wrapped_problem = ProblemWrapper(problem, fake_ideal=options.fake_ideal, fake_nadir=options.fake_nadir)
             for i in range(num_runs):
                 if (i + 1) % 10 == 0 or i == 0:
                     print(f"Run {i + 1}/{num_runs}")
-                reference_point, _ = choose_reference_point(refp, evaluated_points)
+                reference_point, _ = choose_reference_point(refp, evaluated_points)  # add thickness thershold here
                 evaluated_points = wrapped_problem.solve(reference_point)
             break
         except Exception:
@@ -458,7 +455,7 @@ def setup(problem: Problem, options: FavOptions, results_list: list[FavResults])
     winner = None
 
     orig_mps = options.original_most_preferred_solutions
-    orig_mps_list = dict_of_rps_to_list_of_rps(orig_mps)
+    # orig_mps_list = dict_of_rps_to_list_of_rps(orig_mps)
     # TODO: switching for real ideal and nadir.
     fake_ideal, fake_nadir = problem.get_ideal_point(), problem.get_nadir_point()
     # fake_ideal, fake_nadir = agg_aspbounds(orig_mps_list, problem)
@@ -483,24 +480,6 @@ def setup(problem: Problem, options: FavOptions, results_list: list[FavResults])
         fake_nadir = results_list[-1].FavOptions.GPRMoptions.fake_nadir
         if fake_nadir is None:
             raise ValueError("Previous fake_nadir is None, cannot proceed with zooming.")
-        """
-        fake_nadir = calculate_navigation_point(
-            problem=problem,
-            previous_navigation_point=fake_nadir,
-            reachable_objective_vector=winner.objective_values,
-            number_of_steps_remaining=options.zoom_options.num_steps_remaining,
-        )
-        # TODO: Is this still needed? -> redefine fake_nadir based on winner. Note that fake_ideal stays the same.
-        # Shifting is not needed anymore
-        shifted_mps = shift_points(
-            problem,
-            most_preferred_solutions=orig_mps,
-            group_preferred_solution=winner.objective_values,
-            steps_remaining=options.zoom_options.num_steps_remaining,
-        )
-        if isinstance(options.GPRMoptions.method_options, IPR_Options):
-            options.GPRMoptions.method_options.most_preferred_solutions = shifted_mps
-        """
 
     options.GPRMoptions.fake_ideal = fake_ideal
     options.GPRMoptions.fake_nadir = fake_nadir
@@ -534,7 +513,6 @@ def favorite_method(problem: Problem, options: FavOptions, results_list: list[Fa
         # Get the candidates from the previous iteration
         previous_candidates = results_list[-1].fair_solutions
 
-        # Note: setup() ensures options.votes is not None if results_list exists
         winner_idx = majority_rule(votes=options.votes)
 
         if winner_idx is not None:
@@ -743,13 +721,12 @@ def expand_and_generate_candidates(
         win_hull = ConvexHull(cluster_kminus)
         dists = calculate_dist_to_hull(all_kminus, win_hull)
     else:
-        # Fallback if cluster is too small (e.g., 1 point): Use distance to mean. Should not happen? lets just call ValueError
+        # Fallback if cluster is too small (e.g., 1 point) Should not happen? But if, raise a ValueError
         raise ValueError("Cluster too small ERROR")
-        # center = np.mean(cluster_kminus, axis=0)
-        # dists = np.linalg.norm(all_kminus - center, axis=1)
 
-    # 3. Top X% Closest
+    # 3. How many solutions to keep, at least as many as winning_cluster columns
     n_keep = max(int(np.ceil(len(all_kminus) * fraction_keep)), cluster_kminus.shape[1] + 1)
+    print("GGG", n_keep)
 
     # Argsort gives indices of smallest distances first
     top_indices = np.argsort(dists)[:n_keep]
@@ -787,11 +764,7 @@ def generate_next_iteration_mps(
     Returns:
         dict[str, dict[str, float]]: next_iter_mps_dict
     """
-    # 1. Cluster points and find the winner
-    # points_matrix, centers_matrix, cluster_labels = cluster_points(fav_results)
-    # winning_idx = majority_rule(votes)
 
-    # 2. Extract reference points dynamically
     all_points = fav_results.GPRMResults.raw_results.evaluated_points
     obj_names = list(fav_results.FavOptions.GPRMoptions.fake_ideal.keys())
 
@@ -853,6 +826,9 @@ def select_final_candidates(
     # 2. Identify the "Core" Candidate (The one the DMs just voted for)
     core_candidate = fav_results.fair_solutions[winning_idx]
 
+    # TODO:
+    # we want the FairSolution to be included here?
+
     # 3. Calculate how many new candidates to generate
     n_missing = n_candidates - 1
 
@@ -888,6 +864,13 @@ def tie_breaker_avgproj(
     """
     Resolves a voting tie by averaging the objective values of all voted candidates,
     and projecting that average point onto the Pareto front using ASF.
+    Args:
+        problem: DESDEO Problem object
+        votes: dictionary of the votes from the DMs.
+        candidates: List of candidates as FairSolutions.
+
+    Returns:
+        FairSolution: A candidate according to the tie-breaker.
     """
     obj_names = list(candidates[0].objective_values.keys())
     n_voters = len(votes)
@@ -895,7 +878,7 @@ def tie_breaker_avgproj(
     # 1. Calculate the average objective vector based on the votes
     avg_point = {obj: 0.0 for obj in obj_names}
 
-    for dm, vote_idx in votes.items():
+    for _, vote_idx in votes.items():
         voted_candidate = candidates[vote_idx]
         for obj in obj_names:
             avg_point[obj] += voted_candidate.objective_values[obj]
@@ -928,3 +911,10 @@ def tie_breaker_avgproj(
 if __name__ == "__main__":
 
     print("Go run experiment/run_favorite.py")
+    # if avg proj is selected, we can just take
+    # Do distance eucdliean calculation in the rotated space. all the same just use eucd distance instead of the convex hull distnace.
+    #
+    # Or original with majority judgement to handle all cases of voting.
+    #
+    # avg proj way means that we cannot guarantee (unless we can prove it) that we can find any PO solution.
+    #

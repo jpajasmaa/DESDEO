@@ -17,16 +17,18 @@ from visualizations import visualize_3d_clusters
 def run_dtlz2():
     # --- 1. SETUP PROBLEM ---
     dtlz2_problem = dtlz2(8, 3)
-    reference_points = {
-        "DM1": {"f_1": 0.0, "f_2": 0.9, "f_3": 0.5},
-        "DM2": {"f_1": 0.5, "f_2": 0.0, "f_3": 0.9},
-        "DM3": {"f_1": 0.9, "f_2": 0.5, "f_3": 0.0},
-    }
+
     # Generate random reference points and find MPS
     n_of_dms = 3
     reference_points = {}
     for i in range(n_of_dms):
         reference_points[f"DM{i+1}"] = {"f_1": np.random.random(), "f_2": np.random.random(), "f_3": np.random.random()}
+
+    reference_points = {
+        "DM1": {"f_1": 0.0, "f_2": 0.9, "f_3": 0.5},
+        "DM2": {"f_1": 0.5, "f_2": 0.0, "f_3": 0.9},
+        "DM3": {"f_1": 0.9, "f_2": 0.5, "f_3": 0.0},
+    }
 
     most_preferred_solutions = {}
     for dm in reference_points.keys():
@@ -54,7 +56,8 @@ def run_dtlz2():
     # --- 3. THE LOOP ---
     results_history = []
     current_options = fav_options
-    fractions = [0.8, 0.6, 0.4, 0.2]  # Shrink the hull each iteration
+    # fractions = [0.8, 0.6, 0.4, 0.2]  # Shrink the hull each iteration
+    fractions = [0.8, 0.75, 0.67, 0.5]  # Shrink the hull each iteration
 
     # Run 4 iterations
     for iter_idx in range(4):
@@ -200,7 +203,7 @@ def run_dmitry_forest_problem():
 
 if __name__ == "__main__":
 
-    # run_dtlz2()
-    run_dmitry_forest_problem()
+    run_dtlz2()
+    # run_dmitry_forest_problem()
 
     print("Favorite finished")
