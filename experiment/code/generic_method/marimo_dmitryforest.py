@@ -363,7 +363,7 @@ def _(
 
         elif iter_idx == MAX_ITERS - 1:
             # Phase 2: We just voted on the LAST zoomed clusters. Generate the 5 final candidates!
-            final_cands = select_final_candidates(fav_results, labels, winning_idx, n_candidates=5)
+            final_cands = select_final_candidates(problem, fav_results, labels, winning_idx, n_candidates=5)
             # If a tie-breaker occurred, force the core candidate to be our new compromise!
             if compromise_solution is not None:
                 final_cands[0] = compromise_solution
@@ -388,19 +388,8 @@ def _(
 
 
 @app.cell
-def _():
-    41,31, 20
-    return
-
-
-@app.cell
-def _():
-    52,43,30,13
-    return
-
-
-@app.cell
-def _():
+def _(final_candidates):
+    print(final_candidates)
     return
 
 

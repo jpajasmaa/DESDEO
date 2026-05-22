@@ -799,6 +799,7 @@ def generate_next_iteration_mps(
 
 
 def select_final_candidates(
+    problem: Problem,
     fav_results: FavResults,
     cluster_labels: np.ndarray,
     winning_idx: int,
@@ -825,34 +826,51 @@ def select_final_candidates(
 
     # 2. Identify the "Core" Candidate (The one the DMs just voted for)
     core_candidate = fav_results.fair_solutions[winning_idx]
+    core_candidate.fairness_criterion = "final_core_winner"
 
     # TODO:
     # we want the FairSolution to be included here?
+    # 3. NEW: Compute the fair group solution from inside this winning cluster
+    # Reconstruct the solutions (outputs) and targets dataframes for the winning region
+    winning_outputs_df = pl.DataFrame([p.objectives for p in winning_points])
+    winning_targets_df = pl.DataFrame([p.targets for p in winning_points])
+
+    fair_group_list = find_group_solutions(
+        problem=problem,
+        solutions=winning_outputs_df,
+        targets=winning_targets_df,
+        most_preferred_solutions=fav_results.FavOptions.original_most_preferred_solutions,
+        fairness_criterion=fav_results.FavOptions.candidate_generation_options
+    )
+
+    # Extract the solution and brand its criterion clearly
+    fair_cluster_candidate = fair_group_list[0]
+    fair_cluster_candidate.fairness_criterion = f"final_cluster_fair_{fav_results.FavOptions.candidate_generation_options}"
+
+    # Initial seed array for our final selections
+    final_solutions = [core_candidate, fair_cluster_candidate]
 
     # 3. Calculate how many new candidates to generate
-    n_missing = n_candidates - 1
+    n_missing = n_candidates - len(final_solutions)
 
     # Safety catch: just in case the cluster is unusually small
     n_missing = min(n_missing, len(winning_points))
 
-    if n_missing <= 0:
-        return [core_candidate]
-
-    # 4. Use your existing Hausdorff function to map the cluster!
-    # By passing [core_candidate] as the fair_solutions seed,
-    # it guarantees the core stays at index 0.
-    final_solutions = hausdorff_candidates(
-        all_points=winning_points,
-        fair_solutions=[core_candidate],
-        n_of_candidates=n_missing
-    )
-
-    # (Optional) Update the fairness criterion strings so you can distinguish them later
-    for i, sol in enumerate(final_solutions):
-        if i == 0:
-            sol.fairness_criterion = "final_core_winner"
-        else:
-            sol.fairness_criterion = "final_hausdorff"
+    # if n_missing <= 0:
+    #    return [core_candidate]
+    if n_missing > 0:
+        # 4. Use your existing Hausdorff function to map the cluster!
+        # By passing [core_candidate] as the fair_solutions seed,
+        # it guarantees the core stays at index 0.
+        final_solutions = hausdorff_candidates(
+            all_points=winning_points,
+            fair_solutions=final_solutions,
+            n_of_candidates=n_missing
+        )
+    # Make sure any newly added elements have their tags explicitly overwritten
+        for i in range(len(final_solutions)):
+            if i >= 2:
+                final_solutions[i].fairness_criterion = "final_hausdorff"
 
     return final_solutions
 
