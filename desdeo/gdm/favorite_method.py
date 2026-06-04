@@ -632,7 +632,7 @@ def hausdorff_candidates(all_points: list[_EvaluatedPoint], fair_solutions: list
 
 def cluster_points(fav_results: FavResults) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
-    Assigns each point in evaluated_points to the cluster of the nearest candidate(Voronoi partition).
+    Assigns each point in evaluated_points to the cluster of the nearest candidate (Voronoi partition).
     Returns the points, centres and cluster labels (integers) for every point.
 
     Args:
@@ -652,6 +652,86 @@ def cluster_points(fav_results: FavResults) -> tuple[np.ndarray, np.ndarray, np.
     # labels[i] = index of the center closest to point i
     labels = np.argmin(dists, axis=1)
     return points_arr, candidates_arr, labels
+
+
+def recluster_for_tie_breaker(
+    all_points: list[_EvaluatedPoint],
+    existing_candidates: list[FairSolution],
+    compromise_solution: FairSolution
+) -> tuple[list[FairSolution], np.ndarray, int]:
+    """
+    Re-calculates the Voronoi partitions (clusters) when a tie-breaker introduces 
+    a brand new compromise solution. 
+
+    CRITICAL FIX: Overrides the candidate pool instead of appending, preventing
+    existing seeds from "stealing" all the evaluated points and causing an empty hull.
+    """
+    # ==========================================
+    # OVERRIDE MODE (Fixes the size 0 crash)
+    # ==========================================
+    # 1. The compromise becomes our primary geometric seed
+    updated_candidates = [compromise_solution]
+
+    # 2. Retrieve the pure mathematical Fair Solution (e.g., maxmin).
+    # Assuming index 1 is the group fair solution from your generation logic.
+    if len(existing_candidates) > 1:
+        updated_candidates.append(existing_candidates[1])
+
+    # The compromise is now exactly at the start of the list
+    winning_idx = 0
+
+    # ==========================================
+    # 3. Extract arrays for distance calculation
+    # ==========================================
+    obj_keys = all_points[0].objectives.keys()
+    points_arr = np.array([[p.objectives[k] for k in obj_keys] for p in all_points])
+    candidates_arr = np.array([[c.objective_values[k] for k in obj_keys] for c in updated_candidates])
+
+    # ==========================================
+    # 4. Re-calculate the clusters (Voronoi Partition)
+    # ==========================================
+    dists = cdist(points_arr, candidates_arr, metric='euclidean')
+    new_labels = np.argmin(dists, axis=1)
+
+    return updated_candidates, new_labels, winning_idx
+
+def recluster_for_tie_breaker2(
+    all_points: list[_EvaluatedPoint],
+    existing_candidates: list[FairSolution],
+    compromise_solution: FairSolution
+) -> tuple[list[FairSolution], np.ndarray, int]:
+    """
+    Re-calculates the Voronoi partitions (clusters) when a tie-breaker introduces 
+    a brand new compromise solution. This ensures the compromise claims its own 
+    geometric region rather than snapping to an existing one.
+
+    Args:
+        all_points: The pool of evaluated points from the current iteration.
+        existing_candidates: The current candidates (e.g., maxmin fair + hausdorff).
+        compromise_solution: The newly calculated tie-breaker solution.
+
+    Returns:
+        tuple: (updated_candidates, new_labels, winning_idx)
+    """
+    # 1. Add the compromise to the pool of candidates
+    updated_candidates = existing_candidates.copy()
+    updated_candidates.append(compromise_solution)
+
+    # The new compromise is at the end of the list, so this is our new winning index
+    winning_idx = len(updated_candidates) - 1
+
+    # 2. Extract arrays for distance calculation
+    obj_keys = all_points[0].objectives.keys()
+    points_arr = np.array([[p.objectives[k] for k in obj_keys] for p in all_points])
+    candidates_arr = np.array([[c.objective_values[k] for k in obj_keys] for c in updated_candidates])
+
+    # 3. Re-calculate the clusters (Voronoi Partition)
+    # Every point is assigned to the geometrically closest candidate,
+    # which now includes our exact compromise point!
+    dists = cdist(points_arr, candidates_arr, metric='euclidean')
+    new_labels = np.argmin(dists, axis=1)
+
+    return updated_candidates, new_labels, winning_idx
 
 
 def calculate_dist_to_hull(points_kminus: np.ndarray, hull: ConvexHull) -> np.ndarray:
@@ -924,6 +1004,40 @@ def tie_breaker_avgproj(
         fairness_criterion="tie_breaker_average_projection",
         fairness_value=0.0
     )
+
+def calculate_fraction_to_keep(
+    current_iter: int,
+    max_iters: int,
+    num_objectives: int
+) -> float:
+    """
+    Calculates the fraction of points to retain in the Convex Hull for the next iteration.
+
+    This geometrically shrinks the search space volume. Because the hull is calculated 
+    on a (k-1)-dimensional hyperplane, the linear decay of the radius is raised to 
+    the power of (k-1).
+
+    Args:
+        current_iter: The current iteration index (0-indexed).
+        max_iters: Total number of zooming iterations planned.
+        num_objectives: The number of objectives (k) in the problem.
+
+    Returns:
+        float: The fraction of points to keep (between 0.0 and 1.0).
+    """
+    if current_iter >= max_iters - 1:
+        return 0.0  # Final step converges completely
+
+    # Remaining steps including the current one
+    remaining_steps = max_iters - current_iter
+
+    # Power is dimensions - 1
+    power = num_objectives - 1
+
+    # Mathematical ratio: ((R - 1) / R) ^ (k-1)
+    fraction = ((remaining_steps - 1) / remaining_steps) ** power
+
+    return float(fraction)
 
 
 if __name__ == "__main__":

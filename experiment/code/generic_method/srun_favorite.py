@@ -72,7 +72,7 @@ def run_dtlz2():
         results_history.append(fav_results)
 
         # 2. Simulate DM Voting (In a notebook, you could pause here to ask for input)
-        votes = {"DM1": 2, "DM2": 2, "DM3": 2}
+        votes = {"DM1": 2, "DM2": 0, "DM3": 1}
 
         pts_mat, cents_mat, labels = cluster_points(fav_results)
         winning_idx = majority_rule(votes)

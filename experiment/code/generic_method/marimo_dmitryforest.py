@@ -13,7 +13,7 @@ def _():
     from desdeo.tools.scalarization import add_asf_diff, add_asf_nondiff
     from desdeo.gdm.favorite_method import (
         IPR_Options, GPRMOptions, ZoomOptions, FavOptions,
-        favorite_method, generate_next_iteration_mps, cluster_points, select_final_candidates, tie_breaker_avgproj
+        favorite_method, generate_next_iteration_mps, cluster_points, select_final_candidates, tie_breaker_avgproj, recluster_for_tie_breaker, calculate_fraction_to_keep
     )
     from desdeo.gdm.voting_rules import majority_rule
     from visualizations import visualize_pcp_clusters
@@ -25,6 +25,7 @@ def _():
         ProximalSolver,
         ZoomOptions,
         add_asf_nondiff,
+        calculate_fraction_to_keep,
         cluster_points,
         dmitry_forest_problem_disc,
         favorite_method,
@@ -32,6 +33,7 @@ def _():
         majority_rule,
         mo,
         np,
+        recluster_for_tie_breaker,
         select_final_candidates,
         tie_breaker_avgproj,
         visualize_pcp_clusters,
@@ -288,6 +290,7 @@ def _(
 @app.cell
 def _(
     MAX_ITERS,
+    calculate_fraction_to_keep,
     current_options,
     fav_results,
     final_candidates,
@@ -295,9 +298,8 @@ def _(
     iter_idx,
     labels,
     majority_rule,
-    np,
-    obj_symbols,
     problem,
+    recluster_for_tie_breaker,
     results_history,
     select_final_candidates,
     set_state,
@@ -311,6 +313,30 @@ def _(
 
         compromise_solution = None
         candidates_pool = fav_results.fair_solutions if iter_idx < MAX_ITERS else final_candidates
+
+        new_dm_preferred = {}
+        for dm, v_idx in votes.items():
+            new_dm_preferred[dm] = candidates_pool[v_idx].objective_values
+
+        # 2. LOCAL VARIABLE: Use this to avoid modifying the global 'labels' directly
+        active_labels = labels
+
+        if winning_idx is None:
+            compromise_solution = tie_breaker_avgproj(problem, votes, candidates_pool)
+
+            # To seamlessly integrate the new compromise into our spatial expansion,
+            # we re-cluster the entire space so the compromise carves out its own region.
+            if iter_idx < MAX_ITERS:
+                all_points = fav_results.GPRMResults.raw_results.evaluated_points
+
+                candidates_pool, active_labels, winning_idx = recluster_for_tie_breaker(
+                    all_points=all_points,
+                    existing_candidates=candidates_pool,
+                    compromise_solution=compromise_solution
+                )
+
+
+        """ old
         if winning_idx is None:
             compromise_solution = tie_breaker_avgproj(problem, votes, candidates_pool)
 
@@ -320,10 +346,7 @@ def _(
                 candidates_arr = np.array([[c.objective_values[k] for k in obj_symbols] for c in candidates_pool])
                 comp_arr = np.array([[compromise_solution.objective_values[k] for k in obj_symbols]])
                 winning_idx = int(np.argmin(np.linalg.norm(candidates_arr - comp_arr, axis=1)))
-
-        new_dm_preferred = {}
-        for dm, v_idx in votes.items():
-            new_dm_preferred[dm] = candidates_pool[v_idx].objective_values
+        """
 
         if iter_idx < MAX_ITERS - 1:
             # TODO: move inside the real favorite code
@@ -331,21 +354,16 @@ def _(
             # NP LINSCAPE
             #dynamic_fraction = dynamic_fraction - 0.2
             rs = MAX_ITERS - iter_idx
-            #new_list = [1.**4, 0.8**4, 0.6**4, 0.4**4, 0.2**4, 0**4]
-            new_list = [1.**3, 0.8**3, 0.6**3, 0.4**3, 0.2**3, 0**3]
-            # raise nautilus fractions to power of nunmber of obje - 1
-            new2list = [(new_list[i+1]/new_list[i]) for i in range(len(new_list)-1) ]
-            #dynamic_fraction3 = (rs - 1) / rs
-            #dynamic_fraction = dynamic_fraction3**4
+            # Use the new generalized mathematical function!
+            dynamic_fraction = calculate_fraction_to_keep(
+                    current_iter=iter_idx,
+                    max_iters=MAX_ITERS,
+                    num_objectives=len(problem.objectives)
+                )
 
-            # power decay func DOES NOT WORK how I want
-            #prog = iter_idx / (MAX_ITERS - 1)
-            #decay = 1
-            #dynamic_fraction = 1.0 - (prog**decay)
-            #print(dynamic_fraction)
             # Phase 1: Normal zoom/expansion
             next_mps = generate_next_iteration_mps(
-                fav_results=fav_results, cluster_labels=labels, winning_idx=winning_idx, fraction_to_keep = new2list[iter_idx]
+                fav_results=fav_results, cluster_labels=active_labels, winning_idx=winning_idx, fraction_to_keep = dynamic_fraction
                 #fraction_to_keep=dynamic_fraction
             )
             new_options = current_options.model_copy(deep=True)
@@ -363,7 +381,7 @@ def _(
 
         elif iter_idx == MAX_ITERS - 1:
             # Phase 2: We just voted on the LAST zoomed clusters. Generate the 5 final candidates!
-            final_cands = select_final_candidates(problem, fav_results, labels, winning_idx, n_candidates=5)
+            final_cands = select_final_candidates(problem, fav_results, active_labels, winning_idx, n_candidates=5)
             # If a tie-breaker occurred, force the core candidate to be our new compromise!
             if compromise_solution is not None:
                 final_cands[0] = compromise_solution
@@ -384,12 +402,6 @@ def _(
                 "results_history": results_history,
                 "final_candidates": final_candidates, "ultimate_winner": winner, "current_dm_preferred": new_dm_preferred,
             })
-    return
-
-
-@app.cell
-def _(final_candidates):
-    print(final_candidates)
     return
 
 
