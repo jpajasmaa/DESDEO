@@ -470,13 +470,12 @@ def setup(problem: Problem, options: FavOptions, results_list: list[FavResults])
             raise ValueError("Votes must be provided for iterations after the first.")
         # handle voting
         old_candidates = results_list[-1].fair_solutions
-        votes = options.votes
-        winner = majority_rule(votes=votes)
+        winner = majority_rule(votes=options.votes)
         if winner is not None:
             winner = old_candidates[winner]
         else:
             # TIE-BREAKER
-            winner = tie_breaker_avgproj(problem, votes, old_candidates)
+            winner = tie_breaker_avgproj(problem, options.votes, old_candidates)
         fake_nadir = results_list[-1].FavOptions.GPRMoptions.fake_nadir
         if fake_nadir is None:
             raise ValueError("Previous fake_nadir is None, cannot proceed with zooming.")
@@ -733,6 +732,68 @@ def recluster_for_tie_breaker2(
 
     return updated_candidates, new_labels, winning_idx
 
+def generate_next_mps_from_compromise(
+    fav_results: FavResults,
+    compromise_solution: FairSolution,
+    fraction_to_keep: float
+) -> dict[str, dict[str, float]]:
+    """
+    Generates the next iteration's MPS by directly capturing the closest 
+    points to the compromise solution, bypassing Voronoi clustering entirely.
+    """
+    all_points = fav_results.GPRMResults.raw_results.evaluated_points
+    obj_names = list(fav_results.FavOptions.GPRMoptions.fake_ideal.keys())
+    num_new_points = fav_results.FavOptions.GPRMoptions.method_options.num_initial_reference_points
+
+    # 1. Extract evaluated points in the scaled reference space [0, 1]
+    ref_matrix = np.array([
+        [p.reference_point[k] for k in obj_names]
+        for p in all_points
+    ])
+
+    # 2. Project the objective compromise back to the [0, 1] reference space
+    fake_ideal = fav_results.FavOptions.GPRMoptions.fake_ideal
+    fake_nadir = fav_results.FavOptions.GPRMoptions.fake_nadir
+
+    comp_obj = compromise_solution.objective_values
+    comp_ref = np.array([
+        (comp_obj[k] - fake_ideal[k]) / (fake_nadir[k] - fake_ideal[k])
+        for k in obj_names
+    ])
+
+    # 3. Find the N closest points to the compromise!
+    dists = np.linalg.norm(ref_matrix - comp_ref, axis=1)
+    n_keep = max(int(np.ceil(len(ref_matrix) * fraction_to_keep)), len(obj_names) + 1)
+
+    top_indices = np.argsort(dists)[:n_keep]
+    expanded_set_k = ref_matrix[top_indices]
+
+    # 4. Generate the new points inside the Convex Hull of these closest points
+    expanded_set_kminus = rotate_in(expanded_set_k)
+    expanded_hull = ConvexHull(expanded_set_kminus, qhull_options='QJ')
+    A_exp, b_exp = get_hull_equations(expanded_hull)
+
+    bounding_box = np.array([
+        np.min(expanded_set_kminus, axis=0),
+        np.max(expanded_set_kminus, axis=0)
+    ])
+
+    new_points_kminus = numba_random_gen(num_new_points, bounding_box, A_exp, b_exp)
+    new_candidates_scaled = rotate_out(new_points_kminus)
+
+    # 5. Scale the new candidates back to Objective Space bounds
+    fake_ideal_arr = np.array([fake_ideal[k] for k in obj_names])
+    fake_nadir_arr = np.array([fake_nadir[k] for k in obj_names])
+
+    new_candidates_obj = new_candidates_scaled * (fake_nadir_arr - fake_ideal_arr) + fake_ideal_arr
+
+    # 6. Build the dictionary to feed into the next iteration
+    next_iter_mps = {}
+    for i, point in enumerate(new_candidates_obj):
+        point_dict = {name: val for name, val in zip(obj_names, point)}
+        next_iter_mps[f"gen_{i}"] = point_dict
+
+    return next_iter_mps
 
 def calculate_dist_to_hull(points_kminus: np.ndarray, hull: ConvexHull) -> np.ndarray:
     """
@@ -806,7 +867,6 @@ def expand_and_generate_candidates(
 
     # 3. How many solutions to keep, at least as many as winning_cluster columns
     n_keep = max(int(np.ceil(len(all_kminus) * fraction_keep)), cluster_kminus.shape[1] + 1)
-    print("GGG", n_keep)
 
     # Argsort gives indices of smallest distances first
     top_indices = np.argsort(dists)[:n_keep]
@@ -901,12 +961,12 @@ def select_final_candidates(
     """
     all_points = fav_results.GPRMResults.raw_results.evaluated_points
 
-    # 1. Isolate the "Winning Region"
+    # Isolate the "Winning Region"
     winning_points = [p for i, p in enumerate(all_points) if cluster_labels[i] == winning_idx]
 
-    # 2. Identify the "Core" Candidate (The one the DMs just voted for)
+    # Identify the Winning Candidate
     core_candidate = fav_results.fair_solutions[winning_idx]
-    core_candidate.fairness_criterion = "final_core_winner"
+    core_candidate.fairness_criterion = "last_winner"
 
     # TODO:
     # we want the FairSolution to be included here?
@@ -925,23 +985,15 @@ def select_final_candidates(
 
     # Extract the solution and brand its criterion clearly
     fair_cluster_candidate = fair_group_list[0]
-    fair_cluster_candidate.fairness_criterion = f"final_cluster_fair_{fav_results.FavOptions.candidate_generation_options}"
+    fair_cluster_candidate.fairness_criterion = f"final_{fav_results.FavOptions.candidate_generation_options}"
 
     # Initial seed array for our final selections
     final_solutions = [core_candidate, fair_cluster_candidate]
-
-    # 3. Calculate how many new candidates to generate
     n_missing = n_candidates - len(final_solutions)
-
     # Safety catch: just in case the cluster is unusually small
     n_missing = min(n_missing, len(winning_points))
 
-    # if n_missing <= 0:
-    #    return [core_candidate]
     if n_missing > 0:
-        # 4. Use your existing Hausdorff function to map the cluster!
-        # By passing [core_candidate] as the fair_solutions seed,
-        # it guarantees the core stays at index 0.
         final_solutions = hausdorff_candidates(
             all_points=winning_points,
             fair_solutions=final_solutions,
@@ -1013,8 +1065,8 @@ def calculate_fraction_to_keep(
     """
     Calculates the fraction of points to retain in the Convex Hull for the next iteration.
 
-    This geometrically shrinks the search space volume. Because the hull is calculated 
-    on a (k-1)-dimensional hyperplane, the linear decay of the radius is raised to 
+    This geometrically shrinks the search space volume. Because the hull is calculated
+    on a (k-1)-dimensional hyperplane, the linear decay of the radius is raised to
     the power of (k-1).
 
     Args:
@@ -1026,15 +1078,10 @@ def calculate_fraction_to_keep(
         float: The fraction of points to keep (between 0.0 and 1.0).
     """
     if current_iter >= max_iters - 1:
-        return 0.0  # Final step converges completely
-
-    # Remaining steps including the current one
+        return 0.0
     remaining_steps = max_iters - current_iter
-
-    # Power is dimensions - 1
     power = num_objectives - 1
-
-    # Mathematical ratio: ((R - 1) / R) ^ (k-1)
+    # ratio: ((R - 1) / R) ^ (k-1)
     fraction = ((remaining_steps - 1) / remaining_steps) ** power
 
     return float(fraction)

@@ -8,11 +8,10 @@ from unittest.mock import patch, MagicMock
 from desdeo.problem.testproblems.dtlz2_problem import dtlz2
 from desdeo.tools.iterative_pareto_representer import _EvaluatedPoint
 
-# Import your module (adjust the import path as necessary)
 from desdeo.gdm.favorite_method import (
     IPR_Options, GPRMOptions, ZoomOptions, FavOptions, FavResults, GPRMResults, IPR_Results, FairSolution,
     ProblemWrapper, find_group_solutions, hausdorff_candidates, cluster_points,
-    generate_next_iteration_mps, select_final_candidates, favorite_method, tie_breaker_avgproj
+    generate_next_iteration_mps, select_final_candidates, favorite_method, tie_breaker_avgproj, calculate_fraction_to_keep, recluster_for_tie_breaker
 )
 
 # ==========================================
@@ -27,9 +26,9 @@ def dummy_problem():
 @pytest.fixture
 def dummy_mps():
     return {
-        "DM1": {"f_1": 0.0, "f_2": 1.0, "f_3": 1.0},
-        "DM2": {"f_1": 1.0, "f_2": 0.0, "f_3": 1.0},
-        "DM3": {"f_1": 1.0, "f_2": 1.0, "f_3": 0.0},
+        "DM1": {"f_1": 0.0, "f_2": 0.9, "f_3": 0.8},
+        "DM2": {"f_1": 0.9, "f_2": 0.0, "f_3": 0.8},
+        "DM3": {"f_1": 0.8, "f_2": 0.9, "f_3": 0.0},
     }
 
 @pytest.fixture
@@ -38,12 +37,12 @@ def base_options(dummy_mps):
     ipr_options = IPR_Options(
         most_preferred_solutions=dummy_mps,
         num_initial_reference_points=50,  # Keep small for tests
-        version="box"
+        version="convex_hull"
     )
     gprm_options = GPRMOptions(
         method_options=ipr_options,
         fake_ideal={"f_1": 0.0, "f_2": 0.0, "f_3": 0.0},
-        fake_nadir={"f_1": 2.0, "f_2": 2.0, "f_3": 2.0},
+        fake_nadir={"f_1": 1.0, "f_2": 1.0, "f_3": 1.0},
         num_points_to_evaluate=5  # Keep small for tests
     )
     return FavOptions(
@@ -51,7 +50,7 @@ def base_options(dummy_mps):
         candidate_generation_options="mm",
         zoom_options=ZoomOptions(num_steps_remaining=4),
         original_most_preferred_solutions=dummy_mps,
-        total_n_of_candidates=3
+        total_n_of_candidates=5
     )
 
 @pytest.fixture
@@ -72,11 +71,73 @@ def dummy_evaluated_points():
 # 2. COMPONENT TESTS (Logic)
 # ==========================================
 
+def test_fractional_decay_logic():
+    """
+    Tests that the volume decay fraction calculates correctly 
+    based on iterations and dimensionality (k-1).
+    """
+    max_iters = 5
+    num_obj = 3  # E.g., DTLZ2 has 3 objectives
+
+    # Iteration 0: (4 / 5) ^ 2 = 16 / 25 = 0.64
+    frac_0 = calculate_fraction_to_keep(current_iter=0, max_iters=max_iters, num_objectives=num_obj)
+    assert frac_0 == pytest.approx(0.64)
+
+    # Iteration 1: (3 / 4) ^ 2 = 9 / 16 = 0.5625
+    frac_1 = calculate_fraction_to_keep(current_iter=1, max_iters=max_iters, num_objectives=num_obj)
+    assert frac_1 == pytest.approx(0.5625)
+
+    # Final Iteration (4 out of 5): Should be exactly 0.0
+    frac_final = calculate_fraction_to_keep(current_iter=4, max_iters=max_iters, num_objectives=num_obj)
+    assert frac_final == 0.0
+
+def test_recluster_tie_breaker_override():
+    """
+    Tests the Voronoi Cannibalization fix. Proves that the override
+    logic completely replaces the old candidate pool and safely assigns points.
+    """
+    # Mock evaluated points
+    mock_points = [
+        _EvaluatedPoint(reference_point={}, targets={}, objectives={"f_1": 0.1, "f_2": 0.9, "f_3": 0.1}),
+        _EvaluatedPoint(reference_point={}, targets={}, objectives={"f_1": 0.9, "f_2": 0.1, "f_3": 0.1}),
+        _EvaluatedPoint(reference_point={}, targets={}, objectives={"f_1": 0.5, "f_2": 0.5, "f_3": 0.5}),  # The center point
+        _EvaluatedPoint(reference_point={}, targets={}, objectives={"f_1": 0.2, "f_2": 0.8, "f_3": 0.1}),
+    ]
+
+    # Mock the existing deadlocked candidates
+    existing_cands = [
+        FairSolution(objective_values={"f_1": 0.0, "f_2": 1.0, "f_3": 0.0}, fairness_criterion="core", fairness_value=0),
+        FairSolution(objective_values={"f_1": 1.0, "f_2": 0.0, "f_3": 0.0}, fairness_criterion="mm", fairness_value=0),
+        FairSolution(objective_values={"f_1": 0.2, "f_2": 0.2, "f_3": 0.8}, fairness_criterion="hausdorff_1", fairness_value=0),
+    ]
+
+    # The New Tie-Breaker Compromise (Sits right in the middle)
+    compromise = FairSolution(
+        objective_values={"f_1": 0.5, "f_2": 0.5, "f_3": 0.5},
+        fairness_criterion="tie_breaker",
+        fairness_value=0.0
+    )
+
+    # EXECUTE
+    updated_cands, new_labels, winning_idx = recluster_for_tie_breaker(
+        all_points=mock_points,
+        existing_candidates=existing_cands,
+        compromise_solution=compromise
+    )
+
+    # ASSERTIONS
+    assert len(updated_cands) == 2, "Override failed: Pool should only contain Compromise and MaxMin (2 items)."
+    assert winning_idx == 0, "Winning index must be forced to 0."
+    assert updated_cands[0].fairness_criterion == "tie_breaker", "Compromise must be the primary seed."
+    assert updated_cands[1].fairness_criterion == "mm", "MaxMin fair solution must be retained as the alternative."
+    assert len(new_labels) == 4, "Labels array should map to all 4 evaluated points."
+    assert new_labels[2] == 0, "The center point was not correctly assigned to the compromise cluster!"
+
 def test_hausdorff_candidates(dummy_evaluated_points):
     """Tests if Hausdorff selection correctly expands the candidate list."""
     # Seed with one fair solution
     seed_solution = FairSolution(
-        objective_values={"f_1": 0.0, "f_2": 1.0, "f_3": 0.5},
+        objective_values={"f_1": 0.1, "f_2": 0.9, "f_3": 0.5},
         fairness_criterion="mm",
         fairness_value=0.1
     )
@@ -120,7 +181,7 @@ def test_cluster_points(dummy_evaluated_points, base_options):
     assert labels.shape == (10,), "Labels array should have one entry per point"
     assert set(labels).issubset({0, 1}), "Labels should only map to the 2 candidate indices"
 
-def test_select_final_candidates(dummy_evaluated_points, base_options):
+def test_select_final_candidates(dummy_problem, dummy_evaluated_points, base_options):
     """Tests the final phase voting logic with Hausdorff mapping."""
     mock_gprm = GPRMResults(
         raw_results=IPR_Results(evaluated_points=dummy_evaluated_points),
@@ -141,12 +202,13 @@ def test_select_final_candidates(dummy_evaluated_points, base_options):
     labels = np.zeros(10, dtype=int)
 
     final_sols = select_final_candidates(
-        fav_results=mock_fav_results, cluster_labels=labels, winning_idx=0, n_candidates=3
+        problem=dummy_problem, fav_results=mock_fav_results, cluster_labels=labels, winning_idx=0, n_candidates=3
     )
 
     assert len(final_sols) == 3
-    assert final_sols[0].fairness_criterion == "final_core_winner", "Core candidate must be at index 0"
-    assert final_sols[1].fairness_criterion == "final_hausdorff", "Subsequent candidates should be hausdorff"
+    assert final_sols[0].fairness_criterion == "last_winner", "Core candidate must be at index 0"
+    assert final_sols[1].fairness_criterion == "final_mm", "Next candidate should be maxmin at index 1"
+    assert final_sols[2].fairness_criterion == "final_hausdorff", "Subsequent candidates should be hausdorff"
     # Ensure the core candidate's values match the winner
     assert final_sols[0].objective_values == dummy_evaluated_points[0].objectives
 
@@ -251,12 +313,12 @@ def test_favorite_method_e2e_integration(dummy_problem, dummy_mps):
     ipr_options = IPR_Options(
         most_preferred_solutions=dummy_mps,
         num_initial_reference_points=15,  # Very small sample
-        version="box"
+        version="convex_hull"
     )
     gprm_options = GPRMOptions(
         method_options=ipr_options,
         fake_ideal={"f_1": 0.0, "f_2": 0.0, "f_3": 0.0},
-        fake_nadir={"f_1": 2.0, "f_2": 2.0, "f_3": 2.0},
+        fake_nadir={"f_1": 1.0, "f_2": 1.0, "f_3": 1.0},
         num_points_to_evaluate=3  # Only run the real solver 3 times!
     )
     options = FavOptions(
