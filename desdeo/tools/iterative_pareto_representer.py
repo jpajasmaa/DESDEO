@@ -56,7 +56,10 @@ def _find_bad_RPs(
 ) -> np.ndarray:
     """Find the reference points that will lead to repeated evaluations according to the ASF pruning rule."""
     mask = np.zeros(reference_points_array.shape[0], dtype=bool)
-    def dict_to_numpy(x): return np.array(list(x.values()))
+
+    def dict_to_numpy(x):
+        return np.array(list(x.values()))
+
     for eval_result in eval_results:
         bad_indices, _, _ = find_bad_indicesREF(
             dict_to_numpy(eval_result.targets),
@@ -69,12 +72,12 @@ def _find_bad_RPs(
     return mask
 
 
-def _DSS_with_pruning(
+def _DSS_with_pruning(  # noqa: N802
     available: np.ndarray,
     taken: np.ndarray,
 ) -> np.ndarray:
     """One-liner implementation of the DSS algorithm using scipy."""
-    assert len(available) > 0, "No reference points available."
+    assert len(available) > 0, "No reference points available."  # noqa: S101
 
     assert np.allclose(available.sum(axis=1), available.shape[1]), (
         "Reference points must lie on plane perpendicular to ideal-nadir line."
@@ -85,7 +88,7 @@ def _DSS_with_pruning(
     )
 
     if taken is None or len(taken) == 0:
-        return np.random.choice(available)
+        return np.random.choice(available)  # noqa: NPY002
 
     distances = cdist(available, taken, metric="chebyshev").min(axis=1)
 
@@ -97,5 +100,4 @@ def _project(solutions):
     reference_point = np.ones(solutions.shape[1])
     normal = reference_point / np.linalg.norm(reference_point)
     perp_dist = np.atleast_2d(np.inner(solutions - reference_point, normal)).T
-    projected_points = solutions - perp_dist * normal
-    return projected_points
+    return solutions - perp_dist * normal

@@ -25,6 +25,9 @@ from .options.algorithms import (
     nsga3_options,
     rvea_mixed_integer_options,
     rvea_options,
+    sms_emoa_mixed_integer_options,
+    sms_emoa_options,
+    xlemoo_options,
 )
 from .options.crossover import (
     BlendAlphaCrossoverOptions,
@@ -55,7 +58,11 @@ from .options.mutation import (
     SelfAdaptiveGaussianMutationOptions,
 )
 from .options.repair import ClipRepairOptions, NoRepairOptions
-from .options.scalar_selection import RouletteWheelSelectionOptions, TournamentSelectionOptions
+from .options.scalar_selection import (
+    ElitistSelectionOptions,
+    RouletteWheelSelectionOptions,
+    TournamentSelectionOptions,
+)
 from .options.selection import (
     IBEASelectorOptions,
     NSGA2SelectorOptions,
@@ -70,6 +77,7 @@ from .options.templates import (
     ReferencePointOptions,
     Template1Options,
     Template2Options,
+    TemplateXLEMOOOptions,
 )
 from .options.termination import (
     CompositeTerminatorOptions,
@@ -85,9 +93,12 @@ algorithms = SimpleNamespace(
     nsga2_options=nsga2_options,
     nsga3_options=nsga3_options,
     ibea_options=ibea_options,
+    sms_emoa_options=sms_emoa_options,
     rvea_mixed_integer_options=rvea_mixed_integer_options,
     nsga3_mixed_integer_options=nsga3_mixed_integer_options,
     ibea_mixed_integer_options=ibea_mixed_integer_options,
+    sms_emoa_mixed_integer_options=sms_emoa_mixed_integer_options,
+    xlemoo_options=xlemoo_options,
     emo_constructor=emo_constructor,
 )
 
@@ -113,6 +124,7 @@ other = SimpleNamespace(
 scalar_selection = SimpleNamespace(
     TournamentSelectionOptions=TournamentSelectionOptions,
     RouletteWheelSelectionOptions=RouletteWheelSelectionOptions,
+    ElitistSelectionOptions=ElitistSelectionOptions,
 )
 
 mutation = SimpleNamespace(
@@ -138,6 +150,7 @@ generator = SimpleNamespace(
 templates = SimpleNamespace(
     Template1Options=Template1Options,
     Template2Options=Template2Options,
+    TemplateXLEMOOOptions=TemplateXLEMOOOptions,
 )
 
 repair = SimpleNamespace(NoRepairOptions=NoRepairOptions, ClipRepairOptions=ClipRepairOptions)

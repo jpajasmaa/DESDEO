@@ -1,13 +1,10 @@
 """Define popular MOEAs as Pydantic models."""
 
-from collections.abc import Callable
-from functools import partial
-
 from desdeo.emo.options.crossover import SimulatedBinaryCrossoverOptions, UniformMixedIntegerCrossoverOptions
 from desdeo.emo.options.generator import LHSGeneratorOptions, RandomMixedIntegerGeneratorOptions
 from desdeo.emo.options.mutation import BoundedPolynomialMutationOptions, MixedIntegerRandomMutationOptions
-from desdeo.emo.options.repair import NoRepairOptions
-from desdeo.emo.options.scalar_selection import TournamentSelectionOptions
+from desdeo.emo.options.repair import ClipRepairOptions, NoRepairOptions
+from desdeo.emo.options.scalar_selection import ElitistSelectionOptions, TournamentSelectionOptions
 from desdeo.emo.options.selection import (
     IBEASelectorOptions,
     NSGA2SelectorOptions,
@@ -15,17 +12,29 @@ from desdeo.emo.options.selection import (
     ParameterAdaptationStrategy,
     ReferenceVectorOptions,
     RVEASelectorOptions,
+    SMSEMOASelectorOptions,
 )
 from desdeo.emo.options.templates import (
-    ConstructorExtras,
     EMOOptions,
-    EMOResult,
     Template1Options,
     Template2Options,
+    Template3Options,
+    TemplateXLEMOOOptions,
     emo_constructor,
 )
-from desdeo.emo.options.termination import MaxGenerationsTerminatorOptions
-from desdeo.problem import Problem
+from desdeo.emo.options.termination import MaxEvaluationsTerminatorOptions, MaxGenerationsTerminatorOptions
+
+__all__ = [
+    "emo_constructor",
+    "ibea_mixed_integer_options",
+    "ibea_options",
+    "nsga2_options",
+    "nsga3_mixed_integer_options",
+    "nsga3_options",
+    "rvea_mixed_integer_options",
+    "rvea_options",
+    "xlemoo_options",
+]
 
 
 def rvea_options() -> EMOOptions:
@@ -78,9 +87,7 @@ def rvea_options() -> EMOOptions:
                 name="LHSGenerator",
                 n_points=100,
             ),
-            repair=NoRepairOptions(
-                name="NoRepair",
-            ),
+            repair=ClipRepairOptions(),
             termination=MaxGenerationsTerminatorOptions(
                 name="MaxGenerationsTerminator",
                 max_generations=100,
@@ -140,9 +147,7 @@ def nsga3_options() -> EMOOptions:
                 name="LHSGenerator",
                 n_points=100,
             ),
-            repair=NoRepairOptions(
-                name="NoRepair",
-            ),
+            repair=ClipRepairOptions(),
             termination=MaxGenerationsTerminatorOptions(
                 name="MaxGenerationsTerminator",
                 max_generations=100,
@@ -194,9 +199,7 @@ def ibea_options() -> EMOOptions:
                 name="LHSGenerator",
                 n_points=100,
             ),
-            repair=NoRepairOptions(
-                name="NoRepair",
-            ),
+            repair=ClipRepairOptions(),
             termination=MaxGenerationsTerminatorOptions(
                 name="MaxGenerationsTerminator",
                 max_generations=100,
@@ -363,6 +366,64 @@ def nsga3_mixed_integer_options() -> EMOOptions:
     )
 
 
+def xlemoo_options() -> EMOOptions:
+    """Get default XLEMOO options as a Pydantic model.
+
+    XLEMOO alternates between Darwinian and Learning modes. Default cycle is 20 Darwinian
+    iterations followed by 1 Learning iteration. The learning mode trains a SkopeRules
+    classifier on the H/L split of past solutions and instantiates new candidates from
+    the extracted rules.
+
+    References:
+        Misitano, G. (2024). Exploring the explainable aspects and performance
+            of a learnable evolutionary multiobjective optimization method. ACM
+            Transactions on Evolutionary Learning and Optimization, 4(1), 1-39.
+
+    Returns:
+        EMOOptions: The default XLEMOO options as a Pydantic model.
+    """
+    return EMOOptions(
+        preference=None,
+        template=TemplateXLEMOOOptions(
+            algorithm_name="XLEMOO",
+            crossover=SimulatedBinaryCrossoverOptions(
+                name="SimulatedBinaryCrossover",
+                xover_distribution=30,
+                xover_probability=1.0,
+            ),
+            mutation=BoundedPolynomialMutationOptions(
+                name="BoundedPolynomialMutation",
+                distribution_index=20,
+                mutation_probability=None,
+            ),
+            selection=ElitistSelectionOptions(
+                name="ElitistSelection",
+                winner_size=50,
+                target_column="asf",
+            ),
+            generator=LHSGeneratorOptions(
+                name="LHSGenerator",
+                n_points=50,
+            ),
+            repair=NoRepairOptions(
+                name="NoRepair",
+            ),
+            termination=MaxGenerationsTerminatorOptions(
+                name="MaxGenerationsTerminator",
+                max_generations=200,
+            ),
+            n_darwin_per_cycle=20,
+            n_learning_per_cycle=1,
+            h_split=0.2,
+            l_split=0.2,
+            instantiation_factor=10.0,
+            use_archive=True,
+            verbosity=2,
+            seed=42,
+        ),
+    )
+
+
 def ibea_mixed_integer_options() -> EMOOptions:
     """Get default IBEA options for mixed integer problems as a Pydantic model.
 
@@ -406,6 +467,79 @@ def ibea_mixed_integer_options() -> EMOOptions:
     )
 
 
+def sms_emoa_options() -> EMOOptions:
+    """Get default SMS-EMOA options as a Pydantic model.
+
+    References:
+        Beume, N., Naujoks, B., & Emmerich, M. (2007). SMS-EMOA: Multiobjective selection based on
+        dominated hypervolume. European Journal of Operational Research, 181(3), 1653-1669.
+
+    Returns:
+        EMOOptions: The default SMS-EMOA options as a Pydantic model.
+    """
+    return EMOOptions(
+        preference=None,
+        template=Template3Options(
+            algorithm_name="SMS-EMOA",
+            crossover=SimulatedBinaryCrossoverOptions(
+                name="SimulatedBinaryCrossover",
+                xover_distribution=30,
+                xover_probability=0.5,
+            ),
+            mutation=BoundedPolynomialMutationOptions(
+                name="BoundedPolynomialMutation",
+                distribution_index=20,
+                mutation_probability=None,
+            ),
+            selection=SMSEMOASelectorOptions(),
+            generator=LHSGeneratorOptions(
+                name="LHSGenerator",
+                n_points=100,
+            ),
+            repair=ClipRepairOptions(),
+            termination=MaxEvaluationsTerminatorOptions(
+                name="MaxEvaluationsTerminator",
+                max_evaluations=1000,
+            ),
+            use_archive=True,
+            verbosity=2,
+            seed=42,
+        ),
+    )
+
+
+def sms_emoa_mixed_integer_options() -> EMOOptions:
+    """Get default SMS-EMOA options for mixed integer problems as a Pydantic model.
+
+    References:
+        Beume, N., Naujoks, B., & Emmerich, M. (2007). SMS-EMOA: Multiobjective selection based on
+        dominated hypervolume. European Journal of Operational Research, 181(3), 1653-1669.
+
+    Returns:
+        EMOOptions: The default SMS-EMOA mixed integer options as a Pydantic model.
+    """
+    return EMOOptions(
+        preference=None,
+        template=Template3Options(
+            algorithm_name="SMS-EMOA_Mixed_Integer",
+            crossover=UniformMixedIntegerCrossoverOptions(),
+            mutation=MixedIntegerRandomMutationOptions(),
+            selection=SMSEMOASelectorOptions(),
+            generator=RandomMixedIntegerGeneratorOptions(n_points=100),
+            repair=NoRepairOptions(
+                name="NoRepair",
+            ),
+            termination=MaxEvaluationsTerminatorOptions(
+                name="MaxEvaluationsTerminator",
+                max_evaluations=1000,
+            ),
+            use_archive=True,
+            verbosity=2,
+            seed=42,
+        ),
+    )
+
+
 if __name__ == "__main__":
     import json
     from pathlib import Path
@@ -414,7 +548,7 @@ if __name__ == "__main__":
     json_dump_path = current_dir.parent.parent.parent.parent / "datasets" / "emoTemplates"
 
     for algo_name, algo in zip(
-        ["rvea", "nsga3", "ibea", "rvea_mixed_integer", "nsga3_mixed_integer", "ibea_mixed_integer"],
+        ["rvea", "nsga3", "ibea", "rvea_mixed_integer", "nsga3_mixed_integer", "ibea_mixed_integer", "xlemoo"],
         [
             rvea_options,
             nsga3_options,
@@ -422,6 +556,7 @@ if __name__ == "__main__":
             rvea_mixed_integer_options,
             nsga3_mixed_integer_options,
             ibea_mixed_integer_options,
+            xlemoo_options,
         ],
         strict=True,
     ):
@@ -431,5 +566,5 @@ if __name__ == "__main__":
             json.dump(algo().model_dump(), f, indent=4)
 
     # Also dump the schema
-    with Path.open(json_dump_path / f"emoOptionsSchema.json", "w") as f:
+    with Path.open(json_dump_path / "emoOptionsSchema.json", "w") as f:
         json.dump(EMOOptions.model_json_schema(), f, indent=4)
