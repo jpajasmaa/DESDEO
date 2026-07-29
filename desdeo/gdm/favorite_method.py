@@ -3,6 +3,7 @@
 from typing import Literal
 from scipy.spatial.distance import cdist
 from scipy.spatial import ConvexHull
+import random
 
 import numpy as np
 import polars as pl
@@ -25,7 +26,7 @@ from desdeo.problem import (
 )
 from desdeo.problem.schema import Problem
 from desdeo.tools import guess_best_solver
-from desdeo.tools.GenerateReferencePoints import generate_points, rotate_in, rotate_out, get_hull_equations, numba_random_gen
+from desdeo.tools.generateReferencePoints import generate_points, rotate_in, rotate_out, get_hull_equations, numba_random_gen
 from desdeo.tools.generics import EMOResult
 from desdeo.tools.iterative_pareto_representer import _EvaluatedPoint, choose_reference_point
 from desdeo.tools.scalarization import add_asf_diff, add_asf_nondiff
@@ -1085,6 +1086,45 @@ def calculate_fraction_to_keep(
     fraction = ((remaining_steps - 1) / remaining_steps) ** power
 
     return float(fraction)
+
+
+def get_tied_candidates(votes: dict[str, int]) -> list[int]:
+    """Returns a list of candidate indices that are tied for the most votes."""
+    vote_counts = {}
+    for v in votes.values():
+        vote_counts[v] = vote_counts.get(v, 0) + 1
+
+    max_votes = max(vote_counts.values())
+    tied_indices = [cand for cand, count in vote_counts.items() if count == max_votes]
+    return tied_indices
+
+def check_adjacency(pts_mat: np.ndarray, labels: np.ndarray, idx_a: int, idx_b: int) -> bool:
+    """
+    Checks if two clusters are geometrically adjacent by finding the minimum 
+    distance between their respective points.
+    """
+    pts_a = pts_mat[labels == idx_a]
+    pts_b = pts_mat[labels == idx_b]
+
+    if len(pts_a) == 0 or len(pts_b) == 0:
+        return False
+
+    # Calculate pairwise distances between all points in Cluster A and Cluster B
+    dists = cdist(pts_a, pts_b, metric='euclidean')
+    min_dist = np.min(dists)
+
+    # Calculate a rough threshold based on the spread of cluster A
+    # If the distance to B is comparable to the internal spread of A, they are adjacent
+    internal_dists = cdist(pts_a, pts_a, metric='euclidean')
+    avg_internal_dist = np.mean(internal_dists)
+
+    # Threshold heuristic: if the clusters are closer than 1.5x the average internal distance
+    return min_dist < (avg_internal_dist * 1.5)
+
+def random_tie_breaker(tied_indices: list[int], candidates: list[FairSolution]) -> tuple[FairSolution, int]:
+    """Randomly selects a winner from the tied candidates."""
+    winner_idx = random.choice(tied_indices)
+    return candidates[winner_idx], winner_idx
 
 
 if __name__ == "__main__":

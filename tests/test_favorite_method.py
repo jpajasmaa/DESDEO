@@ -5,7 +5,7 @@ import numpy as np
 import polars as pl
 from unittest.mock import patch, MagicMock
 
-from desdeo.problem.testproblems.dtlz2_problem import dtlz2
+from desdeo.problem.testproblems.dtlz_problems import dtlz2
 from desdeo.tools.iterative_pareto_representer import _EvaluatedPoint
 
 from desdeo.gdm.favorite_method import (
