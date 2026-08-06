@@ -1,6 +1,6 @@
 import marimo
 
-__generated_with = "0.23.1"
+__generated_with = "0.23.4"
 app = marimo.App(width="full")
 
 
@@ -8,6 +8,8 @@ app = marimo.App(width="full")
 def _():
     import marimo as mo
     import numpy as np
+    import random
+    from scipy.spatial.distance import cdist
     from desdeo.problem.testproblems import river_pollution_problem, dmitry_forest_problem_disc
     from desdeo.tools import PyomoIpoptSolver, ProximalSolver
     from desdeo.tools.scalarization import add_asf_diff, add_asf_nondiff
@@ -26,13 +28,14 @@ def _():
         ZoomOptions,
         add_asf_nondiff,
         calculate_fraction_to_keep,
+        cdist,
         cluster_points,
         dmitry_forest_problem_disc,
         favorite_method,
         generate_next_iteration_mps,
-        majority_rule,
         mo,
         np,
+        random,
         recluster_for_tie_breaker,
         select_final_candidates,
         tie_breaker_avgproj,
@@ -61,10 +64,10 @@ def _(
     nadir = problem.get_nadir_point()
     print(ideal, nadir)
 
-    #fractions = [0.8, 0.6, 0.4, 0.2]
-    #new_list = [1.**4, 0.8**4, 0.6**4, 0.4**4, 0.2**4, 0**4]
+    # fractions = [0.8, 0.6, 0.4, 0.2]
+    # new_list = [1.**4, 0.8**4, 0.6**4, 0.4**4, 0.2**4, 0**4]
     # raise nautilus fractions to power of nunmber of obje
-    #new2list = [(new_list[i+1]/new_list[i]) for i, _ in range(len(new_list)-1) ]
+    # new2list = [(new_list[i+1]/new_list[i]) for i, _ in range(len(new_list)-1) ]
     MAX_ITERS = 5
 
     n_of_dms = 4
@@ -73,7 +76,7 @@ def _(
         "DM2": {'Rev': 111, 'HA': 18225, 'Carb': 3200, 'DW': 200},
         "DM3": {'Rev': 160, 'HA': 11232, 'Carb': 4000, 'DW': 90},
         "DM4": {'Rev': 140, 'HA': 14232, 'Carb': 4100, 'DW': 190},
-        #"DM5": {'Rev': 120, 'HA': 13232, 'Carb': 3300, 'DW': 140},
+        # "DM5": {'Rev': 120, 'HA': 13232, 'Carb': 3300, 'DW': 140},
     }
     """
     for i in range(n_of_dms):
@@ -106,7 +109,7 @@ def _(
         total_n_of_candidates=5
     )
 
-    # 4. MARIMO STATE TRACKER
+    # 4. MARIMO STATE TRACKER - Split into two to prevent reactive computation loops
     get_state, set_state = mo.state({
         "iter_idx": 0,
         "current_options": initial_fav_options,
@@ -115,7 +118,19 @@ def _(
         "ultimate_winner": None,
         "current_dm_preferred": most_preferred_solutions
     })
-    return MAX_ITERS, get_state, n_of_dms, obj_symbols, problem, set_state
+
+    # NEW: Isolated state just for handling temporary UI tie-breaker re-votes
+    get_tie_state, set_tie_state = mo.state(None)
+    return (
+        MAX_ITERS,
+        get_state,
+        get_tie_state,
+        n_of_dms,
+        obj_symbols,
+        problem,
+        set_state,
+        set_tie_state,
+    )
 
 
 @app.cell
@@ -128,16 +143,20 @@ def _(
     obj_symbols,
     problem,
 ):
-    state = get_state()
-    iter_idx = state["iter_idx"]
-    current_options = state["current_options"]
-    results_history = state["results_history"]
-    final_candidates = state["final_candidates"]
-    ultimate_winner = state["ultimate_winner"]
-    current_dm_preferred = state["current_dm_preferred"]
+    # Only listens to the core algorithmic state, ignoring tie_state UI changes
+    _state = get_state()
+    iter_idx = _state["iter_idx"]
+    current_options = _state["current_options"]
+    results_history = _state["results_history"]
+    final_candidates = _state["final_candidates"]
+    ultimate_winner = _state["ultimate_winner"]
+    current_dm_preferred = _state["current_dm_preferred"]
+
+    fav_results = None
+    pts_mat, cents_mat, labels = None, None, None
+    n_predetermined = 0
 
     if iter_idx < MAX_ITERS:
-        # Evaluate Points & Generate Candidates normally
         fav_results = favorite_method(
             problem=problem,
             options=current_options,
@@ -145,17 +164,14 @@ def _(
         )
         pts_mat, cents_mat, labels = cluster_points(fav_results)
 
-    elif iter_idx >= MAX_ITERS:
-        # Fetch the last results to display the background points
+    elif iter_idx >= MAX_ITERS and len(results_history) > 0:
         fav_results = results_history[-1]
         pts_mat, _, labels = cluster_points(fav_results)
 
         if ultimate_winner is not None:
-            # Show only the final chosen winner
             cents_mat = np.array([[ultimate_winner.objective_values[k] for k in obj_symbols]])
             n_predetermined = 1
         elif final_candidates is not None:
-            # Show the 5 randomly sampled candidates for the final vote
             cents_mat = np.array([[c.objective_values[k] for k in obj_symbols] for c in final_candidates])
             n_predetermined = len(final_candidates)
     return (
@@ -199,7 +215,7 @@ def _(
             labels=labels,
             n_predetermined=n_pred,
             iter_n=iter_idx + 1 if iter_idx < MAX_ITERS else "FINAL PHASE",
-            #current_mps=fav_results.FavOptions.original_most_preferred_solutions
+            # current_mps=fav_results.FavOptions.original_most_preferred_solutions
             current_mps=current_dm_preferred,
         )
 
@@ -234,7 +250,7 @@ def _(
         # Combine horizontally. [1, 2] means the plot gets twice the width of the table.
         output = mo.hstack([data_table, plot_ui], widths=[1, 3], align="center")
 
-        #output = mo.ui.plotly(plot)
+        # output = mo.ui.plotly(plot)
     else:
         output = mo.md("# Waiting...")
 
@@ -247,41 +263,50 @@ def _(
     MAX_ITERS,
     fav_results,
     final_candidates,
+    get_tie_state,
     iter_idx,
     mo,
     n_of_dms,
     ultimate_winner,
 ):
+    _tie_state = get_tie_state()
+
+    ui_layout = None
+    vote_form = None
+
     if ultimate_winner is None and fav_results is not None:
+        _candidates_pool = fav_results.fair_solutions if iter_idx < MAX_ITERS else final_candidates
+        _n_candidates = len(_candidates_pool)
 
-        if iter_idx < MAX_ITERS:
-            n_candidates = len(fav_results.fair_solutions)
-            title = f"### Place Votes for Iteration {iter_idx + 1}"
-            btn_label = "Submit Votes"
+        if _tie_state is None:
+            _title = f"### Place Votes for Iteration {iter_idx + 1}" if iter_idx < MAX_ITERS else "### Place Votes for the FINAL Solution"
+            _btn_label = "Submit Votes"
+            _dropdown_options = {f"Candidate {i}": i for i in range(_n_candidates)}
+
         else:
-            n_candidates = len(final_candidates)
-            title = "### Place Votes for the FINAL Solution"
-            btn_label = "Select Ultimate Winner"
+            # We are in a Tie-Breaker Re-Vote
+            _tied_cands = _tie_state["tied_indices"]
+            _title = f"### ⚠️ TIE DETECTED! Re-Vote Among Candidates: {_tied_cands}"
+            _btn_label = "Submit Re-Vote"
+            _dropdown_options = {f"Candidate {i}": i for i in _tied_cands}
 
-        dropdown_options = {f"Candidate {i}": i for i in range(n_candidates)}
+        _dmvote_arr = [
+            mo.ui.dropdown(options=_dropdown_options, value=list(_dropdown_options.keys())[0], label=f"DM{ii+1} Vote")
+            for ii in range(n_of_dms)
+        ]
 
-        dmvote_arr = []
-        for ii in range(n_of_dms):
-            dmvote_arr.append(mo.ui.dropdown(options=dropdown_options, value="Candidate 0", label=f"DM{ii+1} Vote"))
-        #dm2_vote = mo.ui.dropdown(options=dropdown_options, value="Candidate 0", label="DM2 Vote")
-        #dm3_vote = mo.ui.dropdown(options=dropdown_options, value="Candidate 0", label="DM3 Vote")
+        _vote_inputs = mo.ui.array(_dmvote_arr)
+        vote_form = mo.ui.form(element=_vote_inputs, submit_button_label=_btn_label)
 
-        vote_inputs = mo.ui.array(dmvote_arr)
-
-        vote_form = mo.ui.form(element=vote_inputs, submit_button_label=btn_label)
-        ui_layout = mo.vstack([mo.md(title), vote_form])
+        ui_layout = mo.vstack([
+            mo.md("---"),
+            mo.md(_title),
+            vote_form
+        ])
 
     elif ultimate_winner is not None:
-        # Print the final dictionary values cleanly!
-        winner_str = ", ".join([f"**{k}**: {v:.3f}" for k, v in ultimate_winner.objective_values.items()])
-        ui_layout = mo.md(f"# 🎉 Optimization Finished! \n### The Final Selected Solution is:\n{winner_str}")
-    else:
-        ui_layout = None
+        _winner_str = ", ".join([f"**{k}**: {v:.3f}" for k, v in ultimate_winner.objective_values.items()])
+        ui_layout = mo.md(f"# 🎉 Optimization Finished! \n### The Final Selected Solution is:\n{_winner_str}")
 
     ui_layout
     return (vote_form,)
@@ -291,117 +316,160 @@ def _(
 def _(
     MAX_ITERS,
     calculate_fraction_to_keep,
+    cdist,
     current_options,
     fav_results,
     final_candidates,
     generate_next_iteration_mps,
+    get_state,
+    get_tie_state,
     iter_idx,
     labels,
-    majority_rule,
+    np,
     problem,
+    pts_mat,
+    random,
     recluster_for_tie_breaker,
     results_history,
     select_final_candidates,
     set_state,
+    set_tie_state,
     tie_breaker_avgproj,
     vote_form,
 ):
-    if vote_form is not None and vote_form.value is not None:
-        dm_names = list(fav_results.FavOptions.original_most_preferred_solutions.keys())
-        votes = {dm_names[i]: vote_form.value[i] for i in range(len(dm_names))}
-        winning_idx = majority_rule(votes)
+    def _process_vote():
+        if vote_form is not None and vote_form.value is not None:
+            state = get_state()
+            tie_state = get_tie_state()
 
-        compromise_solution = None
-        candidates_pool = fav_results.fair_solutions if iter_idx < MAX_ITERS else final_candidates
+            dm_names = list(fav_results.FavOptions.original_most_preferred_solutions.keys())
+            votes = {dm_names[i]: vote_form.value[i] for i in range(len(dm_names))}
 
-        new_dm_preferred = {}
-        for dm, v_idx in votes.items():
-            new_dm_preferred[dm] = candidates_pool[v_idx].objective_values
+            candidates_pool = fav_results.fair_solutions if iter_idx < MAX_ITERS else final_candidates
 
-        # 2. LOCAL VARIABLE: Use this to avoid modifying the global 'labels' directly
-        active_labels = labels
+            # Calculate vote distribution
+            vote_counts = {}
+            for v in votes.values():
+                vote_counts[v] = vote_counts.get(v, 0) + 1
 
-        if winning_idx is None:
-            compromise_solution = tie_breaker_avgproj(problem, votes, candidates_pool)
+            max_votes = max(vote_counts.values()) if vote_counts else 0
+            tied_indices = [cand for cand, count in vote_counts.items() if count == max_votes]
 
-            # To seamlessly integrate the new compromise into our spatial expansion,
-            # we re-cluster the entire space so the compromise carves out its own region.
-            if iter_idx < MAX_ITERS:
-                all_points = fav_results.GPRMResults.raw_results.evaluated_points
+            winning_idx = tied_indices[0] if len(tied_indices) == 1 else None
 
-                candidates_pool, active_labels, winning_idx = recluster_for_tie_breaker(
-                    all_points=all_points,
-                    existing_candidates=candidates_pool,
-                    compromise_solution=compromise_solution
-                )
+            compromise_solution = None
+            active_labels = labels
 
+            new_dm_preferred = {}
+            for dm, v_idx in votes.items():
+                new_dm_preferred[dm] = candidates_pool[v_idx].objective_values
 
-        """ old
-        if winning_idx is None:
-            compromise_solution = tie_breaker_avgproj(problem, votes, candidates_pool)
+            pause_iteration = False
 
-            # To seamlessly integrate the new compromise into our spatial expansion (Phase 1 & 2),
-            # we find the existing cluster that is geometrically closest to this new mathematical compromise.
-            if iter_idx < MAX_ITERS:
-                candidates_arr = np.array([[c.objective_values[k] for k in obj_symbols] for c in candidates_pool])
-                comp_arr = np.array([[compromise_solution.objective_values[k] for k in obj_symbols]])
-                winning_idx = int(np.argmin(np.linalg.norm(candidates_arr - comp_arr, axis=1)))
-        """
+            # =========================================================
+            # AUTOMATED TIE BREAKER ROUTING LOGIC
+            # =========================================================
+            if winning_idx is None:
+                # 1. Check for Adjacency (if exactly 2 tied candidates)
+                is_adjacent = False
+                if len(tied_indices) == 2:
+                    idx_a, idx_b = tied_indices[0], tied_indices[1]
+                    pts_a = pts_mat[active_labels == idx_a]
+                    pts_b = pts_mat[active_labels == idx_b]
 
-        if iter_idx < MAX_ITERS - 1:
-            # TODO: move inside the real favorite code
-            # NAUTILI shrinking
-            # NP LINSCAPE
-            #dynamic_fraction = dynamic_fraction - 0.2
-            rs = MAX_ITERS - iter_idx
-            # Use the new generalized mathematical function!
-            dynamic_fraction = calculate_fraction_to_keep(
-                    current_iter=iter_idx,
-                    max_iters=MAX_ITERS,
-                    num_objectives=len(problem.objectives)
-                )
+                    if len(pts_a) > 0 and len(pts_b) > 0:
+                        dists = cdist(pts_a, pts_b, metric='euclidean')
+                        min_dist = np.min(dists)
 
-            # Phase 1: Normal zoom/expansion
-            next_mps = generate_next_iteration_mps(
-                fav_results=fav_results, cluster_labels=active_labels, winning_idx=winning_idx, fraction_to_keep = dynamic_fraction
-                #fraction_to_keep=dynamic_fraction
-            )
-            new_options = current_options.model_copy(deep=True)
-            new_options.GPRMoptions.method_options.most_preferred_solutions = next_mps
-            new_options.GPRMoptions.method_options.version = "convex_hull"
-            new_options.zoom_options.num_steps_remaining = max(1, rs - 1)
-            new_options.votes = votes
+                        internal_dists = cdist(pts_a, pts_a, metric='euclidean')
+                        avg_internal_dist = np.mean(internal_dists) if len(internal_dists) > 0 else float('inf')
 
-            set_state({
-                "iter_idx": iter_idx + 1, "current_options": new_options,
-                "results_history": results_history + [fav_results],
-                "final_candidates": None, "ultimate_winner": None,
-                "current_dm_preferred": new_dm_preferred,
-            })
+                        # Threshold: 1.5x the average distance between points in Cluster A
+                        is_adjacent = min_dist < (avg_internal_dist * 1.5)
 
-        elif iter_idx == MAX_ITERS - 1:
-            # Phase 2: We just voted on the LAST zoomed clusters. Generate the 5 final candidates!
-            final_cands = select_final_candidates(problem, fav_results, active_labels, winning_idx, n_candidates=5)
-            # If a tie-breaker occurred, force the core candidate to be our new compromise!
-            if compromise_solution is not None:
-                final_cands[0] = compromise_solution
+                # 2. Route based on Adjacency
+                if is_adjacent:
+                    # Automatically combine adjacent clusters without re-voting
+                    tied_votes = {dm: v for dm, v in votes.items() if v in [tied_indices[0], tied_indices[1]]}
+                    compromise_solution = tie_breaker_avgproj(problem, tied_votes, candidates_pool)
+                    set_tie_state(None)  # Ensure UI is cleared
+                else:
+                    # Clusters are not adjacent. Proceed to Re-Vote pipeline.
+                    if tie_state is None:
+                        # Pause iteration and trigger the Re-Vote UI
+                        set_tie_state({"tied_indices": tied_indices})
+                        pause_iteration = True
+                    else:
+                        # Re-vote tied again. Fallback to random to force progress.
+                        winning_idx = random.choice(tied_indices)
+                        set_tie_state(None)
 
-            set_state({
-                "iter_idx": iter_idx + 1, "current_options": current_options,
-                "results_history": results_history + [fav_results],
-                "final_candidates": final_cands, "ultimate_winner": None, "current_dm_preferred": new_dm_preferred,
-            })
+            # =========================================================
+            # PROCEED WITH ITERATION ADVANCEMENT
+            # =========================================================
+            if not pause_iteration:
+                if compromise_solution is not None and iter_idx < MAX_ITERS:
+                    all_points = fav_results.GPRMResults.raw_results.evaluated_points
+                    candidates_pool, active_labels, winning_idx = recluster_for_tie_breaker(
+                        all_points=all_points,
+                        existing_candidates=candidates_pool,
+                        compromise_solution=compromise_solution
+                    )
 
-        elif iter_idx == MAX_ITERS:
-            # Phase 3: Pick the ultimate winner
-            # If it tied here, the compromise IS the winner. Otherwise, use the voted index.
-            winner = compromise_solution if compromise_solution is not None else final_candidates[winning_idx]
+                if iter_idx < MAX_ITERS - 1:
+                    rs = MAX_ITERS - iter_idx
+                    dynamic_fraction = calculate_fraction_to_keep(
+                        current_iter=iter_idx,
+                        max_iters=MAX_ITERS,
+                        num_objectives=len(problem.objectives)
+                    )
 
-            set_state({
-                "iter_idx": iter_idx + 1, "current_options": current_options,
-                "results_history": results_history,
-                "final_candidates": final_candidates, "ultimate_winner": winner, "current_dm_preferred": new_dm_preferred,
-            })
+                    next_mps = generate_next_iteration_mps(
+                        fav_results=fav_results, cluster_labels=active_labels, winning_idx=winning_idx, fraction_to_keep=dynamic_fraction
+                    )
+
+                    new_options = current_options.model_copy(deep=True)
+                    new_options.GPRMoptions.method_options.most_preferred_solutions = next_mps
+                    new_options.GPRMoptions.method_options.version = "convex_hull"
+                    new_options.zoom_options.num_steps_remaining = max(1, rs - 1)
+                    new_options.votes = votes
+
+                    set_state({
+                        "iter_idx": iter_idx + 1,
+                        "current_options": new_options,
+                        "results_history": results_history + [fav_results],
+                        "final_candidates": None,
+                        "ultimate_winner": None,
+                        "current_dm_preferred": new_dm_preferred
+                    })
+
+                elif iter_idx == MAX_ITERS - 1:
+                    final_cands = select_final_candidates(problem, fav_results, active_labels, winning_idx, n_candidates=5)
+                    if compromise_solution is not None:
+                        final_cands[0] = compromise_solution
+
+                    set_state({
+                        "iter_idx": iter_idx + 1,
+                        "current_options": current_options,
+                        "results_history": results_history + [fav_results],
+                        "final_candidates": final_cands,
+                        "ultimate_winner": None,
+                        "current_dm_preferred": new_dm_preferred
+                    })
+
+                elif iter_idx == MAX_ITERS:
+                    winner = compromise_solution if compromise_solution is not None else final_candidates[winning_idx]
+
+                    set_state({
+                        "iter_idx": iter_idx + 1,
+                        "current_options": current_options,
+                        "results_history": results_history,
+                        "final_candidates": final_candidates,
+                        "ultimate_winner": winner,
+                        "current_dm_preferred": new_dm_preferred
+                    })
+
+    _process_vote()
     return
 
 
