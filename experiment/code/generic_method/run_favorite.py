@@ -1,31 +1,28 @@
 """Test Runner for the Favorite Method"""
 
 import numpy as np
+from scipy.spatial.distance import cdist
+
 from desdeo.gdm.voting_rules import majority_rule
-from desdeo.tools import PyomoIpoptSolver
+from desdeo.tools import guess_best_solver
 from desdeo.tools.scalarization import add_asf_diff
-from desdeo.problem.testproblems.dtlz2_problem import dtlz2
+from desdeo.problem.testproblems import dtlz2
 
 # Import Logic
 from desdeo.gdm.favorite_method import (
     IPR_Options, GPRMOptions, ZoomOptions, FavOptions,
-    favorite_method, find_candidates, hausdorff_candidates, cluster_points,
-    expand_and_generate_candidates
+    favorite_method, cluster_points, generate_next_iteration_mps,
+    tie_breaker_avgproj, recluster_for_tie_breaker, calculate_fraction_to_keep
 )
 
-# Import Visualization
-from visualizations import visualize_selection_2d, visualize_3d_clusters, visualize_expansion
+# Import Visualization (Make sure this file is in your directory)
+from visualizations import visualize_3d_clusters
 
 if __name__ == "__main__":
 
     # --- 1. SETUP PROBLEM & DMs ---
     dtlz2_problem = dtlz2(8, 3)
     n_of_dms = 4
-    reference_points = {
-        "DM1": {"f_1": 0.0, "f_2": 0.9, "f_3": 0.5},
-        "DM2": {"f_1": 0.5, "f_2": 0.0, "f_3": 0.9},
-        "DM3": {"f_1": 0.9, "f_2": 0.5, "f_3": 0.0},
-    }
 
     # Generate random reference points and find MPS
     reference_points = {}
@@ -37,21 +34,21 @@ if __name__ == "__main__":
     most_preferred_solutions = {}
     for dm in reference_points.keys():
         p, target = add_asf_diff(dtlz2_problem, symbol="asf", reference_point=reference_points[dm])
-        solver = PyomoIpoptSolver(p)
+        solver = guess_best_solver(p)(p)
         res = solver.solve(target)
         most_preferred_solutions[f"{dm}"] = res.optimal_objectives
 
-    # --- 2. CONFIGURE OPTIONS ---
+    # --- 2. CONFIGURE INITIAL OPTIONS ---
     ipr_options = IPR_Options(
         most_preferred_solutions=most_preferred_solutions,
         num_initial_reference_points=10000,
-        # version="convex_hull",
-        version="box",
+        version="convex_hull",
     )
+
     grpmoptions = GPRMOptions(method_options=ipr_options)
     zoomoptions = ZoomOptions(num_steps_remaining=4)
 
-    fav_options = FavOptions(
+    current_options = FavOptions(
         GPRMoptions=grpmoptions,
         candidate_generation_options="mm",
         zoom_options=zoomoptions,
@@ -60,440 +57,128 @@ if __name__ == "__main__":
         total_n_of_candidates=5
     )
 
-    total_n_of_candidates = 5
-
-    # --- 3. RUN ITERATION 1 ---
-    print("\n--- Running Iteration 1 ---")
-    fav_results = favorite_method(
-        problem=dtlz2_problem,
-        options=fav_options,
-        results_list=[]
-    )
-    print("Iter 1 Complete.")
-
-    # --- 4. CLUSTERING & SELECTION ---
-    points_matrix, centers_matrix, cluster_labels = find_candidates(fav_results)
-    print(centers_matrix)
-    print(cluster_labels)
-
-    all_points = fav_results.GPRMResults.raw_results.evaluated_points
-    fairs = fav_results.fair_solutions
-    visualize_3d_clusters(fav_options.GPRMoptions, points_matrix, centers_matrix, cluster_labels, len(fairs), 1)
-
-    # -------------------------------------------------------------
-    # 5. HULL EXPANSION (Using IPR reference space)
-    # -------------------------------------------------------------
-    # TODO: this may be the way
-
-    votes = {"DM1": 0, "DM2": 0, "DM3": 0, "DM4": 0}
-    winning_idx = majority_rule(votes)
-
-    # the objective-space points for printing/visualization
-    winning_points = points_matrix[cluster_labels == winning_idx]
-    winning_center = centers_matrix[winning_idx]
-
-    print(f"\nCluster {winning_idx} selected with {len(winning_points)} points.")
-    print("--- Generating New Candidates via Convex Hull Expansion ---")
-
-    obj_names = list(fav_options.GPRMoptions.fake_ideal.keys())
-    # Extract the [0, 1] scaled reference points for ALL points
-    ref_matrix = np.array([
-        [p.reference_point[k] for k in obj_names]
-        for p in all_points
-    ])
-
-    # get just the winning cluster's reference points
-    winning_refs = ref_matrix[cluster_labels == winning_idx]
-
-    # expand the hull in the flat reference space
-    fraction_to_keep = 0.8
-    num_new_points = 1000
-
-    new_candidates_scaled = expand_and_generate_candidates(
-        winning_cluster_k=winning_refs,
-        all_points_k=ref_matrix,
-        fraction_keep=fraction_to_keep,
-        num_new_points=num_new_points
-    )
-    print(f"Successfully generated {len(new_candidates_scaled)} new candidate points.")
-
-    # scale the new candidates back to the objective space.
-    # TODO: should this actually just use the actual ideal and nadir?
-    fake_ideal_arr = np.array([fav_options.GPRMoptions.fake_ideal[k] for k in obj_names])
-    fake_nadir_arr = np.array([fav_options.GPRMoptions.fake_nadir[k] for k in obj_names])
-
-    new_candidates_obj = new_candidates_scaled * (fake_nadir_arr - fake_ideal_arr) + fake_ideal_arr
-
-    # next_iter_mps for Iteration 2
-    next_iter_mps = {}
-    for i, point in enumerate(new_candidates_obj):
-        point_dict = {name: val for name, val in zip(obj_names, point)}
-        next_iter_mps[f"gen_{i}"] = point_dict
-
-    """
-
-    # TODO: here we need to interact to get the votes from the DMs. for now, we determine it with the index.
-    votes = {"DM1": 0, "DM2": 0, "DM3": 0, "DM4": 2}
-    winning_idx = majority_rule(votes)
-
-    # TODO: these would also go somewhere else, some sort of helper function
-    winning_points = points_matrix[cluster_labels == winning_idx]
-    winning_center = centers_matrix[winning_idx]
-
-    print(f"\nCluster {winning_idx} selected with {len(winning_points)} points.")
-    print("--- Generating New Candidates via Convex Hull Expansion ---")
-
-    fraction_to_keep = 0.8
-    num_new_points = 1000
-
-    new_candidates_k = expand_and_generate_candidates(
-        winning_cluster_k=winning_points,
-        all_points_k=points_matrix,
-        fraction_keep=fraction_to_keep,
-        num_new_points=num_new_points
-    )
-    print(f"Successfully generated {len(new_candidates_k)} new candidate points.")
-    # visualize_expansion(points_matrix, winning_points, new_candidates_k, winning_center, winning_idx, fraction_to_keep)
-
-    # --- 6. RUN ITERATION 2 (With Extended Hull) ---
-    print("\n--- Running Iteration 2 ---")
-
-    # Transform numpy array to "Most Preferred Solutions" dict for IPR
-    next_iter_mps = {}
-    obj_names = [f"f_{i+1}" for i in range(new_candidates_k.shape[1])]
-    for i, point in enumerate(new_candidates_k):
-        point_dict = {name: val for name, val in zip(obj_names, point)}
-        next_iter_mps[f"gen_{i}"] = point_dict
-
-    """
-
-    # Clone and Update Options
-    fav_options_2 = fav_options.model_copy(deep=True)
-    fav_options_2.GPRMoptions.method_options.most_preferred_solutions = next_iter_mps
-    fav_options_2.GPRMoptions.method_options.version = "convex_hull"
-    fav_options_2.zoom_options.num_steps_remaining = 3
-
-    fav_options_2.votes = votes
-
-    fav_results_2 = favorite_method(
-        problem=dtlz2_problem,
-        options=fav_options_2,
-        results_list=[fav_results]
-    )
-
-    print("Iter 2 Complete.")
-    # print("Fair Solutions found in Iter 2:", len(fav_results_2.fair_solutions))
-
-    points_matrix, centers_matrix, cluster_labels = find_candidates(fav_results_2)
-    print(centers_matrix)
-    print(cluster_labels)
-
-    all_points = fav_results_2.GPRMResults.raw_results.evaluated_points
-    fairs = fav_results_2.fair_solutions
-    # Visualization 2
-    visualize_3d_clusters(fav_options_2.GPRMoptions, points_matrix, centers_matrix, cluster_labels, len(fairs), 2)
-
-    # -------------------------------------------------------------
-    # 5. HULL EXPANSION (Using IPR reference space)
-    # -------------------------------------------------------------
-    # TODO: this may be the way
-
-    votes = {"DM1": 0, "DM2": 0, "DM3": 0, "DM4": 0}
-    winning_idx = majority_rule(votes)
-
-    # the objective-space points for printing/visualization
-    winning_points = points_matrix[cluster_labels == winning_idx]
-    winning_center = centers_matrix[winning_idx]
-
-    print(f"\nCluster {winning_idx} selected with {len(winning_points)} points.")
-    print("--- Generating New Candidates via Convex Hull Expansion ---")
-
-    obj_names = list(fav_options.GPRMoptions.fake_ideal.keys())
-    # Extract the [0, 1] scaled reference points for ALL points
-    ref_matrix = np.array([
-        [p.reference_point[k] for k in obj_names]
-        for p in all_points
-    ])
-
-    # get just the winning cluster's reference points
-    winning_refs = ref_matrix[cluster_labels == winning_idx]
-
-    # expand the hull in the flat reference space
-    fraction_to_keep = 0.6
-    num_new_points = 1000
-
-    new_candidates_scaled = expand_and_generate_candidates(
-        winning_cluster_k=winning_refs,
-        all_points_k=ref_matrix,
-        fraction_keep=fraction_to_keep,
-        num_new_points=num_new_points
-    )
-    print(f"Successfully generated {len(new_candidates_scaled)} new candidate points.")
-
-    # scale the new candidates back to the objective space.
-    # TODO: should this actually just use the actual ideal and nadir?
-    fake_ideal_arr = np.array([fav_options.GPRMoptions.fake_ideal[k] for k in obj_names])
-    fake_nadir_arr = np.array([fav_options.GPRMoptions.fake_nadir[k] for k in obj_names])
-
-    new_candidates_obj = new_candidates_scaled * (fake_nadir_arr - fake_ideal_arr) + fake_ideal_arr
-
-    # next_iter_mps for Iteration 2
-    next_iter_mps = {}
-    for i, point in enumerate(new_candidates_obj):
-        point_dict = {name: val for name, val in zip(obj_names, point)}
-        next_iter_mps[f"gen_{i}"] = point_dict
-
-    """
-    # TODO: here we need to interact to get the votes from the DMs. for now, we determine it with the index.
-    votes = {"DM1": 0, "DM2": 0, "DM3": 0, "DM4": 0}
-    winning_idx = majority_rule(votes)
-
-    # TODO: these would also go somewhere else, some sort of helper function
-    winning_points = points_matrix[cluster_labels == winning_idx]
-    winning_center = centers_matrix[winning_idx]
-
-    print(f"\nCluster {winning_idx} selected with {len(winning_points)} points.")
-    print("--- Generating New Candidates via Convex Hull Expansion ---")
-
-    num_new_points = 1000
-
-    fraction_to_keep = 0.6
-    new_candidates_k = expand_and_generate_candidates(
-        winning_cluster_k=winning_points,
-        all_points_k=points_matrix,
-        fraction_keep=fraction_to_keep,
-        num_new_points=num_new_points
-    )
-    print(f"Successfully generated {len(new_candidates_k)} new candidate points.")
-
-    # Visualization 3
-    # visualize_expansion(points_matrix, winning_points, new_candidates_k, winning_center, winning_idx, fraction_to_keep)
-
-    # --- 6. RUN ITERATION 2 (With Extended Hull) ---
-    print("\n--- Running Iteration X ---")
-
-    # Transform numpy array to "Most Preferred Solutions" dict for IPR
-    next_iter_mps = {}
-    obj_names = [f"f_{i+1}" for i in range(new_candidates_k.shape[1])]
-    for i, point in enumerate(new_candidates_k):
-        point_dict = {name: val for name, val in zip(obj_names, point)}
-        next_iter_mps[f"gen_{i}"] = point_dict
-
-    """
-    print(next_iter_mps)
-
-    # Clone and Update Options
-    fav_options_3 = fav_options_2.model_copy(deep=True)
-    fav_options_3.GPRMoptions.method_options.most_preferred_solutions = next_iter_mps
-    fav_options_3.GPRMoptions.method_options.version = "convex_hull"  # Use the hull of the new points!
-    fav_options_3.zoom_options.num_steps_remaining = 2
-
-    fav_options_3.votes = votes
-
-    fav_results_3 = favorite_method(
-        problem=dtlz2_problem,
-        options=fav_options_3,
-        results_list=[fav_results, fav_results_2]
-        # results_list=[fav_results_2]
-    )
-
-    print("Iter 3 Complete.")
-    print(centers_matrix)
-    print(cluster_labels)
-
-    # --- 4. CLUSTERING & SELECTION ---
-    # handled now in one function
-    points_matrix, centers_matrix, cluster_labels = find_candidates(fav_results_3)
-    all_points = fav_results_3.GPRMResults.raw_results.evaluated_points
-    fairs = fav_results_3.fair_solutions
-
-    # Visualization 2
-    visualize_3d_clusters(fav_options_3.GPRMoptions, points_matrix, centers_matrix, cluster_labels, len(fairs), 3)
-
-    # -------------------------------------------------------------
-    # 5. HULL EXPANSION (Using IPR reference space)
-    # -------------------------------------------------------------
-    # TODO: this may be the way
-
-    votes = {"DM1": 1, "DM2": 1, "DM3": 1, "DM4": 0}
-    winning_idx = majority_rule(votes)
-
-    # the objective-space points for printing/visualization
-    winning_points = points_matrix[cluster_labels == winning_idx]
-    winning_center = centers_matrix[winning_idx]
-
-    print(f"\nCluster {winning_idx} selected with {len(winning_points)} points.")
-    print("--- Generating New Candidates via Convex Hull Expansion ---")
-
-    obj_names = list(fav_options.GPRMoptions.fake_ideal.keys())
-    # Extract the [0, 1] scaled reference points for ALL points
-    ref_matrix = np.array([
-        [p.reference_point[k] for k in obj_names]
-        for p in all_points
-    ])
-
-    # get just the winning cluster's reference points
-    winning_refs = ref_matrix[cluster_labels == winning_idx]
-
-    # expand the hull in the flat reference space
-    fraction_to_keep = 0.4
-    num_new_points = 1000
-
-    new_candidates_scaled = expand_and_generate_candidates(
-        winning_cluster_k=winning_refs,
-        all_points_k=ref_matrix,
-        fraction_keep=fraction_to_keep,
-        num_new_points=num_new_points
-    )
-    print(f"Successfully generated {len(new_candidates_scaled)} new candidate points.")
-
-    # scale the new candidates back to the objective space.
-    # TODO: should this actually just use the actual ideal and nadir?
-    fake_ideal_arr = np.array([fav_options.GPRMoptions.fake_ideal[k] for k in obj_names])
-    fake_nadir_arr = np.array([fav_options.GPRMoptions.fake_nadir[k] for k in obj_names])
-
-    new_candidates_obj = new_candidates_scaled * (fake_nadir_arr - fake_ideal_arr) + fake_ideal_arr
-
-    # next_iter_mps for Iteration 2
-    next_iter_mps = {}
-    for i, point in enumerate(new_candidates_obj):
-        point_dict = {name: val for name, val in zip(obj_names, point)}
-        next_iter_mps[f"gen_{i}"] = point_dict
-
-    """
-    # TODO: here we need to interact to get the votes from the DMs. for now, we determine it with the index.
-    votes = {"DM1": 0, "DM2": 0, "DM3": 0, "DM4": 0}
-    winning_idx = majority_rule(votes)
-
-    # TODO: these would also go somewhere else, some sort of helper function
-    winning_points = points_matrix[cluster_labels == winning_idx]
-    winning_center = centers_matrix[winning_idx]
-
-    print(f"\nCluster {winning_idx} selected with {len(winning_points)} points.")
-    print("--- Generating New Candidates via Convex Hull Expansion ---")
-
-    num_new_points = 1000
-    fraction_to_keep = 0.4
-    new_candidates_k = expand_and_generate_candidates(
-        winning_cluster_k=winning_points,
-        all_points_k=points_matrix,
-        fraction_keep=fraction_to_keep,
-        num_new_points=num_new_points
-    )
-    print(f"Successfully generated {len(new_candidates_k)} new candidate points.")
-
-    # Visualization 3
-    # visualize_expansion(points_matrix, winning_points, new_candidates_k, winning_center, winning_idx, fraction_to_keep)
-
-   # --- 6. RUN ITERATION 2 (With Extended Hull) ---
-    print("\n--- Running Iteration X ---")
-
-    # Transform numpy array to "Most Preferred Solutions" dict for IPR
-    next_iter_mps = {}
-    obj_names = [f"f_{i+1}" for i in range(new_candidates_k.shape[1])]
-    for i, point in enumerate(new_candidates_k):
-        point_dict = {name: val for name, val in zip(obj_names, point)}
-        next_iter_mps[f"gen_{i}"] = point_dict
-
-    """
-    print(next_iter_mps)
-
-    # Clone and Update Options
-    fav_options_4 = fav_options_3.model_copy(deep=True)
-    fav_options_4.GPRMoptions.method_options.most_preferred_solutions = next_iter_mps
-    fav_options_4.GPRMoptions.method_options.version = "convex_hull"  # Use the hull of the new points!
-    fav_options_4.zoom_options.num_steps_remaining = 1
-
-    fav_options_4.votes = votes
-
-    fav_results_4 = favorite_method(
-        problem=dtlz2_problem,
-        options=fav_options_4,
-        results_list=[fav_results, fav_results_2, fav_results_3]
-        # results_list=[fav_results_3]
-    )
-
-    print("Iter 4 Complete.")
-    print("Fair Solutions found in Iter 4:", len(fav_results_4.fair_solutions))
-
-    points_matrix, centers_matrix, cluster_labels = find_candidates(fav_results_4)
-
-    all_points = fav_results_4.GPRMResults.raw_results.evaluated_points
-    fairs = fav_results_4.fair_solutions
-    visualize_3d_clusters(fav_options_4.GPRMoptions, points_matrix, centers_matrix, cluster_labels, len(fairs), 4)
-
-    # -------------------------------------------------------------
-    # 5. HULL EXPANSION (Using IPR reference space)
-    # -------------------------------------------------------------
-    # TODO: this may be the way
-
-    votes = {"DM1": 2, "DM2": 0, "DM3": 2, "DM4": 2}
-    winning_idx = majority_rule(votes)
-
-    # the objective-space points for printing/visualization
-    winning_points = points_matrix[cluster_labels == winning_idx]
-    winning_center = centers_matrix[winning_idx]
-
-    print(f"\nCluster {winning_idx} selected with {len(winning_points)} points.")
-    print("--- Generating New Candidates via Convex Hull Expansion ---")
-
-    obj_names = list(fav_options.GPRMoptions.fake_ideal.keys())
-    # Extract the [0, 1] scaled reference points for ALL points
-    ref_matrix = np.array([
-        [p.reference_point[k] for k in obj_names]
-        for p in all_points
-    ])
-
-    # get just the winning cluster's reference points
-    winning_refs = ref_matrix[cluster_labels == winning_idx]
-
-    # expand the hull in the flat reference space
-    fraction_to_keep = 0.2
-    num_new_points = 1000
-
-    new_candidates_scaled = expand_and_generate_candidates(
-        winning_cluster_k=winning_refs,
-        all_points_k=ref_matrix,
-        fraction_keep=fraction_to_keep,
-        num_new_points=num_new_points
-    )
-    print(f"Successfully generated {len(new_candidates_scaled)} new candidate points.")
-
-    # scale the new candidates back to the objective space.
-    # TODO: should this actually just use the actual ideal and nadir?
-    fake_ideal_arr = np.array([fav_options.GPRMoptions.fake_ideal[k] for k in obj_names])
-    fake_nadir_arr = np.array([fav_options.GPRMoptions.fake_nadir[k] for k in obj_names])
-
-    new_candidates_obj = new_candidates_scaled * (fake_nadir_arr - fake_ideal_arr) + fake_ideal_arr
-
-    # next_iter_mps for Iteration 2
-    next_iter_mps = {}
-    for i, point in enumerate(new_candidates_obj):
-        point_dict = {name: val for name, val in zip(obj_names, point)}
-        next_iter_mps[f"gen_{i}"] = point_dict
-
-    """
-    # TODO: here we need to interact to get the votes from the DMs. for now, we determine it with the index.
-    votes = {"DM1": 0, "DM2": 0, "DM3": 0, "DM4": 0}
-    winning_idx = majority_rule(votes)
-
-    # TODO: these would also go somewhere else, some sort of helper function
-    winning_points = points_matrix[cluster_labels == winning_idx]
-    winning_center = centers_matrix[winning_idx]
-
-    print(f"\nCluster {winning_idx} selected with {len(winning_points)} points.")
-    print("--- Generating New Candidates via Convex Hull Expansion ---")
-
-    num_new_points = 1000
-
-    fraction_to_keep = 0.2
-    new_candidates_k = expand_and_generate_candidates(
-        winning_cluster_k=winning_points,
-        all_points_k=points_matrix,
-        fraction_keep=fraction_to_keep,
-        num_new_points=num_new_points
-    )
-    print(f"Successfully generated {len(new_candidates_k)} new candidate points.")
-    """
-    # Visualization 3
-    # visualize_expansion(points_matrix, winning_points, new_candidates_k, winning_center, winning_idx, fraction_to_keep)
+    # --- 3. AUTOMATED ITERATION LOOP ---
+    MAX_ITERS = 5
+    results_history = []
+
+    for iter_idx in range(MAX_ITERS):
+        print(f"\n{'='*50}")
+        print(f"--- Running Iteration {iter_idx + 1} / {MAX_ITERS} ---")
+        print(f"{'='*50}")
+
+        # 3.1 Evaluate Points & Generate Candidates
+        fav_results = favorite_method(
+            problem=dtlz2_problem,
+            options=current_options,
+            results_list=results_history
+        )
+        print("Candidates generated successfully.")
+
+        # 3.2 Extract Data & Visualize Current State
+        pts_mat, cents_mat, labels = cluster_points(fav_results)
+
+        print("\nCandidate Centers:")
+        print(cents_mat)
+
+        # Call visualizer (will likely pause execution until window is closed depending on backend)
+        visualize_3d_clusters(current_options.GPRMoptions, pts_mat, cents_mat, labels, len(fav_results.fair_solutions), iter_idx + 1)
+
+        if iter_idx == MAX_ITERS - 1:
+            print("\nFinal iteration complete. Reached maximum zooming depth.")
+            break
+
+        # 3.3 Simulate DMs Voting
+        dm_names = list(most_preferred_solutions.keys())
+
+        if iter_idx == 0:
+            # Iteration 1: Clear win for Candidate 0
+            votes = {dm_names[0]: 0, dm_names[1]: 0, dm_names[2]: 0, dm_names[3]: 1}
+        elif iter_idx == 1:
+            # Iteration 2: Force a Tie between Candidate 0 and Candidate 1
+            votes = {dm_names[0]: 0, dm_names[1]: 0, dm_names[2]: 1, dm_names[3]: 1}
+        else:
+            # Subsequent Iterations: Clear win for Candidate 0
+            votes = {dm_names[0]: 0, dm_names[1]: 0, dm_names[2]: 0, dm_names[3]: 0}
+
+        print(f"\nSimulated Votes: {votes}")
+
+        # Calculate vote distribution to find winner or tie
+        vote_counts = {}
+        for v in votes.values():
+            vote_counts[v] = vote_counts.get(v, 0) + 1
+
+        max_votes = max(vote_counts.values()) if vote_counts else 0
+        tied_indices = [cand for cand, count in vote_counts.items() if count == max_votes]
+        winning_idx = tied_indices[0] if len(tied_indices) == 1 else None
+
+        compromise_solution = None
+        active_labels = labels
+        candidates_pool = fav_results.fair_solutions
+
+        # 3.4 Tie-Breaker Routing (Adjacency Check & Average Projection)
+        if winning_idx is None:
+            print(f"⚠️ Tie detected among candidates {tied_indices}!")
+
+            is_adjacent = False
+            if len(tied_indices) == 2:
+                idx_a, idx_b = tied_indices[0], tied_indices[1]
+                pts_a = pts_mat[active_labels == idx_a]
+                pts_b = pts_mat[active_labels == idx_b]
+
+                if len(pts_a) > 0 and len(pts_b) > 0:
+                    dists = cdist(pts_a, pts_b, metric='euclidean')
+                    min_dist = np.min(dists)
+
+                    internal_dists = cdist(pts_a, pts_a, metric='euclidean')
+                    avg_internal_dist = np.mean(internal_dists) if len(internal_dists) > 0 else float('inf')
+
+                    # Threshold: 1.5x the average distance between points in Cluster A
+                    is_adjacent = min_dist < (avg_internal_dist * 1.5)
+
+            if is_adjacent:
+                print("   -> Clusters are geometric neighbors. Synthesizing Average Projection compromise.")
+                tied_votes = {dm: v for dm, v in votes.items() if v in [tied_indices[0], tied_indices[1]]}
+                compromise_solution = tie_breaker_avgproj(dtlz2_problem, tied_votes, candidates_pool)
+            else:
+                print("   -> Clusters are NOT adjacent. Falling back to random selection.")
+                winning_idx = np.random.choice(tied_indices)
+
+        # 3.5 Re-cluster around the new compromise (if tie-breaker generated one)
+        if compromise_solution is not None:
+            candidates_pool, active_labels, winning_idx = recluster_for_tie_breaker(
+                all_points=fav_results.GPRMResults.raw_results.evaluated_points,
+                existing_candidates=candidates_pool,
+                compromise_solution=compromise_solution
+            )
+            print("   -> Reclustered Voronoi partitions around new compromise solution.")
+
+        # 3.6 Advance Iteration (Calculate Hull Expansion & Shrink Space)
+        rs = MAX_ITERS - iter_idx
+        dynamic_fraction = calculate_fraction_to_keep(
+            current_iter=iter_idx,
+            max_iters=MAX_ITERS,
+            num_objectives=len(dtlz2_problem.objectives)
+        )
+
+        print(f"\nWinning Cluster: {winning_idx}. Generating new candidates...")
+        print(f"Fraction to keep: {dynamic_fraction:.3f}")
+
+        next_mps = generate_next_iteration_mps(
+            fav_results=fav_results,
+            cluster_labels=active_labels,
+            winning_idx=winning_idx,
+            fraction_to_keep=dynamic_fraction,
+            num_new_points=1000
+        )
+
+        # 3.7 Update options for the next loop
+        current_options = current_options.model_copy(deep=True)
+        current_options.GPRMoptions.method_options.most_preferred_solutions = next_mps
+        current_options.GPRMoptions.method_options.version = "convex_hull"
+        current_options.zoom_options.num_steps_remaining = max(1, rs - 1)
+        current_options.votes = votes
+
+        # Save results to history
+        results_history.append(fav_results)
+
+    print("\nScript Execution Finished.")

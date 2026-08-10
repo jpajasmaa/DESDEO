@@ -126,6 +126,8 @@ class FavOptions(pydantic.BaseModel):
         """ The candidates are from `fair_solutions` in FavResults of the previous iteration."""
         """Not required for the first iteration."""
     )
+    tie_state: dict | None = None
+    "Tracks possible revoting"
 
 
 class FavResults(pydantic.BaseModel):
@@ -137,6 +139,9 @@ class FavResults(pydantic.BaseModel):
     """Results from the representative set method."""
     fair_solutions: list[FairSolution]
     """List of candidate fair solutions found in this iteration."""
+    status: Literal["success", "revote_pending"] = "success"
+    tie_state: dict | None = None
+    "Tracks possible revoting"
 
 
 # --- Core logic ---
@@ -441,7 +446,74 @@ def get_representative_set(problem: Problem, options: GPRMOptions, results_list:
         return get_representative_set_EMO(problem, options, results_list)
     raise TypeError("Invalid MethodOptions type provided.")
 
-def setup(problem: Problem, options: FavOptions, results_list: list[FavResults]) -> FavOptions:
+
+def handle_ties(
+    problem: Problem,
+    votes: dict[str, int],
+    candidates: list[FairSolution],
+    fav_results_previous: FavResults,
+    tie_state: dict | None
+) -> tuple[FairSolution | None, dict | None]:
+    """
+    Evaluates a voting tie and routes it through the 3-step hierarchy:
+    1. Adjacency Check -> Average Projection
+    2. Non-Adjacent -> Request Re-Vote
+    3. Re-Vote Tied -> Random Fallback
+
+    Returns:
+        tuple: (winning_solution, updated_tie_state)
+    """
+    import random
+    from scipy.spatial.distance import cdist
+    import numpy as np
+
+    # Identify tied candidates
+    vote_counts = {}
+    for v in votes.values():
+        vote_counts[v] = vote_counts.get(v, 0) + 1
+    max_votes = max(vote_counts.values())
+    tied_indices = [cand for cand, count in vote_counts.items() if count == max_votes]
+
+    #  Check Adjacency (Only applies if exactly 2 candidates tie)
+    is_adjacent = False
+    if len(tied_indices) == 2:
+        pts_mat, _, labels = cluster_points(fav_results_previous)
+        idx_a, idx_b = tied_indices[0], tied_indices[1]
+
+        pts_a = pts_mat[labels == idx_a]
+        pts_b = pts_mat[labels == idx_b]
+
+        if len(pts_a) > 0 and len(pts_b) > 0:
+            dists = cdist(pts_a, pts_b, metric='euclidean')
+            min_dist = np.min(dists)
+
+            internal_dists = cdist(pts_a, pts_a, metric='euclidean')
+            avg_internal_dist = np.mean(internal_dists) if len(internal_dists) > 0 else float('inf')
+
+            # Threshold: 1.5x the average distance between points in Cluster A
+            if min_dist < (avg_internal_dist * 1.5):
+                is_adjacent = True
+
+    #  Route the execution
+    if is_adjacent:
+        # Route A: Combine via Average Projection
+        tied_votes = {dm: v for dm, v in votes.items() if v in tied_indices}
+        compromise_solution = tie_breaker_avgproj(problem, tied_votes, candidates)
+        return compromise_solution, None
+
+    else:
+        # Route B: Disjoint clusters or >2 tied candidates
+        if tie_state is None:
+            # Sub-Route B1: First tie -> Trigger Re-Vote UI
+            new_tie_state = {"tied_indices": tied_indices, "strategy": "Simple Vote-Again"}
+            return None, new_tie_state
+        else:
+            # Sub-Route B2: Re-Vote tied again -> Random Fallback
+            winner_idx = random.choice(tied_indices)
+            return candidates[winner_idx], None
+
+
+def setup(problem: Problem, options: FavOptions, results_list: list[FavResults]) -> tuple[FavOptions, FairSolution | None, dict | None]:
     """Setup function for favorite method.
 
     Args:
@@ -453,10 +525,10 @@ def setup(problem: Problem, options: FavOptions, results_list: list[FavResults])
         FavOptions: Updated options for the favorite method.
     """
     options = options.model_copy()
-    winner = None
+    winner_solution = None
+    new_tie_state = None
 
     orig_mps = options.original_most_preferred_solutions
-    # orig_mps_list = dict_of_rps_to_list_of_rps(orig_mps)
     # TODO: switching for real ideal and nadir.
     fake_ideal, fake_nadir = problem.get_ideal_point(), problem.get_nadir_point()
     # fake_ideal, fake_nadir = agg_aspbounds(orig_mps_list, problem)
@@ -464,26 +536,35 @@ def setup(problem: Problem, options: FavOptions, results_list: list[FavResults])
     if not results_list:  # noqa:SIM102
         if isinstance(options.GPRMoptions.method_options, IPR_Options):
             options.GPRMoptions.method_options.most_preferred_solutions = orig_mps
-
-    # TODO: currently assumes most_preferred solutions are set manually. To add them here.
-    if results_list:  # not the first iteration
+    else:
+        # TODO: currently assumes most_preferred solutions are set manually. To add them here.
         if options.votes is None:
             raise ValueError("Votes must be provided for iterations after the first.")
         # handle voting
-        old_candidates = results_list[-1].fair_solutions
-        winner = majority_rule(votes=options.votes)
-        if winner is not None:
-            winner = old_candidates[winner]
+        previous_results = results_list[-1]
+        old_candidates = previous_results.fair_solutions
+
+        # Determine Winner using Majority Rule
+        winner_idx = majority_rule(votes=options.votes)
+
+        if winner_idx is not None:
+            winner_solution = old_candidates[winner_idx]
         else:
-            # TIE-BREAKER
-            winner = tie_breaker_avgproj(problem, options.votes, old_candidates)
-        fake_nadir = results_list[-1].FavOptions.GPRMoptions.fake_nadir
-        if fake_nadir is None:
-            raise ValueError("Previous fake_nadir is None, cannot proceed with zooming.")
+            # Route through Tie-Breaker hierarchy
+            winner_solution, new_tie_state = handle_ties(
+                problem=problem,
+                votes=options.votes,
+                candidates=old_candidates,
+                fav_results_previous=previous_results,
+                tie_state=options.tie_state
+            )
+
+        fake_nadir = previous_results.FavOptions.GPRMoptions.fake_nadir
 
     options.GPRMoptions.fake_ideal = fake_ideal
     options.GPRMoptions.fake_nadir = fake_nadir
-    return options
+
+    return options, winner_solution, new_tie_state
 
 
 def favorite_method(problem: Problem, options: FavOptions, results_list: list[FavResults]) -> FavResults:
@@ -502,24 +583,24 @@ def favorite_method(problem: Problem, options: FavOptions, results_list: list[Fa
         FavResults: Results from this iteration of the favorite method. It also contains a filled up version of
         FavOptions (which includes, e.g., updated most preferred solutions and fake_nadir after zooming)
     """
-    options = setup(problem, options, results_list)
+    options, winner_solution, new_tie_state = setup(problem, options, results_list)
+
+    # check for re-vote
+    if new_tie_state is not None:
+        return FavResults(
+            FavOptions=options,
+            GPRMResults=results_list[-1].GPRMResults,
+            fair_solutions=results_list[-1].fair_solutions,
+            status="revote_pending",
+            tie_state=new_tie_state
+        )
 
     # Generate representative set
     gprm_results = get_representative_set(problem, options.GPRMoptions, [result.GPRMResults for result in results_list])
 
     fair_solutions = []
     # Add previous iteration's winner solution
-    if results_list:
-        # Get the candidates from the previous iteration
-        previous_candidates = results_list[-1].fair_solutions
-
-        winner_idx = majority_rule(votes=options.votes)
-
-        if winner_idx is not None:
-            winner_solution = previous_candidates[winner_idx]
-        else:
-            winner_solution = tie_breaker_avgproj(problem, options.votes, previous_candidates)
-            # raise ValueError("No winner could be determined from the votes provided.")
+    if winner_solution is not None:
         fair_solutions.append(winner_solution)
 
     targets = pl.DataFrame([point.targets for point in gprm_results.raw_results.evaluated_points])
@@ -544,6 +625,8 @@ def favorite_method(problem: Problem, options: FavOptions, results_list: list[Fa
         FavOptions=options,
         GPRMResults=gprm_results,
         fair_solutions=fair_solutions,
+        status="success",
+        tie_state=None
     )
 
 
