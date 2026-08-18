@@ -398,7 +398,8 @@ def visualize_3d_clusters(options, points_arr, centers_arr, labels, n_predetermi
         width=1200, height=1000
     )
     # fig.show(renderer="browser")
-    fig.show()
+    # fig.show()
+    return fig
 
 
 def visualize_3d(options, evaluated_points, fair_sols, n):
@@ -462,7 +463,8 @@ def visualize_3d(options, evaluated_points, fair_sols, n):
 
     fig.layout.scene.camera.projection.type = "orthographic"
     fig.update_layout(autosize=False, width=1200, height=1200)
-    fig.show(renderer="browser")
+    # fig.show(renderer="browser")
+    return fig
 
 
 def visualize_expansion(points_matrix, winning_points, new_candidates, winning_center, winning_idx, fraction_to_keep, axis_limits=[-0.2, 2]):
