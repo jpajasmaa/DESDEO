@@ -31,12 +31,28 @@ class SimulatedBinaryCrossoverOptions(BaseModel):
         default="SimulatedBinaryCrossover", frozen=True, description="The name of the crossover operator."
     )
     """The name of the crossover operator."""
-    xover_probability: float = Field(default=0.5, ge=0.0, le=1.0, description="The SBX crossover probability.")
-    """The SBX crossover probability."""
+    pair_xover_probability: float = Field(
+        default=1.0, ge=0.0, le=1.0, description="Probability that a parent pair is recombined at all."
+    )
+    """Probability that a parent pair is recombined at all, drawn once per pair. On failure the pair is
+    copied to the offspring unchanged, with all of its decision variables kept together. This is the
+    `p_c` reported in the literature: 1.0 in the RVEA and NSGA-III papers, 0.9 in NSGA-II."""
+    xover_probability: float = Field(
+        default=0.5, ge=0.0, le=1.0, description="The per-variable SBX crossover probability."
+    )
+    """The per-variable SBX crossover probability, drawn once per decision variable. Defaults to 0.5,
+    following Deb and Agrawal (1995): "we choose to perform SBX in each variable with probability 0.5".
+    This is a separate level from `pair_xover_probability`; the literature's `p_c` refers to the pair,
+    not to the variable, and belongs in `pair_xover_probability`."""
     xover_distribution: float = Field(default=30.0, gt=0.0, description="The SBX distribution index.")
     """The SBX distribution index."""
-    bounded: bool = Field(default=False, description="Whether to bound the offspring within the parent range.")
-    """Whether to bound the offspring within the parent range."""
+    truncated: bool = Field(
+        default=True,
+        description=(
+            "Whether to truncate the probability distribution to keep the offspring within the variable bounds."
+        ),
+    )
+    """Whether to truncate the probability distribution to keep the offspring within the variable bounds."""
     uniform_xover_probability: float = Field(
         default=0.5, ge=0.0, le=1.0, description="The uniform crossover probability."
     )
@@ -125,7 +141,7 @@ class BoundedExponentialCrossoverOptions(BaseModel):
     """The name of the crossover operator."""
     xover_probability: float = Field(default=1.0, ge=0.0, le=1.0, description="The crossover probability.")
     """The crossover probability."""
-    lambda_: float = Field(default=1.0, gt=0.0, description="Positive scale λ for the exponential distribution.")
+    lambda_: float = Field(default=0.1, gt=0.0, description="Positive scale λ for the exponential distribution.")
     """Positive scale λ for the exponential distribution."""
 
 
