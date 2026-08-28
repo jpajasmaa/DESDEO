@@ -1,20 +1,19 @@
-"""The Favorite method, a general method for group decision making in multiobjective optimization"""
+"""The Favorite method, a general method for group decision making in multiobjective optimization."""
 
-from typing import Literal
-from scipy.spatial.distance import cdist
-from scipy.spatial import ConvexHull
 import random
+from typing import Literal
 
 import numpy as np
 import polars as pl
 import pydantic
 from pydantic import ConfigDict, Field
+from scipy.spatial import ConvexHull
+from scipy.spatial.distance import cdist
 
 from desdeo.emo import DesirableRangesOptions, emo_constructor, nsga3_options
 from desdeo.emo.options.generator import ArchiveGeneratorOptions
 from desdeo.gdm.gdmtools import (
     alpha_fairness,
-    dict_of_rps_to_list_of_rps,
     get_top_n_fair_solutions,
     min_max_regret_no_impro,
 )
@@ -26,16 +25,22 @@ from desdeo.problem import (
 )
 from desdeo.problem.schema import Problem
 from desdeo.tools import guess_best_solver
-from desdeo.tools.generateReferencePoints import generate_points, rotate_in, rotate_out, get_hull_equations, numba_random_gen
+from desdeo.tools.generateReferencePoints import (
+    generate_points,
+    get_hull_equations,
+    numba_random_gen,
+    rotate_in,
+    rotate_out,
+)
 from desdeo.tools.generics import EMOResult
 from desdeo.tools.iterative_pareto_representer import _EvaluatedPoint, choose_reference_point
 from desdeo.tools.scalarization import add_asf_diff, add_asf_nondiff
 
-
 # --- Classes & Options ---
 
+
 class IPR_Options(pydantic.BaseModel):
-    """Options specific to iterative_pareto_representer applied with the favorite method."""
+    """Options specific to iterative_pareto_representer applied with the Favorite method."""
 
     model_config = ConfigDict(use_attribute_docstrings=True)
 
@@ -43,8 +48,8 @@ class IPR_Options(pydantic.BaseModel):
     """The number of points to generate uniformly to represent the reference space."""
     version: Literal["convex_hull", "box"] = "convex_hull"
     (
-        """Version "convex_hull": evaluate in the convex hull of MPS."""
-        """ Version "box": evaluate in the box of fake ideal and fake nadir. Curreently deprecated."""
+        """Version "convex_hull": evaluate in the convex hull of given points."""
+        """ Version "box": evaluate in the box of fake ideal and fake nadir. Currently deprecated."""
     )
     most_preferred_solutions: dict[str, dict[str, float]] | None = None
     """Most preferred solutions of the decision makers. Should be filled in by code, not by user."""
@@ -66,10 +71,12 @@ class GPRMOptions(pydantic.BaseModel):
 
 
 class IPR_Results(pydantic.BaseModel):
+    """Results specific to iterative_pareto_representer applied with the Favorite method."""
     model_config = ConfigDict(use_attribute_docstrings=True)
 
     evaluated_points: list[_EvaluatedPoint]
     """List of points evaluated by the solver along with their reference points and targets."""
+
 
 class GPRMResults(pydantic.BaseModel):
     """Pydantic model to contain results from the `get_representative_set` function."""
@@ -86,14 +93,16 @@ class GPRMResults(pydantic.BaseModel):
 
 class FairSolution(pydantic.BaseModel):
     """Represents a single solution identified as 'fair' or a 'candidate'."""
+
     objective_values: dict[str, float]
-    """Objective values map (e.g., {'f_1': 0.2})."""
+    """Objective values (e.g., {'f_1': 0.2})."""
 
     fairness_criterion: str
     """The criterion used to select this solution (e.g., 'mm', 'nash', 'avg_hausdorff')."""
 
     fairness_value: float
-    """The numerical score associated with the fairness criterion."""
+    """The numerical score associated with the fairness criterion, if applicable."""
+
 
 class ZoomOptions(pydantic.BaseModel):
     """Pydantic model to contain options for zooming strategy."""
@@ -111,7 +120,8 @@ class FavOptions(pydantic.BaseModel):
     """Options for the representative set method. EMO and IPR supported."""
     candidate_generation_options: str
     (
-        """Options for generating candidate fair solutions. For now, just a string to determine the fairness criterion applied."""
+        """Options for generating candidate fair solutions.
+        For now, just a string to determine the fairness criterion applied."""
         """ Support more options later."""
     )
     zoom_options: ZoomOptions = Field(default_factory=ZoomOptions)
@@ -134,7 +144,7 @@ class FavResults(pydantic.BaseModel):
     """Pydantic model to contain results from one iteration of the favorite method."""
 
     FavOptions: FavOptions
-    """Options used in this iteration of the favorite method."""
+    """Options used in this iteration of the Favorite method."""
     GPRMResults: GPRMResults
     """Results from the representative set method."""
     fair_solutions: list[FairSolution]
@@ -146,15 +156,15 @@ class FavResults(pydantic.BaseModel):
 
 # --- Core logic ---
 
+
 class ProblemWrapper:
-    """Wraps a DESDEO Problem to manage Ideal/Nadir updates and solving with IPR."""
+    """Wraps a DESDEO Problem to manage solving with IPR."""
 
     def __init__(self, problem: Problem, fake_ideal: dict[str, float], fake_nadir: dict[str, float]):
-        """
-        Args:
-            problem: The DESDEO Problem.
-            fake_ideal: The current fake ideal point.
-            fake_nadir: The current fake nadir point.
+        """Args:
+        problem: The DESDEO Problem.
+        fake_ideal: The current fake ideal point.
+        fake_nadir: The current fake nadir point.
         """
         self.problem = problem
         self.ideal, self.nadir = fake_ideal, fake_nadir
@@ -162,8 +172,7 @@ class ProblemWrapper:
         self.evaluated_points: list[_EvaluatedPoint] = []
 
     def solve(self, scaled_refp: np.ndarray) -> list[_EvaluatedPoint]:
-        """
-        Solves a scalarized version of the problem using ASF.
+        """Solves a scalarized version of the problem using ASF.
 
         Args:
             scaled_refp: Reference point coordinates scaled between 0 and 1.
@@ -173,53 +182,50 @@ class ProblemWrapper:
         """
         refp = {
             obj: val * (self.nadir[obj] - self.ideal[obj]) + self.ideal[obj]
-            for obj, val in zip(self.ideal.keys(), scaled_refp)
+            for obj, val in zip(self.ideal.keys(), scaled_refp, strict=True)
         }
         if self.problem.is_twice_differentiable:
             scaled_problem, target = add_asf_diff(self.problem, "target", refp)
         else:
             scaled_problem, target = add_asf_nondiff(self.problem, "target", refp)
-        # solver = PyomoIpoptSolver(scaled_problem)
-        # solver = ProximalSolver(scaled_problem)
         solver = guess_best_solver(scaled_problem)(scaled_problem)
         results = solver.solve(target)
         objs = results.optimal_objectives
-        scaled_objs = {obj: (objs[obj] - self.ideal[obj]) / (self.nadir[obj] - self.ideal[obj]) for obj in objs.keys()}
+        scaled_objs = {obj: (objs[obj] - self.ideal[obj]) / (self.nadir[obj] - self.ideal[obj]) for obj in objs}
         self.evaluated_points.append(
             _EvaluatedPoint(
-                reference_point=dict(zip(self.ideal.keys(), scaled_refp)), targets=scaled_objs, objectives=objs
+                reference_point=dict(zip(self.ideal.keys(), scaled_refp, strict=True)),
+                targets=scaled_objs,
+                objectives=objs
             )
         )
         return self.evaluated_points
+
 
 def find_group_solutions(
     problem: Problem,
     solutions: pl.DataFrame,
     targets: pl.DataFrame,
     most_preferred_solutions: dict[str, dict[str, float]],
-    fairness_criterion: str
+    fairness_criterion: str,
 ) -> list[FairSolution]:
+    """Identifies fair compromise solution(s) from a set of generated solutions based on a criterion.
+    Currently, returns only one according to the fairness_criterion.
+
+    Args:
+        problem: The DESDEO problem object.
+        solutions: DataFrame of evaluated solutions.
+        targets: DataFrame of evaluated targets.
+        most_preferred_solutions: The most preferred solutions of the DMs.
+        fairness_criterion: The string identifier for the fairness criterion (e.g., 'utilitarian', 'nash', 'mm').
+
+    Returns:
+        list[FairSolution]: A list containing the FairSolution(s) found.
     """
-        Identifies a fair compromise solution from a set of generated solutions based on a criterion.
-
-        Args:
-            problem: The DESDEO problem object.
-            solutions: DataFrame of evaluated solutions (input to GPRM).
-            targets: DataFrame of evaluated targets (output of GRPM).
-            most_preferred_solutions: The most preferred solutions of the DMs.
-            fairness_criterion: The string identifier for the fairness rule (e.g., 'utilitarian', 'nash', 'mm').
-
-        Returns:
-            list[FairSolution]: A list containing the FairSolution found.
-    """
-
     normalized_mpses = {}
     ideal, nadir = problem.get_ideal_point(), problem.get_nadir_point()
     for dm, mps in most_preferred_solutions.items():
-        normalized_mpses[dm] = {
-            obj: (mps[obj] - ideal[obj]) / (nadir[obj] - ideal[obj])
-            for obj in mps.keys()
-        }
+        normalized_mpses[dm] = {obj: (mps[obj] - ideal[obj]) / (nadir[obj] - ideal[obj]) for obj in mps}
 
     # convert to numpy array for numba in UFs
     normalized_mpses_arr = []
@@ -235,32 +241,31 @@ def find_group_solutions(
         ranking = min_max_regret_no_impro(targets, normalized_mpses_arr)  # minmax regret no improvements
     else:
         raise NotImplementedError("Given fairness criterion not implemented.")
-    # print(ranking)
 
     # convert to numpy array for get top fair solutions
     solutions_arr = solutions.to_numpy()
     ranking_r, ranking_i = get_top_n_fair_solutions(solutions_arr, ranking, 1)  # get the top fair
 
-    FairSolutions_arr = []
-    FairSolutions_arr.append(
+    fair_solutions_arr = []
+    fair_solutions_arr.append(
         FairSolution(
             objective_values=numpy_array_to_objective_dict(problem, ranking_r[0]),
             fairness_criterion=fairness_criterion,
             fairness_value=ranking_i[0],
         )
     )
-    return FairSolutions_arr
+    return fair_solutions_arr
 
 
 def shift_points(
     problem: Problem,
     most_preferred_solutions: dict[str, dict[str, float]],
     group_preferred_solution: dict[str, float],
-    steps_remaining: int
+    steps_remaining: int,
 ) -> dict[str, dict[str, float]]:
-    """
+    """TODO: remove or repurpose.
     Shifts the DMs' most preferred solutions towards a group compromise using Nautilus navigation logic.
-    NOTE CURRENTLY NOT NEEDED
+    NOTE CURRENTLY NOT NEEDED.
 
     Args:
         problem: The DESDEO problem.
@@ -271,9 +276,8 @@ def shift_points(
     Returns:
         dict: The new, shifted most preferred solutions for each DM.
     """
-
     shifted_mps = {}
-    for dm in most_preferred_solutions:
+    for dm in most_preferred_solutions.items():
         shifted_point = calculate_navigation_point(
             problem, most_preferred_solutions[dm], group_preferred_solution, steps_remaining
         )
@@ -283,7 +287,6 @@ def shift_points(
             reference_point=shifted_point,
         )
         solver = guess_best_solver(scaled_problem)(scaled_problem)
-        # solver = PyomoIpoptSolver(p)
         res = solver.solve(target)
         shifted_mps.update({dm: res.optimal_objectives})
 
@@ -291,8 +294,7 @@ def shift_points(
 
 
 def get_representative_set_IPR(problem: Problem, options: GPRMOptions, results_list: list[GPRMResults]) -> GPRMResults:
-    """
-    Generates a set of Pareto optimal solutions using the Iterative Pareto Representer (IPR).
+    """Generates a set of Pareto optimal solutions using the Iterative Pareto Representer (IPR).
 
     This method generates reference points in a specific region (hull or box) and solves
     scalarization problems for each.
@@ -300,23 +302,16 @@ def get_representative_set_IPR(problem: Problem, options: GPRMOptions, results_l
     if not isinstance(options.method_options, IPR_Options):
         raise TypeError("Expected IPR_Options for IPR method.")
 
-    evaluated_points = None
-    if len(results_list) == 0:
-        evaluated_points = []
-    else:
-        evaluated_points = results_list[-1].raw_results.evaluated_points
+    evaluated_points = [] if len(results_list) == 0 else results_list[-1].raw_results.evaluated_points
 
     # Normalize mps for fairness and IPR. Convert to array for now
     # TODO: thiis needs to be updated, not manually check problem max or min.
     normalized_mpses = {}
     ideal, nadir = problem.get_ideal_point(), problem.get_nadir_point()
     for dm, mps in options.method_options.most_preferred_solutions.items():
-        normalized_mpses[dm] = {
-            obj: (mps[obj] - ideal[obj]) / (nadir[obj] - ideal[obj])
-            for obj in mps.keys()
-        }
+        normalized_mpses[dm] = {obj: (mps[obj] - ideal[obj]) / (nadir[obj] - ideal[obj]) for obj in mps}
 
-    # ReferenceErrorPs as array for methods to come
+    # Reference points as array for methods to come
     rp_arr = []
     for _, dm in enumerate(normalized_mpses):
         rp_arr.append(objective_dict_to_numpy_array(problem, normalized_mpses[dm]).tolist())
@@ -342,23 +337,21 @@ def get_representative_set_IPR(problem: Problem, options: GPRMOptions, results_l
             wrapped_problem = ProblemWrapper(problem, fake_ideal=options.fake_ideal, fake_nadir=options.fake_nadir)
             for i in range(num_runs):
                 if (i + 1) % 10 == 0 or i == 0:
-                    print(f"Run {i + 1}/{num_runs}")
-                reference_point, _ = choose_reference_point(refp, evaluated_points)  # add thickness thershold here
+                    print(f"Run {i + 1}/{num_runs}")  # noqa: T201
+                reference_point, _ = choose_reference_point(refp, evaluated_points)
                 evaluated_points = wrapped_problem.solve(reference_point)
             break
         except Exception:
-            print("IPR error")
+            print("IPR error")  # noqa: T201
             break
 
     ipr_res = IPR_Results(evaluated_points=evaluated_points)
 
-    results = GPRMResults(
+    return GPRMResults(
         raw_results=ipr_res,
         solutions=None,
         outputs=pl.DataFrame([point.objectives for point in evaluated_points]),
     )
-
-    return results
 
 
 def get_representative_set_EMO(problem: Problem, options: GPRMOptions, results_list: list[GPRMResults]) -> GPRMResults:
@@ -403,19 +396,15 @@ def get_representative_set_EMO(problem: Problem, options: GPRMOptions, results_l
     for obj in problem.objectives:
         if obj.maximize:
             solutions = solutions.filter(
-                (
-                    pl.col(obj.symbol) >= options.fake_nadir[obj.symbol]
-                    # & (pl.col(obj.symbol) <= options.fake_ideal[obj.symbol])
-                    # uncomment for stricter filtering
-                )
+                pl.col(obj.symbol) >= options.fake_nadir[obj.symbol]
+                # & (pl.col(obj.symbol) <= options.fake_ideal[obj.symbol])
+                # uncomment for stricter filtering
             )
         else:
             solutions = solutions.filter(
-                (
-                    pl.col(obj.symbol) <= options.fake_nadir[obj.symbol]
-                    # & (pl.col(obj.symbol) >= options.fake_ideal[obj.symbol])
-                    # uncomment for stricter filtering
-                )
+                pl.col(obj.symbol) <= options.fake_nadir[obj.symbol]
+                # & (pl.col(obj.symbol) >= options.fake_ideal[obj.symbol])
+                # uncomment for stricter filtering
             )
     return GPRMResults(
         raw_results=res,
@@ -452,21 +441,17 @@ def handle_ties(
     votes: dict[str, int],
     candidates: list[FairSolution],
     fav_results_previous: FavResults,
-    tie_state: dict | None
+    tie_state: dict | None,
 ) -> tuple[FairSolution | None, dict | None]:
-    """
-    Evaluates a voting tie and routes it through the 3-step hierarchy:
-    1. Adjacency Check -> Average Projection
-    2. Non-Adjacent -> Request Re-Vote
+    """Evaluates a voting tie and routes it through the 3-step hierarchy.
+    As follows:
+    1. 2 regions Adjacent Check -> Average Projection
+    2. more than 2 regions or Non-Adjacent -> Request Re-Vote
     3. Re-Vote Tied -> Random Fallback
 
     Returns:
-        tuple: (winning_solution, updated_tie_state)
+        tuple: (winning_solution, updated_tie_state).
     """
-    import random
-    from scipy.spatial.distance import cdist
-    import numpy as np
-
     # Identify tied candidates
     vote_counts = {}
     for v in votes.values():
@@ -476,7 +461,7 @@ def handle_ties(
 
     #  Check Adjacency (Only applies if exactly 2 candidates tie)
     is_adjacent = False
-    if len(tied_indices) == 2:
+    if len(tied_indices) == 2:  # noqa: PLR2004
         pts_mat, _, labels = cluster_points(fav_results_previous)
         idx_a, idx_b = tied_indices[0], tied_indices[1]
 
@@ -484,45 +469,44 @@ def handle_ties(
         pts_b = pts_mat[labels == idx_b]
 
         if len(pts_a) > 0 and len(pts_b) > 0:
-            dists = cdist(pts_a, pts_b, metric='euclidean')
+            dists = cdist(pts_a, pts_b, metric="euclidean")
             min_dist = np.min(dists)
 
-            internal_dists = cdist(pts_a, pts_a, metric='euclidean')
-            avg_internal_dist = np.mean(internal_dists) if len(internal_dists) > 0 else float('inf')
+            internal_dists = cdist(pts_a, pts_a, metric="euclidean")
+            avg_internal_dist = np.mean(internal_dists) if len(internal_dists) > 0 else float("inf")
 
             # Threshold: 1.5x the average distance between points in Cluster A
             if min_dist < (avg_internal_dist * 1.5):
                 is_adjacent = True
 
-    #  Route the execution
     if is_adjacent:
-        # Route A: Combine via Average Projection
+        # Combine via Average Projection
         tied_votes = {dm: v for dm, v in votes.items() if v in tied_indices}
         compromise_solution = tie_breaker_avgproj(problem, tied_votes, candidates)
         return compromise_solution, None
 
-    else:
-        # Route B: Disjoint clusters or >2 tied candidates
-        if tie_state is None:
-            # Sub-Route B1: First tie -> Trigger Re-Vote UI
-            new_tie_state = {"tied_indices": tied_indices, "strategy": "Simple Vote-Again"}
-            return None, new_tie_state
-        else:
-            # Sub-Route B2: Re-Vote tied again -> Random Fallback
-            winner_idx = random.choice(tied_indices)
-            return candidates[winner_idx], None
+    # Request re-vote among tied candidates
+    if tie_state is None:
+        # Sub-Route B1: First tie -> Trigger Re-Vote UI
+        new_tie_state = {"tied_indices": tied_indices, "strategy": "Simple Vote-Again"}
+        return None, new_tie_state
+    # Re-Vote tied again -> Random Fallback
+    winner_idx = random.choice(tied_indices)  # noqa: S311
+    return candidates[winner_idx], None
 
 
-def setup(problem: Problem, options: FavOptions, results_list: list[FavResults]) -> tuple[FavOptions, FairSolution | None, dict | None]:
-    """Setup function for favorite method.
+def setup(
+    problem: Problem, options: FavOptions, results_list: list[FavResults]
+) -> tuple[FavOptions, FairSolution | None, dict | None]:
+    """Setup function for Favorite method.
 
     Args:
         problem: DESDEO Problem object
-        options: FavOptions for the favorite method.
+        options: FavOptions for the Favorite method.
         results_list: List of previous FavResults.
 
     Returns:
-        FavOptions: Updated options for the favorite method.
+        FavOptions: Updated options for the Favorite method.
     """
     options = options.model_copy()
     winner_solution = None
@@ -533,34 +517,32 @@ def setup(problem: Problem, options: FavOptions, results_list: list[FavResults])
     fake_ideal, fake_nadir = problem.get_ideal_point(), problem.get_nadir_point()
     # fake_ideal, fake_nadir = agg_aspbounds(orig_mps_list, problem)
     # first iteration
-    if not results_list:  # noqa:SIM102
+    if not results_list:
         if isinstance(options.GPRMoptions.method_options, IPR_Options):
             options.GPRMoptions.method_options.most_preferred_solutions = orig_mps
     else:
         # TODO: currently assumes most_preferred solutions are set manually. To add them here.
+        # TODO: adapting mpses should be here above means or?
         if options.votes is None:
             raise ValueError("Votes must be provided for iterations after the first.")
-        # handle voting
         previous_results = results_list[-1]
         old_candidates = previous_results.fair_solutions
 
-        # Determine Winner using Majority Rule
+        # Determine Winner using Majority Rule else Tie-Breaker
         winner_idx = majority_rule(votes=options.votes)
-
         if winner_idx is not None:
             winner_solution = old_candidates[winner_idx]
         else:
-            # Route through Tie-Breaker hierarchy
             winner_solution, new_tie_state = handle_ties(
                 problem=problem,
                 votes=options.votes,
                 candidates=old_candidates,
                 fav_results_previous=previous_results,
-                tie_state=options.tie_state
+                tie_state=options.tie_state,
             )
 
         fake_nadir = previous_results.FavOptions.GPRMoptions.fake_nadir
-
+    # TODO: remove the updating fake ideal, fake nadir when removing them. Deprecated.
     options.GPRMoptions.fake_ideal = fake_ideal
     options.GPRMoptions.fake_nadir = fake_nadir
 
@@ -568,7 +550,7 @@ def setup(problem: Problem, options: FavOptions, results_list: list[FavResults])
 
 
 def favorite_method(problem: Problem, options: FavOptions, results_list: list[FavResults]) -> FavResults:
-    """Run one complete iteration of the favorite method.
+    """Run one complete iteration of the Favorite method.
 
     For multiple iterations, call this function multiple times, passing the previous results in results_list.
     Make note to change the votes in options for each iteration after the first.
@@ -592,7 +574,7 @@ def favorite_method(problem: Problem, options: FavOptions, results_list: list[Fa
             GPRMResults=results_list[-1].GPRMResults,
             fair_solutions=results_list[-1].fair_solutions,
             status="revote_pending",
-            tie_state=new_tie_state
+            tie_state=new_tie_state,
         )
 
     # Generate representative set
@@ -609,7 +591,7 @@ def favorite_method(problem: Problem, options: FavOptions, results_list: list[Fa
         solutions=gprm_results.outputs,
         targets=targets,
         most_preferred_solutions=options.original_most_preferred_solutions,
-        fairness_criterion=options.candidate_generation_options
+        fairness_criterion=options.candidate_generation_options,
     )
     fair_solutions.extend(new_fair_solutions_list)
 
@@ -622,17 +604,14 @@ def favorite_method(problem: Problem, options: FavOptions, results_list: list[Fa
         fair_solutions = hausdorff_candidates(all_points, fair_solutions, n_missing)
 
     return FavResults(
-        FavOptions=options,
-        GPRMResults=gprm_results,
-        fair_solutions=fair_solutions,
-        status="success",
-        tie_state=None
+        FavOptions=options, GPRMResults=gprm_results, fair_solutions=fair_solutions, status="success", tie_state=None
     )
 
 
-def hausdorff_candidates(all_points: list[_EvaluatedPoint], fair_solutions: list[FairSolution], n_of_candidates: int) -> list[FairSolution]:
-    """
-    Selects additional candidates using the Average Hausdorff Distance metric.
+def hausdorff_candidates(
+    all_points: list[_EvaluatedPoint], fair_solutions: list[FairSolution], n_of_candidates: int
+) -> list[FairSolution]:
+    """Selects additional candidates using the Modified Hausdorff Distance metric.
 
     This ensures the new candidates are diverse and representative of the clusters
     formed around the existing 'fair' solutions.
@@ -645,22 +624,14 @@ def hausdorff_candidates(all_points: list[_EvaluatedPoint], fair_solutions: list
     Returns:
         list[FairSolution]: The list of candidates extended with new selections.
     """
-    new_candidates = []
-
     obj_keys = all_points[0].objectives.keys()
-    candidates_arr = np.array([
-        [p.objectives[k] for k in obj_keys]
-        for p in all_points
-    ])
+    candidates_arr = np.array([[p.objectives[k] for k in obj_keys] for p in all_points])
 
     # use fair solutions as the seeds
-    seeds_arr = np.array([
-        [s.objective_values[k] for k in obj_keys]
-        for s in fair_solutions
-    ])
+    seeds_arr = np.array([[s.objective_values[k] for k in obj_keys] for s in fair_solutions])
 
     # min_dists[i] = distance from point i to the nearest existing seed
-    dists = cdist(candidates_arr, seeds_arr, metric='euclidean')
+    dists = cdist(candidates_arr, seeds_arr, metric="euclidean")
     min_dists = np.min(dists, axis=1)
 
     # Track selected indices to avoid duplicates
@@ -671,8 +642,8 @@ def hausdorff_candidates(all_points: list[_EvaluatedPoint], fair_solutions: list
     for _ in range(n_of_candidates):
         best_idx = -1
 
-        # avg hausdorff: Pick point that minimizes the sum of distances for everyone
-        lowest_total_dist = float('inf')
+        # mod hausdorff: Pick point that minimizes the sum of distances for everyone
+        lowest_total_dist = float("inf")
 
         # Identify candidates (indices not yet selected)
         candidate_indices = np.where(~is_selected)[0]
@@ -681,7 +652,7 @@ def hausdorff_candidates(all_points: list[_EvaluatedPoint], fair_solutions: list
             cand_point = candidates_arr[idx].reshape(1, -1)
 
             # Distance from this specific candidate to everyone. Then, take min and sum the distances.
-            dists_from_cand = cdist(candidates_arr, cand_point, metric='euclidean').flatten()
+            dists_from_cand = cdist(candidates_arr, cand_point, metric="euclidean").flatten()
             potential_min_dists = np.minimum(min_dists, dists_from_cand)
             total_dist = np.sum(potential_min_dists)
 
@@ -696,7 +667,7 @@ def hausdorff_candidates(all_points: list[_EvaluatedPoint], fair_solutions: list
 
             # Permanently update min_dists for the next iteration
             winner_point = candidates_arr[best_idx].reshape(1, -1)
-            dists_to_winner = cdist(candidates_arr, winner_point, metric='euclidean').flatten()
+            dists_to_winner = cdist(candidates_arr, winner_point, metric="euclidean").flatten()
             min_dists = np.minimum(min_dists, dists_to_winner)
 
     #  TODO: as fairness value or criterion is not relevant here, consider using some other type.
@@ -704,18 +675,15 @@ def hausdorff_candidates(all_points: list[_EvaluatedPoint], fair_solutions: list
     for idx in selected_indices:
         point = all_points[idx]
         new_sol = FairSolution(
-            objective_values=point.objectives,
-            fairness_criterion="avg_hausdorff",
-            fairness_value=0.0
+            objective_values=point.objectives, fairness_criterion="avg_hausdorff", fairness_value=0.0
         )
         new_candidates.append(new_sol)
 
-    new_candidates = fair_solutions + new_candidates
-    return new_candidates
+    return fair_solutions + new_candidates
+
 
 def cluster_points(fav_results: FavResults) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """
-    Assigns each point in evaluated_points to the cluster of the nearest candidate (Voronoi partition).
+    """Assigns each point in evaluated_points to the cluster of the nearest candidate (Voronoi partition).
     Returns the points, centres and cluster labels (integers) for every point.
 
     Args:
@@ -731,31 +699,22 @@ def cluster_points(fav_results: FavResults) -> tuple[np.ndarray, np.ndarray, np.
     points_arr = np.array([[p.objectives[k] for k in obj_keys] for p in all_points])
     candidates_arr = np.array([[c.objective_values[k] for k in obj_keys] for c in candidates])
 
-    dists = cdist(points_arr, candidates_arr, metric='euclidean')
+    dists = cdist(points_arr, candidates_arr, metric="euclidean")
     # labels[i] = index of the center closest to point i
     labels = np.argmin(dists, axis=1)
     return points_arr, candidates_arr, labels
 
 
 def recluster_for_tie_breaker(
-    all_points: list[_EvaluatedPoint],
-    existing_candidates: list[FairSolution],
-    compromise_solution: FairSolution
+    all_points: list[_EvaluatedPoint], existing_candidates: list[FairSolution], compromise_solution: FairSolution
 ) -> tuple[list[FairSolution], np.ndarray, int]:
+    """Re-calculates the Voronoi partitions (clusters) when a tie-breaker introduces
+    a brand new compromise solution.
     """
-    Re-calculates the Voronoi partitions (clusters) when a tie-breaker introduces 
-    a brand new compromise solution. 
-
-    CRITICAL FIX: Overrides the candidate pool instead of appending, preventing
-    existing seeds from "stealing" all the evaluated points and causing an empty hull.
-    """
-    # ==========================================
-    # OVERRIDE MODE (Fixes the size 0 crash)
-    # ==========================================
-    # 1. The compromise becomes our primary geometric seed
+    # The compromise becomes our primary geometric seed
     updated_candidates = [compromise_solution]
 
-    # 2. Retrieve the pure mathematical Fair Solution (e.g., maxmin).
+    # Retrieve the pure mathematical Fair Solution (e.g., maxmin).
     # Assuming index 1 is the group fair solution from your generation logic.
     if len(existing_candidates) > 1:
         updated_candidates.append(existing_candidates[1])
@@ -764,124 +723,23 @@ def recluster_for_tie_breaker(
     winning_idx = 0
 
     # ==========================================
-    # 3. Extract arrays for distance calculation
+    # Extract arrays for distance calculation
     # ==========================================
     obj_keys = all_points[0].objectives.keys()
     points_arr = np.array([[p.objectives[k] for k in obj_keys] for p in all_points])
     candidates_arr = np.array([[c.objective_values[k] for k in obj_keys] for c in updated_candidates])
 
     # ==========================================
-    # 4. Re-calculate the clusters (Voronoi Partition)
+    # Re-calculate the clusters (Voronoi Partition)
     # ==========================================
-    dists = cdist(points_arr, candidates_arr, metric='euclidean')
+    dists = cdist(points_arr, candidates_arr, metric="euclidean")
     new_labels = np.argmin(dists, axis=1)
 
     return updated_candidates, new_labels, winning_idx
 
-def recluster_for_tie_breaker2(
-    all_points: list[_EvaluatedPoint],
-    existing_candidates: list[FairSolution],
-    compromise_solution: FairSolution
-) -> tuple[list[FairSolution], np.ndarray, int]:
-    """
-    Re-calculates the Voronoi partitions (clusters) when a tie-breaker introduces 
-    a brand new compromise solution. This ensures the compromise claims its own 
-    geometric region rather than snapping to an existing one.
-
-    Args:
-        all_points: The pool of evaluated points from the current iteration.
-        existing_candidates: The current candidates (e.g., maxmin fair + hausdorff).
-        compromise_solution: The newly calculated tie-breaker solution.
-
-    Returns:
-        tuple: (updated_candidates, new_labels, winning_idx)
-    """
-    # 1. Add the compromise to the pool of candidates
-    updated_candidates = existing_candidates.copy()
-    updated_candidates.append(compromise_solution)
-
-    # The new compromise is at the end of the list, so this is our new winning index
-    winning_idx = len(updated_candidates) - 1
-
-    # 2. Extract arrays for distance calculation
-    obj_keys = all_points[0].objectives.keys()
-    points_arr = np.array([[p.objectives[k] for k in obj_keys] for p in all_points])
-    candidates_arr = np.array([[c.objective_values[k] for k in obj_keys] for c in updated_candidates])
-
-    # 3. Re-calculate the clusters (Voronoi Partition)
-    # Every point is assigned to the geometrically closest candidate,
-    # which now includes our exact compromise point!
-    dists = cdist(points_arr, candidates_arr, metric='euclidean')
-    new_labels = np.argmin(dists, axis=1)
-
-    return updated_candidates, new_labels, winning_idx
-
-def generate_next_mps_from_compromise(
-    fav_results: FavResults,
-    compromise_solution: FairSolution,
-    fraction_to_keep: float
-) -> dict[str, dict[str, float]]:
-    """
-    Generates the next iteration's MPS by directly capturing the closest 
-    points to the compromise solution, bypassing Voronoi clustering entirely.
-    """
-    all_points = fav_results.GPRMResults.raw_results.evaluated_points
-    obj_names = list(fav_results.FavOptions.GPRMoptions.fake_ideal.keys())
-    num_new_points = fav_results.FavOptions.GPRMoptions.method_options.num_initial_reference_points
-
-    # 1. Extract evaluated points in the scaled reference space [0, 1]
-    ref_matrix = np.array([
-        [p.reference_point[k] for k in obj_names]
-        for p in all_points
-    ])
-
-    # 2. Project the objective compromise back to the [0, 1] reference space
-    fake_ideal = fav_results.FavOptions.GPRMoptions.fake_ideal
-    fake_nadir = fav_results.FavOptions.GPRMoptions.fake_nadir
-
-    comp_obj = compromise_solution.objective_values
-    comp_ref = np.array([
-        (comp_obj[k] - fake_ideal[k]) / (fake_nadir[k] - fake_ideal[k])
-        for k in obj_names
-    ])
-
-    # 3. Find the N closest points to the compromise!
-    dists = np.linalg.norm(ref_matrix - comp_ref, axis=1)
-    n_keep = max(int(np.ceil(len(ref_matrix) * fraction_to_keep)), len(obj_names) + 1)
-
-    top_indices = np.argsort(dists)[:n_keep]
-    expanded_set_k = ref_matrix[top_indices]
-
-    # 4. Generate the new points inside the Convex Hull of these closest points
-    expanded_set_kminus = rotate_in(expanded_set_k)
-    expanded_hull = ConvexHull(expanded_set_kminus, qhull_options='QJ')
-    A_exp, b_exp = get_hull_equations(expanded_hull)
-
-    bounding_box = np.array([
-        np.min(expanded_set_kminus, axis=0),
-        np.max(expanded_set_kminus, axis=0)
-    ])
-
-    new_points_kminus = numba_random_gen(num_new_points, bounding_box, A_exp, b_exp)
-    new_candidates_scaled = rotate_out(new_points_kminus)
-
-    # 5. Scale the new candidates back to Objective Space bounds
-    fake_ideal_arr = np.array([fake_ideal[k] for k in obj_names])
-    fake_nadir_arr = np.array([fake_nadir[k] for k in obj_names])
-
-    new_candidates_obj = new_candidates_scaled * (fake_nadir_arr - fake_ideal_arr) + fake_ideal_arr
-
-    # 6. Build the dictionary to feed into the next iteration
-    next_iter_mps = {}
-    for i, point in enumerate(new_candidates_obj):
-        point_dict = {name: val for name, val in zip(obj_names, point)}
-        next_iter_mps[f"gen_{i}"] = point_dict
-
-    return next_iter_mps
 
 def calculate_dist_to_hull(points_kminus: np.ndarray, hull: ConvexHull) -> np.ndarray:
-    """
-    Calculates the algebraic distance from points to a Convex Hull.
+    """Calculates the algebraic distance from points to a Convex Hull.
 
     This is a fast vectorized approximation of distance.
     - Value > 0: Point is outside the hull. (Distance to nearest face plane).
@@ -907,9 +765,8 @@ def calculate_dist_to_hull(points_kminus: np.ndarray, hull: ConvexHull) -> np.nd
     """
     normals = hull.equations[:, :-1]
     offsets = hull.equations[:, -1]
-    distances = np.max(np.dot(normals, points_kminus.T) + offsets[:, np.newaxis], axis=0)
+    return np.max(np.dot(normals, points_kminus.T) + offsets[:, np.newaxis], axis=0)
 
-    return distances
 
 def expand_and_generate_candidates(
     winning_cluster_k: np.ndarray,
@@ -917,31 +774,35 @@ def expand_and_generate_candidates(
     fraction_keep: float = 0.8,
     num_new_points: int = 1000
 ) -> np.ndarray:
+    """Expands the region of interest around a winning cluster and generates new candidate solutions.
+
+    This function implements the core expansion logic (Steps 1-5) of the Favorite Method:
+    1. Projects (rotates) points from k-dimensional space to a (k-1)-dimensional hyperplane.
+    2. Constructs a convex hull for the winning cluster and calculates the distance of all other points to this hull.
+    3. Selects the top `fraction_keep` of points closest to the hull to form an expanded set.
+    4. Constructs a new convex hull around the expanded set and generates uniform random points inside it.
+    5. Projects (rotates) the new points back to the original k-dimensional objective space.
+
+    Args:
+        winning_cluster_k (np.ndarray): An array of shape (N, k) containing the points of the winning cluster
+        in the objective space.
+        all_points_k (np.ndarray): An array of shape (M, k) containing all available evaluated points
+        in the objective space.
+        fraction_keep (float, optional): The fraction (0.0 to 1.0) of points from `all_points_k` to include
+        in the expanded region.
+            Points are selected based on proximity to the winning cluster's hull. Defaults to 0.8.
+        num_new_points (int, optional): The number of new candidate points to generate within
+        the expanded convex hull. Defaults to 1000.
+
+    Returns:
+        np.ndarray: An array of shape (num_new_points, k) containing the new candidate points projected back
+        into the k-dimensional objective space.
     """
-        Expands the region of interest around a winning cluster and generates new candidate solutions.
-
-        This function implements the core expansion logic (Steps 1-5) of the Favorite Method:
-        1. Projects (rotates) points from k-dimensional space to a (k-1)-dimensional hyperplane.
-        2. Constructs a convex hull for the winning cluster and calculates the distance of all other points to this hull.
-        3. Selects the top `fraction_keep` of points closest to the hull to form an expanded set.
-        4. Constructs a new convex hull around the expanded set and generates uniform random points inside it.
-        5. Projects (rotates) the new points back to the original k-dimensional objective space.
-
-        Args:
-            winning_cluster_k (np.ndarray): An array of shape (N, k) containing the points of the winning cluster in the objective space.
-            all_points_k (np.ndarray): An array of shape (M, k) containing all available evaluated points in the objective space.
-            fraction_keep (float, optional): The fraction (0.0 to 1.0) of points from `all_points_k` to include in the expanded region.
-                Points are selected based on proximity to the winning cluster's hull. Defaults to 0.8.
-            num_new_points (int, optional): The number of new candidate points to generate within the expanded convex hull. Defaults to 1000.
-
-        Returns:
-            np.ndarray: An array of shape (num_new_points, k) containing the new candidate points projected back into the k-dimensional objective space.
-        """
-    # 1. Rotate In
+    # Rotate In
     cluster_kminus = rotate_in(winning_cluster_k)
     all_kminus = rotate_in(all_points_k)
 
-    # 2. Calculate Hull of Winning Cluster
+    # Calculate Hull of Winning Cluster
     if len(cluster_kminus) > cluster_kminus.shape[1]:
         win_hull = ConvexHull(cluster_kminus)
         dists = calculate_dist_to_hull(all_kminus, win_hull)
@@ -949,92 +810,78 @@ def expand_and_generate_candidates(
         # Fallback if cluster is too small (e.g., 1 point) Should not happen? But if, raise a ValueError
         raise ValueError("Cluster too small ERROR")
 
-    # 3. How many solutions to keep, at least as many as winning_cluster columns
+    # How many solutions to keep, at least as many as winning_cluster columns
     n_keep = max(int(np.ceil(len(all_kminus) * fraction_keep)), cluster_kminus.shape[1] + 1)
 
     # Argsort gives indices of smallest distances first
     top_indices = np.argsort(dists)[:n_keep]
     expanded_set_kminus = all_kminus[top_indices]
-    print(f"Expanded set: {len(expanded_set_kminus)} points selected.")
+    print(f"Expanded set: {len(expanded_set_kminus)} points selected.")  # noqa: T201
 
-    # 4. Generate Random Points in Bounding Box using numba random gen
-    # need to create the convex hull
-    expanded_hull = ConvexHull(expanded_set_kminus, qhull_options='QJ')
-    A_exp, b_exp = get_hull_equations(expanded_hull)
+    # Generate Random Points in Bounding Box using numba random gen
+    expanded_hull = ConvexHull(expanded_set_kminus, qhull_options="QJ")
+    a_exp, b_exp = get_hull_equations(expanded_hull)
     # Bounding box: [min_coords, max_coords]
-    bounding_box = np.array([
-        np.min(expanded_set_kminus, axis=0),
-        np.max(expanded_set_kminus, axis=0)
-    ])
-    new_points_kminus = numba_random_gen(num_new_points, bounding_box, A_exp, b_exp)
+    bounding_box = np.array([np.min(expanded_set_kminus, axis=0), np.max(expanded_set_kminus, axis=0)])
+    new_points_kminus = numba_random_gen(num_new_points, bounding_box, a_exp, b_exp)
 
-    # 5. Rotate Out (Project back to K-dims)
-    new_points_k = rotate_out(new_points_kminus)
+    # return new points in k, Rotate Out (Project back to K-dims)
+    return rotate_out(new_points_kminus)
 
-    return new_points_k
 
 def generate_next_iteration_mps(
     fav_results: FavResults,
     cluster_labels: np.ndarray,
     winning_idx: int,
     fraction_to_keep: float = 0.8,
-    num_new_points: int = 1000
+    num_new_points: int = 1000,
 ) -> dict[str, dict[str, float]]:
-    """
-    Clusters the current points, identifies the winning cluster from votes,
+    """Clusters the current points, identifies the winning cluster from votes,
     expands the convex hull in the reference space,
     and returns the properly formatted MPS dictionary for the next iteration.
 
     Returns:
         dict[str, dict[str, float]]: next_iter_mps_dict
     """
-
     all_points = fav_results.GPRMResults.raw_results.evaluated_points
     obj_names = list(fav_results.FavOptions.GPRMoptions.fake_ideal.keys())
 
-    ref_matrix = np.array([
-        [p.reference_point[k] for k in obj_names]
-        for p in all_points
-    ])
+    ref_matrix = np.array([[p.reference_point[k] for k in obj_names] for p in all_points])
 
     winning_refs = ref_matrix[cluster_labels == winning_idx]
 
-    # 3. Expand the hull in the flat reference space
+    # Expand the hull in the reference space
     new_candidates_scaled = expand_and_generate_candidates(
         winning_cluster_k=winning_refs,
         all_points_k=ref_matrix,
         fraction_keep=fraction_to_keep,
-        num_new_points=num_new_points
+        num_new_points=num_new_points,
     )
 
-    # 4. Scale candidates back to the Objective Space bounds
+    # Scale candidates back to the Objective Space
     fake_ideal_arr = np.array([fav_results.FavOptions.GPRMoptions.fake_ideal[k] for k in obj_names])
     fake_nadir_arr = np.array([fav_results.FavOptions.GPRMoptions.fake_nadir[k] for k in obj_names])
 
     new_candidates_obj = new_candidates_scaled * (fake_nadir_arr - fake_ideal_arr) + fake_ideal_arr
 
-    # 5. Build the dictionary for IPR Options
+    # Build the dictionary for IPR Options
     next_iter_mps = {}
     for i, point in enumerate(new_candidates_obj):
-        point_dict = {name: val for name, val in zip(obj_names, point)}
+        point_dict = dict(zip(obj_names, point, strict=True))
         next_iter_mps[f"gen_{i}"] = point_dict
 
     return next_iter_mps
 
 
 def select_final_candidates(
-    problem: Problem,
-    fav_results: FavResults,
-    cluster_labels: np.ndarray,
-    winning_idx: int,
-    n_candidates: int = 5
+    problem: Problem, fav_results: FavResults, cluster_labels: np.ndarray, winning_idx: int, n_candidates: int = 5
 ) -> list[FairSolution]:
-    """
-    Selects final candidates by keeping the winning solution as the core candidate,
-    and using the Average Hausdorff distance to pick the remaining candidates
+    """Selects final candidates by keeping the winning solution as the core candidate,
+    and using the Modified Hausdorff distance to pick the remaining candidates
     strictly from within the winning cluster.
 
     Args:
+        problem: DESDEO Problem
         fav_results: The results from the final iteration.
         cluster_labels: Array mapping evaluated points to cluster indices.
         winning_idx: The index of the cluster chosen by the DMs.
@@ -1064,7 +911,7 @@ def select_final_candidates(
         solutions=winning_outputs_df,
         targets=winning_targets_df,
         most_preferred_solutions=fav_results.FavOptions.original_most_preferred_solutions,
-        fairness_criterion=fav_results.FavOptions.candidate_generation_options
+        fairness_criterion=fav_results.FavOptions.candidate_generation_options,
     )
 
     # Extract the solution and brand its criterion clearly
@@ -1079,25 +926,20 @@ def select_final_candidates(
 
     if n_missing > 0:
         final_solutions = hausdorff_candidates(
-            all_points=winning_points,
-            fair_solutions=final_solutions,
-            n_of_candidates=n_missing
+            all_points=winning_points, fair_solutions=final_solutions, n_of_candidates=n_missing
         )
-    # Make sure any newly added elements have their tags explicitly overwritten
+        # Make sure any newly added elements have their tags explicitly overwritten
         for i in range(len(final_solutions)):
-            if i >= 2:
+            if i >= 2:  # noqa: PLR2004
                 final_solutions[i].fairness_criterion = "final_hausdorff"
 
     return final_solutions
 
-def tie_breaker_avgproj(
-    problem: Problem,
-    votes: dict[str, int],
-    candidates: list[FairSolution]
-) -> FairSolution:
-    """
-    Resolves a voting tie by averaging the objective values of all voted candidates,
+
+def tie_breaker_avgproj(problem: Problem, votes: dict[str, int], candidates: list[FairSolution]) -> FairSolution:
+    """Resolves a voting tie by averaging the objective values of all voted candidates,
     and projecting that average point onto the Pareto front using ASF.
+
     Args:
         problem: DESDEO Problem object
         votes: dictionary of the votes from the DMs.
@@ -1109,8 +951,8 @@ def tie_breaker_avgproj(
     obj_names = list(candidates[0].objective_values.keys())
     n_voters = len(votes)
 
-    # 1. Calculate the average objective vector based on the votes
-    avg_point = {obj: 0.0 for obj in obj_names}
+    # Calculate the average objective vector based on the votes
+    avg_point = dict.fromkeys(obj_names, 0.0)
 
     for _, vote_idx in votes.items():
         voted_candidate = candidates[vote_idx]
@@ -1120,9 +962,9 @@ def tie_breaker_avgproj(
     for obj in obj_names:
         avg_point[obj] /= n_voters
 
-    print(f"Tie detected. Calculated Average Reference Point: {avg_point}")
+    print(f"Tie detected. Calculated Average Reference Point: {avg_point}")  # noqa: T201
 
-    # 2. Project the average point to the Pareto front using ASF
+    # Project the average point to the Pareto front using ASF
     if problem.is_twice_differentiable:
         scaled_problem, target = add_asf_diff(problem, "target", avg_point)
     else:
@@ -1134,20 +976,14 @@ def tie_breaker_avgproj(
 
     projected_objectives = results.optimal_objectives
 
-    # 3. Return the new projected solution as the winning FairSolution
+    #  Return the new projected solution as the winning FairSolution
     return FairSolution(
-        objective_values=projected_objectives,
-        fairness_criterion="tie_breaker_average_projection",
-        fairness_value=0.0
+        objective_values=projected_objectives, fairness_criterion="tie_breaker_average_projection", fairness_value=0.0
     )
 
-def calculate_fraction_to_keep(
-    current_iter: int,
-    max_iters: int,
-    num_objectives: int
-) -> float:
-    """
-    Calculates the fraction of points to retain in the Convex Hull for the next iteration.
+
+def calculate_fraction_to_keep(current_iter: int, max_iters: int, num_objectives: int) -> float:
+    """Calculates the fraction of points to retain in the Convex Hull for the next iteration.
 
     This geometrically shrinks the search space volume. Because the hull is calculated
     on a (k-1)-dimensional hyperplane, the linear decay of the radius is raised to
@@ -1179,11 +1015,11 @@ def get_tied_candidates(votes: dict[str, int]) -> list[int]:
 
     max_votes = max(vote_counts.values())
     tied_indices = [cand for cand, count in vote_counts.items() if count == max_votes]
-    return tied_indices
+    return tied_indices  # noqa: RET504
+
 
 def check_adjacency(pts_mat: np.ndarray, labels: np.ndarray, idx_a: int, idx_b: int) -> bool:
-    """
-    Checks if two clusters are geometrically adjacent by finding the minimum 
+    """Checks if two clusters are geometrically adjacent by finding the minimum
     distance between their respective points.
     """
     pts_a = pts_mat[labels == idx_a]
@@ -1193,30 +1029,19 @@ def check_adjacency(pts_mat: np.ndarray, labels: np.ndarray, idx_a: int, idx_b: 
         return False
 
     # Calculate pairwise distances between all points in Cluster A and Cluster B
-    dists = cdist(pts_a, pts_b, metric='euclidean')
+    dists = cdist(pts_a, pts_b, metric="euclidean")
     min_dist = np.min(dists)
 
     # Calculate a rough threshold based on the spread of cluster A
     # If the distance to B is comparable to the internal spread of A, they are adjacent
-    internal_dists = cdist(pts_a, pts_a, metric='euclidean')
+    internal_dists = cdist(pts_a, pts_a, metric="euclidean")
     avg_internal_dist = np.mean(internal_dists)
 
     # Threshold heuristic: if the clusters are closer than 1.5x the average internal distance
     return min_dist < (avg_internal_dist * 1.5)
 
+
 def random_tie_breaker(tied_indices: list[int], candidates: list[FairSolution]) -> tuple[FairSolution, int]:
     """Randomly selects a winner from the tied candidates."""
-    winner_idx = random.choice(tied_indices)
+    winner_idx = random.choice(tied_indices)  # noqa: S311
     return candidates[winner_idx], winner_idx
-
-
-if __name__ == "__main__":
-
-    print("Go run experiment/run_favorite.py")
-    # if avg proj is selected, we can just take
-    # Do distance eucdliean calculation in the rotated space. all the same just use eucd distance instead of the convex hull distnace.
-    #
-    # Or original with majority judgement to handle all cases of voting.
-    #
-    # avg proj way means that we cannot guarantee (unless we can prove it) that we can find any PO solution.
-    #
