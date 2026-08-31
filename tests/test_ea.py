@@ -1154,6 +1154,63 @@ def test_simulated_binary_crossover_pair_probability_copies_whole_pairs(truncate
 
 
 @pytest.mark.ea
+@pytest.mark.parametrize("truncated", [True, False])
+def test_simulated_binary_crossover_can_swap_the_uncrossed_variables(truncated):
+    """`swap_uncrossed_variables` reproduces jMetal (Java), and changes nothing else.
+
+    Every implementation surveyed inherits a variable that failed the per-variable draw unchanged.
+    jMetal's else-branch instead assigns `offspring1[i] = parent2[i]` and `offspring2[i] =
+    parent1[i]`, which puts a genuine uniform-crossover component on top of SBX: at the standard
+    per-variable rate of 0.5, half the genome is swapped wholesale whenever a pair recombines.
+
+    The two parents here are constant along each row, so an uncrossed variable is recognisable by
+    landing exactly on a parent value while a crossed one is perturbed away from both.
+    """
+    problem = dtlz2(n_objectives=3, n_variables=10)
+    symbols = [var.symbol for var in problem.get_flattened_variables()]
+    low, high = 0.2, 0.8
+    parents = pl.DataFrame(np.array([[low] * len(symbols), [high] * len(symbols)]), schema=symbols, orient="row")
+
+    def offspring(swap: bool) -> np.ndarray:
+        crossover = SimulatedBinaryCrossover(
+            problem=problem,
+            publisher=Publisher(),
+            seed=7,
+            verbosity=1,
+            truncated=truncated,
+            pair_xover_probability=1.0,
+            xover_probability=0.5,
+            uniform_xover_probability=0.0,
+            swap_uncrossed_variables=swap,
+        )
+        return crossover.do(population=parents, to_mate=[0, 1]).to_numpy().astype(float)
+
+    copied, swapped = offspring(swap=False), offspring(swap=True)
+
+    kept = np.isclose(copied[0], low)
+    assert kept.any(), "the per-variable rate should leave some variables uncrossed"
+
+    # The uncrossed variables flip from this parent's value to the other parent's.
+    assert np.allclose(swapped[0][kept], high)
+    assert np.allclose(swapped[1][kept], low)
+
+    # Everything else is untouched: same RNG stream, same SBX values on the crossed variables, so
+    # the flag isolates the swap rule instead of perturbing the whole operator.
+    assert np.allclose(copied[0][~kept], swapped[0][~kept])
+    assert np.allclose(copied[1][~kept], swapped[1][~kept])
+
+
+@pytest.mark.ea
+def test_simulated_binary_crossover_does_not_swap_uncrossed_variables_by_default():
+    """Reproducing jMetal has to be asked for explicitly, because jMetal is the outlier here."""
+    assert SimulatedBinaryCrossoverOptions().swap_uncrossed_variables is False
+    crossover = SimulatedBinaryCrossover(
+        problem=dtlz2(n_objectives=3, n_variables=8), publisher=Publisher(), seed=0, verbosity=1
+    )
+    assert crossover.swap_uncrossed_variables is False
+
+
+@pytest.mark.ea
 def test_simulated_binary_crossover_per_variable_probability_default_is_one_half():
     """The per-variable rate defaults to 0.5, and `p_c` lives in its own parameter.
 
@@ -1321,6 +1378,70 @@ def test_bounded_exponential_crossover_handles_shared_parent_values():
         assert np.isfinite(offspring).all(), f"non-finite offspring for seed {seed}"
         # A zero span leaves the child no room to move away from the shared parent value.
         npt.assert_allclose(offspring[:, :3], parents[:, :3])
+
+
+@pytest.mark.ea
+def test_bounded_exponential_crossover_uniform_component_exchanges_parental_identity():
+    """`uniform_xover_probability` must hand variables to the other parent's line, and only then.
+
+    BEX displaces each offspring from its own parent, so identity retention is structurally 1.0 and
+    the operator sits exactly where SBX sits with the parameter at 0.0. The claim under test is that
+    the parameter buys the same exchange SBX gets from flipping the sign of beta: at 0.0 every
+    offspring stays nearer its own parent in every variable, and at 0.5 about half the variables
+    cross over. Measuring which parent each offspring variable landed nearest is what makes that
+    falsifiable -- a shape assertion would pass whatever the swap did.
+    """
+    publisher = Publisher()
+    problem = dtlz2(n_objectives=3, n_variables=8)
+    symbols = [var.symbol for var in problem.get_flattened_variables()]
+
+    # Parents far apart in every variable, so "nearest parent" is unambiguous for a lambda this small.
+    n_pairs, low, high = 400, 0.1, 0.9
+    parents = np.tile(np.array([[low] * len(symbols), [high] * len(symbols)]), (n_pairs, 1))
+
+    retention = {}
+    for probability in (0.0, 0.5, 1.0):
+        crossover = BoundedExponentialCrossover(
+            problem=problem,
+            publisher=publisher,
+            verbosity=1,
+            seed=0,
+            lambda_=0.05,
+            uniform_xover_probability=probability,
+        )
+        children = crossover.do(
+            population=pl.DataFrame(parents, schema=symbols), to_mate=list(range(2 * n_pairs))
+        ).to_numpy()
+        # The first half of the children descend from the low parents, the second half from the high.
+        first_half = children[:n_pairs, :]
+        retention[probability] = float(np.mean(np.abs(first_half - low) < np.abs(first_half - high)))
+
+    assert retention[0.0] == 1.0, "at 0.0 every offspring must keep its own parent's identity"
+    assert retention[1.0] == 0.0, "at 1.0 every variable must be handed to the other parent's line"
+    assert 0.4 < retention[0.5] < 0.6, f"at 0.5 about half should cross, got {retention[0.5]:.3f}"
+
+
+@pytest.mark.ea
+def test_bounded_exponential_crossover_uniform_component_is_off_by_default():
+    """The default must not change what the operator already did.
+
+    BEX predates this parameter and the study's `bex` arm was measured without it, so a default of
+    0.5 -- which is what `SimulatedBinaryCrossover` uses -- would silently reinterpret existing
+    results. Whether 0.5 is better here is an open question, not an assumption to bake into a default.
+    """
+    publisher = Publisher()
+    problem = dtlz2(n_objectives=3, n_variables=5)
+    symbols = [var.symbol for var in problem.get_flattened_variables()]
+    population = pl.DataFrame(np.random.default_rng(0).random((10, len(symbols))), schema=symbols)
+
+    defaulted = BoundedExponentialCrossover(problem=problem, publisher=publisher, verbosity=1, seed=3)
+    explicit = BoundedExponentialCrossover(
+        problem=problem, publisher=publisher, verbosity=1, seed=3, uniform_xover_probability=0.0
+    )
+    assert defaulted.uniform_xover_probability == 0.0
+    assert defaulted.do(population=population, to_mate=list(range(10))).equals(
+        explicit.do(population=population, to_mate=list(range(10)))
+    )
 
 
 @pytest.mark.ea
