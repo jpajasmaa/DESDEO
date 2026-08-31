@@ -1,4 +1,4 @@
-"""Production database initialisation script.
+"""Production database initialisation script with GDM SCORE bands setup.
 
 Run once as a Kubernetes Job after the first deployment (or after a full
 database wipe). It is intentionally idempotent: running it multiple times
@@ -31,8 +31,10 @@ from sqlmodel import Session, SQLModel, select
 # Import the engine after DATABASE_URL is in the environment so the config
 # module picks it up correctly.
 from desdeo.api.db import engine
-from desdeo.api.models import User, UserRole
+from desdeo.api.models import ProblemDB, User, UserRole
+from desdeo.api.models.gdm.gdm_aggregate import Group, GroupSessionDB
 from desdeo.api.routers.user_authentication import get_password_hash
+from desdeo.problem.testproblems import river_pollution_problem_discrete
 
 
 def create_tables() -> None:
@@ -68,6 +70,56 @@ def seed_admin_user() -> None:
         print(f"[db-init] Created user '{username}' (role=analyst, group={group}).")
 
 
+def set_scorebands_data() -> None:
+    """Sets the specific GDM SCORE bands test users, problem, and group."""
+    with Session(engine) as session:
+        # Idempotency check: if analyst1 exists, assume data is already seeded
+        if session.exec(select(User).where(User.username == "analyst1")).first():
+            print("[db-init] SCORE bands test data already exists — skipping.")
+            return
+
+        print("[db-init] Seeding SCORE bands test data...")
+
+        # 1. Create Users
+        analyst1 = User(
+            username="analyst1", password_hash=get_password_hash("12345"), role=UserRole.analyst, group="test"
+        )
+        dm1 = User(username="dm1", password_hash=get_password_hash("12345"), role=UserRole.dm, group="test")
+        dm2 = User(username="dm2", password_hash=get_password_hash("12345"), role=UserRole.dm, group="test")
+
+        session.add_all([analyst1, dm1, dm2])
+        session.commit()
+        session.refresh(analyst1)
+        session.refresh(dm1)
+        session.refresh(dm2)
+
+        # 2. Create Problem
+        problem = river_pollution_problem_discrete(five_objective_variant=False)
+        problem_db = ProblemDB.from_problem(problem, analyst1)
+
+        session.add(problem_db)
+        session.commit()
+        session.refresh(problem_db)
+
+        # 3. Create Group
+        group = Group(name="tingalinga", owner_id=analyst1.id, users=[dm1, dm2])
+        session.add(group)
+        session.commit()
+        session.refresh(group)
+
+        # 4. Create Group Session
+        group_session = GroupSessionDB(
+            group_id=group.id,
+            problem_id=problem_db.id,
+            method="gdm-score-bands",
+            head_iteration_id=None,
+        )
+        session.add(group_session)
+        session.commit()
+
+        print(f"[db-init] Created SCORE Bands group session for group '{group.name}'.")
+
+
 def main() -> None:
     database_url = os.environ.get("DATABASE_URL")
     if not database_url:
@@ -77,6 +129,7 @@ def main() -> None:
     print(f"[db-init] Using database: {database_url.split('@')[-1]}")  # hide credentials
     create_tables()
     seed_admin_user()
+    set_scorebands_data()
     print("[db-init] Done.")
 
 

@@ -38,23 +38,23 @@ spec:
     spec:
       restartPolicy: Never
       containers:
-      - name: db-init
-        # Replace <PROJECT> with your Rahti project name.
-        image: image-registry.openshift-image-registry.svc:5000/<PROJECT>/desdeo-api:latest
-        command: ["python", "desdeo/api/db_init_prod.py"]
-        env:
-        - name: DESDEO_PRODUCTION
-          value: "true"
-        envFrom:
-        # Injects DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD,
-        # AUTHJWT_SECRET, DESDEO_ADMIN_USERNAME, DESDEO_ADMIN_PASSWORD
-        # from the shared Secret.
-        - secretRef:
-            name: desdeo-secrets
-        resources:
-          requests:
-            memory: "256Mi"
-            cpu: "100m"
-          limits:
-            memory: "512Mi"
-            cpu: "500m"
+        - name: db-init
+          # Replace <PROJECT> with your Rahti project name.
+          image: image-registry.openshift-image-registry.svc:5000/gdm-scorebands/desdeo-api:latest
+          command: ["python", "desdeo/api/db_init_prod.py"]
+          env:
+            - name: DESDEO_PRODUCTION
+              value: "true"
+          envFrom:
+            # Injects DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD,
+            # AUTHJWT_SECRET, DESDEO_ADMIN_USERNAME, DESDEO_ADMIN_PASSWORD
+            # from the shared Secret.
+            - secretRef:
+                name: desdeo-secrets
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
