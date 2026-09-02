@@ -12,16 +12,16 @@ from desdeo.api.models import (
     ProblemDB,
     User,
     UserRole,
-    
+
 )
 from desdeo.api.models.gdm.gdm_aggregate import Group
 from desdeo.api.routers.user_authentication import get_password_hash
-from desdeo.problem.testproblems import river_pollution_problem_discrete
+from desdeo.problem.testproblems import river_pollution_problem_discrete, dtlz2
 
-problems = [river_pollution_problem_discrete(five_objective_variant=False)]
+problems = [river_pollution_problem_discrete(five_objective_variant=False), dtlz2(10, 3)]
 
 num_analysts = 1
-num_dms = 2
+num_dms = 3
 
 usernames_analyst = [f"analyst{i + 1}" for i in range(num_analysts)]
 usernames_dm = [f"dm{i + 1}" for i in range(num_dms)]
@@ -86,7 +86,7 @@ if __name__ == "__main__":
             rng = np.random.default_rng(seed=42)
 
             for problem in problems:
-                #Add the problem to the analyst1
+                # Add the problem to the analyst1
                 problem_db = ProblemDB.from_problem(problem, user_owner)
                 session.add(problem_db)
                 session.commit()
@@ -97,13 +97,12 @@ if __name__ == "__main__":
             group = Group(
                 name=group_name,
                 owner_id=1,
-                user_ids=[2,3],
+                user_ids=[2, 3, 4],
                 problem_id=1,
             )
 
             group.model_rebuild()
-            
-            
+
             session.add(group)
             session.commit()
             session.refresh(group)

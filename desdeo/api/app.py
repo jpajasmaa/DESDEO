@@ -18,6 +18,7 @@ from desdeo.api.routers import (
     user_authentication,
     utopia,
     xnimbus,
+    favorite,
 )
 from desdeo.api.routers.gdm import gdm_aggregate, gdm_base
 from desdeo.api.routers.gdm.gdm_score_bands import gdm_score_bands_routers
@@ -45,6 +46,7 @@ app.include_router(gnimbus_routers.router)
 app.include_router(enautilus.router)
 app.include_router(site_selection.router)
 app.include_router(gdm_score_bands_routers.router)
+app.include_router(favorite.router)
 app.include_router(nautilus_navigator.router)
 app.include_router(solution_description.router)
 

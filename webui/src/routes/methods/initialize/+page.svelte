@@ -115,6 +115,13 @@
 			preferencesType: ['preferred ranges'],
 			supportsGroups: true
 		},
+    {
+			name: 'Favorite Method',
+			path: '/interactive_methods/FAVORITE',
+			description: 'A group decision-making method for MOO applying voting.',
+			preferencesType: ['preferred solutions'],
+			supportsGroups: true
+		},
 	];
 
 	// Add group parameter to paths when needed

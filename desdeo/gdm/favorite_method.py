@@ -190,6 +190,9 @@ class ProblemWrapper:
             scaled_problem, target = add_asf_nondiff(self.problem, "target", refp)
         solver = guess_best_solver(scaled_problem)(scaled_problem)
         results = solver.solve(target)
+
+        # objs = {obj.symbol: float(results.optimal_objectives[i]) for i, obj in enumerate(self.problem.objectives)}
+
         objs = results.optimal_objectives
         scaled_objs = {obj: (objs[obj] - self.ideal[obj]) / (self.nadir[obj] - self.ideal[obj]) for obj in objs}
         self.evaluated_points.append(
@@ -251,7 +254,7 @@ def find_group_solutions(
         FairSolution(
             objective_values=numpy_array_to_objective_dict(problem, ranking_r[0]),
             fairness_criterion=fairness_criterion,
-            fairness_value=ranking_i[0],
+            fairness_value=float(ranking[ranking_i[0]]),
         )
     )
     return fair_solutions_arr
@@ -320,7 +323,7 @@ def get_representative_set_IPR(problem: Problem, options: GPRMOptions, results_l
 
     # get the representative set
     # set n or the possibilities of n according to the num points to evaluate
-    for n in [options.num_points_to_evaluate, options.num_points_to_evaluate / 2, 10]:
+    for n in [options.num_points_to_evaluate, int(options.num_points_to_evaluate / 2), 10]:
         try:
             if options.method_options.version == "convex_hull":
                 _, refp = generate_points(
@@ -341,8 +344,8 @@ def get_representative_set_IPR(problem: Problem, options: GPRMOptions, results_l
                 reference_point, _ = choose_reference_point(refp, evaluated_points)
                 evaluated_points = wrapped_problem.solve(reference_point)
             break
-        except Exception:
-            print("IPR error")  # noqa: T201
+        except Exception as e:
+            print(f"IPR error: {repr(e)}")
             break
 
     ipr_res = IPR_Results(evaluated_points=evaluated_points)
@@ -675,7 +678,7 @@ def hausdorff_candidates(
     for idx in selected_indices:
         point = all_points[idx]
         new_sol = FairSolution(
-            objective_values=point.objectives, fairness_criterion="avg_hausdorff", fairness_value=0.0
+            objective_values=point.objectives, fairness_criterion="avg_hausdorff", fairness_value=1e6
         )
         new_candidates.append(new_sol)
 

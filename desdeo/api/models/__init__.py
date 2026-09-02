@@ -174,6 +174,10 @@ __all__ = [  # noqa: RUF022
     "GDMSCOREBandsDecisionResponse",
     "GDMSCOREBandsRevertRequest",
     "GDMSCOREBandsHistoryResponse",
+    "FavoriteInitRequest",
+    "FavoriteSessionState",
+    "FavoriteVoteRequest",
+    "FavoriteSessionDB",
 ]
 
 
@@ -256,6 +260,12 @@ from .gdm.gnimbus import (
     GNIMBUSSwitchPhaseResponse,
     OptimizationPreference,
     VotingPreference,
+)
+from .gdm.favorite import (
+    FavoriteInitRequest,
+    FavoriteSessionState,
+    FavoriteVoteRequest,
+    FavoriteSessionDB,
 )
 from .generic import (
     GenericIntermediateSolutionResponse,
