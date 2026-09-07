@@ -24,6 +24,9 @@ from desdeo.gdm.favorite_method import (
     recluster_for_tie_breaker,
     select_final_candidates,
     tie_breaker_avgproj,
+    adapt_all_dm_preferences,
+    calculate_dm_utility,
+    minimum_adjustment_mps,
 )
 from desdeo.problem.testproblems.dtlz_problems import dtlz2
 from desdeo.tools.iterative_pareto_representer import _EvaluatedPoint
@@ -402,3 +405,68 @@ def test_tie_breaker_avgproj(mock_guess, mock_add_asf, dummy_problem):
     assert isinstance(winning_sol, FairSolution)
     assert winning_sol.objective_values == {"f_1": 2.5, "f_2": 2.5, "f_3": 2.5}
     assert winning_sol.fairness_criterion == "tie_breaker_average_projection"
+
+
+def test_minimum_adjustment_mps_no_adjustment_when_top(dummy_problem):
+    """Test that when a DM votes for their best candidate, no adjustment is made."""
+    dm_mps = {"f_1": 0.0, "f_2": 0.9, "f_3": 0.8}
+    best_cand = {"f_1": 0.0, "f_2": 0.9, "f_3": 0.8}
+    other_cand = {"f_1": 0.8, "f_2": 0.2, "f_3": 0.2}
+
+    new_mps, was_adjusted, lam = minimum_adjustment_mps(
+        problem=dummy_problem,
+        dm_mps=dm_mps,
+        voted_candidate=best_cand,
+        all_candidates=[best_cand, other_cand],
+    )
+    assert not was_adjusted
+    assert lam == 0.0
+    assert new_mps == dm_mps
+
+
+def test_minimum_adjustment_mps_adjusted_when_suboptimal(dummy_problem):
+    """Test that when a DM votes for a sub-optimal candidate, their MPS is shifted."""
+    dm_mps = {"f_1": 0.0, "f_2": 0.9, "f_3": 0.8}
+    top_cand = {"f_1": 0.0, "f_2": 0.9, "f_3": 0.8}
+    voted_cand = {"f_1": 0.9, "f_2": 0.1, "f_3": 0.1}
+
+    new_mps, was_adjusted, lam = minimum_adjustment_mps(
+        problem=dummy_problem,
+        dm_mps=dm_mps,
+        voted_candidate=voted_cand,
+        all_candidates=[top_cand, voted_cand],
+    )
+    assert was_adjusted
+    assert 0.0 < lam <= 1.0
+
+    # Under new_mps, voted_cand must have higher utility than top_cand
+    u_voted = calculate_dm_utility(dummy_problem, new_mps, voted_cand)
+    u_top = calculate_dm_utility(dummy_problem, new_mps, top_cand)
+    assert u_voted >= u_top
+
+
+def test_adapt_all_dm_preferences(dummy_problem):
+    """Test adapting preferences across multiple DMs."""
+    cands = [
+        FairSolution(objective_values={"f_1": 0.0, "f_2": 0.9, "f_3": 0.8}, fairness_criterion="mm", fairness_value=0.0),
+        FairSolution(objective_values={"f_1": 0.9, "f_2": 0.1, "f_3": 0.1}, fairness_criterion="mm", fairness_value=0.0),
+    ]
+    current_mps = {
+        "DM1": {"f_1": 0.0, "f_2": 0.9, "f_3": 0.8},
+        "DM2": {"f_1": 0.9, "f_2": 0.1, "f_3": 0.1},
+    }
+    # DM1 votes for candidate 1 (suboptimal for DM1)
+    # DM2 votes for candidate 1 (optimal for DM2)
+    votes = {"DM1": 1, "DM2": 1}
+
+    updated_mps, summary = adapt_all_dm_preferences(
+        problem=dummy_problem,
+        current_mps=current_mps,
+        candidates=cands,
+        votes=votes,
+    )
+    assert summary["DM1"]["was_adjusted"] is True
+    assert summary["DM2"]["was_adjusted"] is False
+    assert updated_mps["DM2"] == current_mps["DM2"]
+    assert updated_mps["DM1"] != current_mps["DM1"]
+

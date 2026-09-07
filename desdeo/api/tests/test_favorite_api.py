@@ -5,6 +5,8 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from desdeo.api.routers.favorite import router
+from desdeo.gdm import calculate_dm_utility
+from desdeo.problem.testproblems import river_pollution_problem_discrete
 
 app = FastAPI()
 app.include_router(router)
@@ -282,4 +284,230 @@ def test_full_lifecycle_to_final_decision(sample_init_payload):
     assert state_res["status"] == "completed"
     assert state_res["final_solution"] is not None
     assert state_res["final_solution"]["objective_values"] == iter_data["candidates"][0]["objective_values"]
+
+
+def test_init_problem_3_dmitry_forest():
+    """Test initialization with Dmitry Forest Problem (problem_id 3) with 4 DMs and auto-fetched MPS."""
+    from sqlmodel import Session
+    from desdeo.api.db import engine
+    from desdeo.api.models import ProblemDB, User
+    from desdeo.problem.testproblems import dmitry_forest_problem_disc
+
+    with Session(engine) as db:
+        prob = db.get(ProblemDB, 3)
+        if not prob:
+            user = db.get(User, 1)
+            prob_db = ProblemDB.from_problem(dmitry_forest_problem_disc(), user=user)
+            db.add(prob_db)
+            db.commit()
+
+    payload = {
+        "problem_id": 3,
+        "dm_ids": ["dm1", "dm2", "dm3", "dm4"],
+        "total_n_of_candidates": 5,
+        "candidate_generation_options": "mm",
+        "max_iterations": 3,
+        "num_initial_reference_points": 50,
+    }
+    res = client.post("/favorite/init", json=payload)
+    assert res.status_code == 201
+    data = res.json()
+    assert data["problem_id"] == 3
+    assert data["dm_ids"] == ["dm1", "dm2", "dm3", "dm4"]
+    assert len(data["candidates"]) == 5
+    assert data["status"] == "voting"
+
+    # Verify candidates have the 4 forest objectives: Rev, HA, Carb, DW
+    candidate_objs = data["candidates"][0]["objective_values"]
+    assert set(candidate_objs.keys()) == {"Rev", "HA", "Carb", "DW"}
+
+    # Test submitting a vote from DM4
+    session_id = data["session_id"]
+    vote_res = client.post(f"/favorite/vote/{session_id}", json={"dm_id": "dm4", "vote_idx": 0})
+    assert vote_res.status_code == 200
+    assert vote_res.json()["current_votes"]["dm4"] == 0
+
+
+def test_adjacent_tie_breaker_avgproj():
+    """Test that an adjacent tie between 2 candidates triggers tie_breaker_avgproj instead of a revote."""
+    payload = {
+        "problem_id": 1,
+        "dm_ids": ["dm1", "dm2"],
+        "total_n_of_candidates": 5,
+        "candidate_generation_options": "mm",
+        "max_iterations": 2,
+        "num_initial_reference_points": 1000,
+    }
+    init_res = client.post("/favorite/init", json=payload).json()
+    session_id = init_res["session_id"]
+
+    # Cast votes creating a 2-way tie (candidate 0 vs candidate 1)
+    client.post(f"/favorite/vote/{session_id}", json={"dm_id": "dm1", "vote_idx": 0})
+    res_vote = client.post(f"/favorite/vote/{session_id}", json={"dm_id": "dm2", "vote_idx": 1})
+
+    assert res_vote.status_code == 200
+    data = res_vote.json()
+    assert data["is_ready"] is True
+    assert data["tie_state"] is not None
+    assert data["tie_state"]["strategy"] == "tie_breaker_avgproj"
+    assert data["tie_state"]["is_adjacent"] is True
+    assert "compromise_solution" in data["tie_state"]
+    assert data["tie_state"]["compromise_solution"]["fairness_criterion"] == "tie_breaker_average_projection"
+
+    # Advance iteration using the compromise solution
+    iter_res = client.post(f"/favorite/iterate/{session_id}")
+    assert iter_res.status_code == 200
+    iter_data = iter_res.json()
+    assert iter_data["current_iteration"] == 2
+    assert iter_data["phase"] == "decision"
+    assert len(iter_data["candidates"]) == 5
+
+
+def test_final_decision_adjacent_tie_breaker_avgproj():
+    """Test that an adjacent tie in the final decision phase completes the session with compromise solution."""
+    payload = {
+        "problem_id": 1,
+        "dm_ids": ["dm1", "dm2"],
+        "total_n_of_candidates": 5,
+        "candidate_generation_options": "mm",
+        "max_iterations": 1,  # Direct to final decision phase
+        "num_initial_reference_points": 1000,
+    }
+    init_res = client.post("/favorite/init", json=payload).json()
+    session_id = init_res["session_id"]
+    assert init_res["phase"] == "decision"
+
+    # Cast votes creating an adjacent tie in final decision phase
+    client.post(f"/favorite/vote/{session_id}", json={"dm_id": "dm1", "vote_idx": 0})
+    res_vote = client.post(f"/favorite/vote/{session_id}", json={"dm_id": "dm2", "vote_idx": 1})
+
+    assert res_vote.status_code == 200
+    data = res_vote.json()
+    assert data["status"] == "completed"
+    assert data["final_solution"] is not None
+    assert data["final_solution"]["fairness_criterion"] == "tie_breaker_average_projection"
+
+
+def test_dtlz2_multi_iteration_continuous():
+    """Test that DTLZ2 (continuous problem) runs multi-iteration IPR without reference point exhaustion."""
+    payload = {
+        "problem_id": 2,
+        "dm_ids": ["dm1", "dm2", "dm3"],
+        "total_n_of_candidates": 5,
+        "candidate_generation_options": "mm",
+        "max_iterations": 2,
+        "num_initial_reference_points": 1000,
+    }
+    init_res = client.post("/favorite/init", json=payload).json()
+    session_id = init_res["session_id"]
+    assert init_res["current_iteration"] == 1
+    assert len(init_res["candidates"]) == 5
+
+    # Vote for candidate 0 across all DMs
+    client.post(f"/favorite/vote/{session_id}", json={"dm_id": "dm1", "vote_idx": 0})
+    client.post(f"/favorite/vote/{session_id}", json={"dm_id": "dm2", "vote_idx": 0})
+    client.post(f"/favorite/vote/{session_id}", json={"dm_id": "dm3", "vote_idx": 0})
+
+    # Advance iteration
+    iter_res = client.post(f"/favorite/iterate/{session_id}")
+    assert iter_res.status_code == 200
+    iter_data = iter_res.json()
+    assert iter_data["current_iteration"] == 2
+    assert iter_data["phase"] == "decision"
+    assert len(iter_data["candidates"]) == 5
+
+
+def test_dm_preferred_solutions_adaptation_suboptimal_vote():
+    """Test that voting for a suboptimal candidate triggers minimum adjustment of MPS in the API."""
+    payload = {
+        "problem_id": 1,
+        "dm_ids": ["dm1", "dm2", "dm3"],
+        "total_n_of_candidates": 5,
+        "candidate_generation_options": "mm",
+        "max_iterations": 2,
+        "num_initial_reference_points": 50,
+    }
+    init_res = client.post("/favorite/init", json=payload).json()
+    session_id = init_res["session_id"]
+    candidates = init_res["candidates"]
+
+    state_res = client.get(f"/favorite/state/{session_id}").json()
+    orig_mps_dm1 = state_res["options"]["original_most_preferred_solutions"]["dm1"]
+    assert state_res["current_most_preferred_solutions"]["dm1"] == orig_mps_dm1
+    assert len(state_res["mps_history"]) == 1
+    assert len(state_res["mps_adjustments_history"]) == 0
+
+    problem = river_pollution_problem_discrete(five_objective_variant=False)
+    # Calculate utility of all 5 candidates for dm1
+    utils = [
+        calculate_dm_utility(problem, orig_mps_dm1, c["objective_values"])
+        for c in candidates
+    ]
+    best_idx = int(max(range(len(utils)), key=lambda i: utils[i]))
+    worst_idx = int(min(range(len(utils)), key=lambda i: utils[i]))
+    assert worst_idx != best_idx
+
+    # DM1 votes for worst candidate; DM2 and DM3 vote for best_idx to ensure a decisive majority winner
+    client.post(f"/favorite/vote/{session_id}", json={"dm_id": "dm1", "vote_idx": worst_idx})
+    client.post(f"/favorite/vote/{session_id}", json={"dm_id": "dm2", "vote_idx": best_idx})
+    client.post(f"/favorite/vote/{session_id}", json={"dm_id": "dm3", "vote_idx": best_idx})
+
+    # Advance iteration
+    iter_res = client.post(f"/favorite/iterate/{session_id}")
+    assert iter_res.status_code == 200
+
+    updated_state = client.get(f"/favorite/state/{session_id}").json()
+    # 1. Original MPS must remain unchanged
+    assert updated_state["options"]["original_most_preferred_solutions"]["dm1"] == orig_mps_dm1
+    # 2. History tracked
+    assert len(updated_state["mps_history"]) == 2
+    assert len(updated_state["mps_adjustments_history"]) == 1
+
+    dm1_meta = updated_state["mps_adjustments_history"][0]["dm1"]
+    assert dm1_meta["adjusted"] is True
+    assert dm1_meta["lambda_shift"] > 0.0
+
+    # 3. Current MPS adapted towards voted candidate
+    new_mps_dm1 = updated_state["current_most_preferred_solutions"]["dm1"]
+    assert new_mps_dm1 != orig_mps_dm1
+
+
+def test_dm_preferred_solutions_adaptation_consistent_vote():
+    """Test that voting for the top utility candidate leaves MPS unchanged (lambda=0)."""
+    payload = {
+        "problem_id": 1,
+        "dm_ids": ["dm1", "dm2"],
+        "total_n_of_candidates": 5,
+        "candidate_generation_options": "mm",
+        "max_iterations": 2,
+        "num_initial_reference_points": 50,
+    }
+    init_res = client.post("/favorite/init", json=payload).json()
+    session_id = init_res["session_id"]
+    candidates = init_res["candidates"]
+
+    state_res = client.get(f"/favorite/state/{session_id}").json()
+    orig_mps_dm1 = state_res["options"]["original_most_preferred_solutions"]["dm1"]
+
+    problem = river_pollution_problem_discrete(five_objective_variant=False)
+    utils = [
+        calculate_dm_utility(problem, orig_mps_dm1, c["objective_values"])
+        for c in candidates
+    ]
+    best_idx = int(max(range(len(utils)), key=lambda i: utils[i]))
+
+    # Both DMs vote for best_idx
+    client.post(f"/favorite/vote/{session_id}", json={"dm_id": "dm1", "vote_idx": best_idx})
+    client.post(f"/favorite/vote/{session_id}", json={"dm_id": "dm2", "vote_idx": best_idx})
+
+    iter_res = client.post(f"/favorite/iterate/{session_id}")
+    assert iter_res.status_code == 200
+
+    updated_state = client.get(f"/favorite/state/{session_id}").json()
+    assert updated_state["current_most_preferred_solutions"]["dm1"] == orig_mps_dm1
+    dm1_meta = updated_state["mps_adjustments_history"][0]["dm1"]
+    assert dm1_meta["adjusted"] is False
+    assert dm1_meta["lambda_shift"] == 0.0
+
+
 

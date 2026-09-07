@@ -12,16 +12,19 @@ from desdeo.api.models import (
     ProblemDB,
     User,
     UserRole,
-
 )
 from desdeo.api.models.gdm.gdm_aggregate import Group
 from desdeo.api.routers.user_authentication import get_password_hash
-from desdeo.problem.testproblems import river_pollution_problem_discrete, dtlz2
+from desdeo.problem.testproblems import dmitry_forest_problem_disc, dtlz2, river_pollution_problem_discrete
 
-problems = [river_pollution_problem_discrete(five_objective_variant=False), dtlz2(10, 3)]
+problems = [
+    river_pollution_problem_discrete(five_objective_variant=False),
+    dtlz2(10, 3),
+    dmitry_forest_problem_disc(),
+]
 
 num_analysts = 1
-num_dms = 3
+num_dms = 4
 
 usernames_analyst = [f"analyst{i + 1}" for i in range(num_analysts)]
 usernames_dm = [f"dm{i + 1}" for i in range(num_dms)]
@@ -55,32 +58,30 @@ if __name__ == "__main__":
                 user_analyst = User(
                     id=str(id_user),
                     username=user,
-                    password_hash=get_password_hash(
-                        "12345"
-                    ),
+                    password_hash=get_password_hash("12345"),
                     role=UserRole.analyst,
                     group="test",
-                    group_ids=[1],
+                    group_ids=[1, 2, 3],
                 )
                 session.add(user_analyst)
                 session.commit()
                 session.refresh(user_analyst)
                 id_user += 1
 
+            dm_ids = []
             for user in usernames_dm:
                 user_dm = User(
                     id=str(id_user),
                     username=user,
-                    password_hash=get_password_hash(
-                        "12345"
-                    ),
+                    password_hash=get_password_hash("12345"),
                     role=UserRole.dm,
                     group="test",
-                    group_ids=[1],
+                    group_ids=[1, 2, 3],
                 )
                 session.add(user_dm)
                 session.commit()
                 session.refresh(user_dm)
+                dm_ids.append(id_user)
                 id_user += 1
 
             rng = np.random.default_rng(seed=42)
@@ -97,7 +98,7 @@ if __name__ == "__main__":
             group = Group(
                 name=group_name,
                 owner_id=1,
-                user_ids=[2, 3, 4],
+                user_ids=dm_ids,
                 problem_id=1,
             )
 
@@ -106,6 +107,37 @@ if __name__ == "__main__":
             session.add(group)
             session.commit()
             session.refresh(group)
+
+            # Create a group 2 for GDM testing
+            group_name2 = "secondtingalinga"
+            group2 = Group(
+                name=group_name2,
+                owner_id=1,
+                user_ids=dm_ids,
+                problem_id=2,
+            )
+
+            group2.model_rebuild()
+
+            session.add(group2)
+            session.commit()
+            session.refresh(group2)
+
+            # Create group 3 for Dmitry Forest Problem (Discrete)
+            group_name3 = "forest_group"
+            group3 = Group(
+                name=group_name3,
+                owner_id=1,
+                user_ids=dm_ids,
+                problem_id=3,
+            )
+
+            group3.model_rebuild()
+
+            session.add(group3)
+            session.commit()
+            session.refresh(group3)
+
             session.close()
 
     else:

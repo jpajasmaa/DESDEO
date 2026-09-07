@@ -7,6 +7,7 @@ from desdeo.api.config import AuthConfig
 from desdeo.api.routers import (
     cumulus,
     enautilus,
+    favorite,
     generic,
     nautilus_navigator,
     nimbus,
@@ -18,7 +19,6 @@ from desdeo.api.routers import (
     user_authentication,
     utopia,
     xnimbus,
-    favorite,
 )
 from desdeo.api.routers.gdm import gdm_aggregate, gdm_base
 from desdeo.api.routers.gdm.gdm_score_bands import gdm_score_bands_routers

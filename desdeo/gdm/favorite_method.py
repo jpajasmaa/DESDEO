@@ -1,5 +1,4 @@
-"""The Favorite method, a general method for group decision making in multiobjective optimization."""
-
+import copy
 import random
 from typing import Literal
 
@@ -16,6 +15,7 @@ from desdeo.gdm.gdmtools import (
     alpha_fairness,
     get_top_n_fair_solutions,
     min_max_regret_no_impro,
+    regret_allDMs_no_impro,
 )
 from desdeo.gdm.voting_rules import majority_rule
 from desdeo.mcdm.nautilus_navigator import calculate_navigation_point
@@ -72,6 +72,7 @@ class GPRMOptions(pydantic.BaseModel):
 
 class IPR_Results(pydantic.BaseModel):
     """Results specific to iterative_pareto_representer applied with the Favorite method."""
+
     model_config = ConfigDict(use_attribute_docstrings=True)
 
     evaluated_points: list[_EvaluatedPoint]
@@ -128,6 +129,8 @@ class FavOptions(pydantic.BaseModel):
     """Options for the zooming strategy. Support more options later."""
     original_most_preferred_solutions: dict[str, dict[str, float]]
     """Dictionary of the original most preferred solutions for each decision maker."""
+    current_most_preferred_solutions: dict[str, dict[str, float]] | None = None
+    """Dictionary of the active most preferred solutions (adapted across iterations)."""
     total_n_of_candidates: int = Field(default=5, ge=1)
     """The total number of candidate solutions to present to the DMs."""
     votes: dict[str, int] | None = None
@@ -138,6 +141,8 @@ class FavOptions(pydantic.BaseModel):
     )
     tie_state: dict | None = None
     "Tracks possible revoting"
+    preferences_already_adapted: bool = False
+    """Flag indicating whether DM preferred solutions have already been adapted for this iteration."""
 
 
 class FavResults(pydantic.BaseModel):
@@ -199,7 +204,7 @@ class ProblemWrapper:
             _EvaluatedPoint(
                 reference_point=dict(zip(self.ideal.keys(), scaled_refp, strict=True)),
                 targets=scaled_objs,
-                objectives=objs
+                objectives=objs,
             )
         )
         return self.evaluated_points
@@ -341,12 +346,18 @@ def get_representative_set_IPR(problem: Problem, options: GPRMOptions, results_l
             for i in range(num_runs):
                 if (i + 1) % 10 == 0 or i == 0:
                     print(f"Run {i + 1}/{num_runs}")  # noqa: T201
-                reference_point, _ = choose_reference_point(refp, evaluated_points)
+                try:
+                    reference_point, _ = choose_reference_point(refp, evaluated_points)
+                except AssertionError as ae:
+                    if "No reference points available" in str(ae):
+                        print(f"IPR: Reference points fully explored after {len(evaluated_points)} evaluations.")  # noqa: T201
+                        break
+                    raise
                 evaluated_points = wrapped_problem.solve(reference_point)
             break
         except Exception as e:
-            print(f"IPR error: {repr(e)}")
-            break
+            print(f"IPR error: {e!r}")  # noqa: T201
+            continue
 
     ipr_res = IPR_Results(evaluated_points=evaluated_points)
 
@@ -516,20 +527,30 @@ def setup(
     new_tie_state = None
 
     orig_mps = options.original_most_preferred_solutions
-    # TODO: switching for real ideal and nadir.
+    if not options.current_most_preferred_solutions:
+        options.current_most_preferred_solutions = copy.deepcopy(orig_mps)
+
     fake_ideal, fake_nadir = problem.get_ideal_point(), problem.get_nadir_point()
-    # fake_ideal, fake_nadir = agg_aspbounds(orig_mps_list, problem)
     # first iteration
     if not results_list:
         if isinstance(options.GPRMoptions.method_options, IPR_Options):
             options.GPRMoptions.method_options.most_preferred_solutions = orig_mps
     else:
-        # TODO: currently assumes most_preferred solutions are set manually. To add them here.
-        # TODO: adapting mpses should be here above means or?
         if options.votes is None:
             raise ValueError("Votes must be provided for iterations after the first.")
         previous_results = results_list[-1]
         old_candidates = previous_results.fair_solutions
+
+        # Adapt DM preferred solutions if any DM voted for a non-optimal candidate
+        if not options.preferences_already_adapted:
+            adapted_mps, _ = adapt_all_dm_preferences(
+                problem=problem,
+                current_mps=options.current_most_preferred_solutions,
+                candidates=old_candidates,
+                votes=options.votes,
+            )
+            options.current_most_preferred_solutions = adapted_mps
+            options.preferences_already_adapted = True
 
         # Determine Winner using Majority Rule else Tie-Breaker
         winner_idx = majority_rule(votes=options.votes)
@@ -589,11 +610,12 @@ def favorite_method(problem: Problem, options: FavOptions, results_list: list[Fa
         fair_solutions.append(winner_solution)
 
     targets = pl.DataFrame([point.targets for point in gprm_results.raw_results.evaluated_points])
+    active_mps = options.current_most_preferred_solutions or options.original_most_preferred_solutions
     new_fair_solutions_list = find_group_solutions(
         problem,
         solutions=gprm_results.outputs,
         targets=targets,
-        most_preferred_solutions=options.original_most_preferred_solutions,
+        most_preferred_solutions=active_mps,
         fairness_criterion=options.candidate_generation_options,
     )
     fair_solutions.extend(new_fair_solutions_list)
@@ -772,10 +794,7 @@ def calculate_dist_to_hull(points_kminus: np.ndarray, hull: ConvexHull) -> np.nd
 
 
 def expand_and_generate_candidates(
-    winning_cluster_k: np.ndarray,
-    all_points_k: np.ndarray,
-    fraction_keep: float = 0.8,
-    num_new_points: int = 1000
+    winning_cluster_k: np.ndarray, all_points_k: np.ndarray, fraction_keep: float = 0.8, num_new_points: int = 1000
 ) -> np.ndarray:
     """Expands the region of interest around a winning cluster and generates new candidate solutions.
 
@@ -909,11 +928,15 @@ def select_final_candidates(
     winning_outputs_df = pl.DataFrame([p.objectives for p in winning_points])
     winning_targets_df = pl.DataFrame([p.targets for p in winning_points])
 
+    active_mps = (
+        fav_results.FavOptions.current_most_preferred_solutions
+        or fav_results.FavOptions.original_most_preferred_solutions
+    )
     fair_group_list = find_group_solutions(
         problem=problem,
         solutions=winning_outputs_df,
         targets=winning_targets_df,
-        most_preferred_solutions=fav_results.FavOptions.original_most_preferred_solutions,
+        most_preferred_solutions=active_mps,
         fairness_criterion=fav_results.FavOptions.candidate_generation_options,
     )
 
@@ -937,6 +960,189 @@ def select_final_candidates(
                 final_solutions[i].fairness_criterion = "final_hausdorff"
 
     return final_solutions
+
+
+def project_point_to_pareto_front(problem: Problem, point: dict[str, float]) -> dict[str, float]:
+    """Projects an aspiration or reference point onto the Pareto front using Achievement Scalarizing Function (ASF).
+
+    Args:
+        problem: DESDEO Problem object.
+        point: Dictionary of objective values representing the reference/aspiration point.
+
+    Returns:
+        dict[str, float]: The projected Pareto optimal objective values.
+    """
+    if problem.is_twice_differentiable:
+        scaled_problem, target = add_asf_diff(problem, "target", point)
+    else:
+        scaled_problem, target = add_asf_nondiff(problem, "target", point)
+
+    solver_class = guess_best_solver(scaled_problem)
+    solver = solver_class(scaled_problem)
+    results = solver.solve(target)
+    return results.optimal_objectives
+
+
+def calculate_dm_utility(
+    problem: Problem,
+    dm_mps: dict[str, float],
+    candidate_objectives: dict[str, float],
+) -> float:
+    """Calculates the utility of a candidate solution for a single DM using normalized one-sided regret.
+
+    Uses regret_allDMs_no_impro with ideal scaled to 0 and nadir scaled to 1.
+    Higher value represents higher utility for the DM.
+
+    Args:
+        problem: DESDEO Problem object.
+        dm_mps: Current most preferred solution for the DM.
+        candidate_objectives: Objective values of the candidate.
+
+    Returns:
+        float: Utility value.
+    """
+    ideal = problem.get_ideal_point()
+    nadir = problem.get_nadir_point()
+    obj_keys = list(candidate_objectives.keys())
+
+    # Map to [0, 1] minimization space
+    sol_norm = np.array([(candidate_objectives[k] - ideal[k]) / (nadir[k] - ideal[k]) for k in obj_keys])
+    mps_norm = np.array([(dm_mps[k] - ideal[k]) / (nadir[k] - ideal[k]) for k in obj_keys])
+
+    utilities = regret_allDMs_no_impro(sol_norm, [mps_norm])
+    return float(utilities[0])
+
+
+def minimum_adjustment_mps(
+    problem: Problem,
+    dm_mps: dict[str, float],
+    voted_candidate: dict[str, float],
+    all_candidates: list[dict[str, float]],
+    epsilon: float = 1e-4,
+    bisection_steps: int = 20,
+) -> tuple[dict[str, float], bool, float]:
+    """Updates a DM's preferred solution via minimum adjustment towards the voted candidate.
+
+    Note on Epsilon Margin:
+    - If the voted candidate's utility is already within epsilon of the maximum candidate utility
+      (u_voted >= max_other - epsilon), no adjustment is made and the DM's existing preferred solution
+      is kept in play.
+    - If adjustment is needed, binary search over lambda in [0, 1] on the line segment
+      z(lambda) = (1 - lambda) * dm_mps + lambda * voted_candidate finds the smallest lambda where
+      the projected point onto the Pareto front makes the voted candidate achieve strictly highest utility:
+      u(c_voted; z_proj) >= max_other(z_proj) + epsilon.
+
+    Args:
+        problem: DESDEO Problem object.
+        dm_mps: Current preferred solution of the DM.
+        voted_candidate: Objective values of the candidate the DM voted for.
+        all_candidates: List of objective values of all candidates presented in this iteration.
+        epsilon: Margin threshold to keep original in play and ensure strict preference after adjustment.
+        bisection_steps: Number of bisection iterations.
+
+    Returns:
+        tuple: (new_mps, was_adjusted, lambda_star)
+    """
+    # 1. Consistency check: Is voted_candidate already the best candidate under current dm_mps?
+    u_voted_initial = calculate_dm_utility(problem, dm_mps, voted_candidate)
+    competing_candidates = [
+        c for c in all_candidates
+        if not all(np.isclose(c[k], voted_candidate[k], atol=1e-7) for k in voted_candidate)
+    ]
+
+    if not competing_candidates:
+        return dm_mps, False, 0.0
+
+    max_other_initial = max(calculate_dm_utility(problem, dm_mps, c) for c in competing_candidates)
+
+    # If already the best candidate within epsilon margin, keep original in play
+    if u_voted_initial >= max_other_initial - epsilon:
+        return dm_mps, False, 0.0
+
+    # 2. Binary search over lambda in [0, 1]
+    low = 0.0
+    high = 1.0
+    best_proj = None
+
+    for _ in range(bisection_steps):
+        mid = (low + high) / 2.0
+        z_mid = {k: (1.0 - mid) * dm_mps[k] + mid * voted_candidate[k] for k in dm_mps}
+        z_proj = project_point_to_pareto_front(problem, z_mid)
+
+        u_v = calculate_dm_utility(problem, z_proj, voted_candidate)
+        u_max_others = max(calculate_dm_utility(problem, z_proj, c) for c in competing_candidates)
+
+        if u_v >= u_max_others + epsilon:
+            high = mid
+            best_proj = z_proj
+        else:
+            low = mid
+
+    if best_proj is None:
+        best_proj = project_point_to_pareto_front(problem, voted_candidate)
+        return best_proj, True, 1.0
+
+    return best_proj, True, float(high)
+
+
+def adapt_all_dm_preferences(
+    problem: Problem,
+    current_mps: dict[str, dict[str, float]],
+    candidates: list[FairSolution],
+    votes: dict[str, int],
+    epsilon: float = 1e-4,
+) -> tuple[dict[str, dict[str, float]], dict[str, dict]]:
+    """Adapts the preferred solutions of all DMs based on their cast votes and candidates.
+
+    Args:
+        problem: DESDEO Problem object.
+        current_mps: Current most preferred solutions for each DM.
+        candidates: List of FairSolution candidates presented to the DMs.
+        votes: Map of DM ID to candidate index voted for.
+        epsilon: Margin threshold.
+
+    Returns:
+        tuple: (updated_mps, adjustments_summary)
+    """
+    updated_mps = {}
+    adjustments_summary = {}
+    all_candidate_objs = [c.objective_values for c in candidates]
+
+    for dm_id, vote_idx in votes.items():
+        if dm_id not in current_mps:
+            continue
+
+        dm_current_pref = current_mps[dm_id]
+        if vote_idx < 0 or vote_idx >= len(candidates):
+            updated_mps[dm_id] = dm_current_pref
+            continue
+
+        voted_obj = candidates[vote_idx].objective_values
+        new_pref, was_adjusted, lam = minimum_adjustment_mps(
+            problem=problem,
+            dm_mps=dm_current_pref,
+            voted_candidate=voted_obj,
+            all_candidates=all_candidate_objs,
+            epsilon=epsilon,
+        )
+
+        updated_mps[dm_id] = new_pref
+        adjustments_summary[dm_id] = {
+            "was_adjusted": was_adjusted,
+            "adjusted": was_adjusted,
+            "lambda": lam,
+            "lambda_shift": lam,
+            "voted_candidate_idx": vote_idx,
+            "previous_mps": dm_current_pref,
+            "new_mps": new_pref,
+        }
+
+    # Retain any DMs who did not vote without changes
+    for dm_id in current_mps:
+        if dm_id not in updated_mps:
+            updated_mps[dm_id] = current_mps[dm_id]
+
+    return updated_mps, adjustments_summary
 
 
 def tie_breaker_avgproj(problem: Problem, votes: dict[str, int], candidates: list[FairSolution]) -> FairSolution:
@@ -968,18 +1174,9 @@ def tie_breaker_avgproj(problem: Problem, votes: dict[str, int], candidates: lis
     print(f"Tie detected. Calculated Average Reference Point: {avg_point}")  # noqa: T201
 
     # Project the average point to the Pareto front using ASF
-    if problem.is_twice_differentiable:
-        scaled_problem, target = add_asf_diff(problem, "target", avg_point)
-    else:
-        scaled_problem, target = add_asf_nondiff(problem, "target", avg_point)
+    projected_objectives = project_point_to_pareto_front(problem, avg_point)
 
-    solver_class = guess_best_solver(scaled_problem)
-    solver = solver_class(scaled_problem)
-    results = solver.solve(target)
-
-    projected_objectives = results.optimal_objectives
-
-    #  Return the new projected solution as the winning FairSolution
+    # Return the new projected solution as the winning FairSolution
     return FairSolution(
         objective_values=projected_objectives, fairness_criterion="tie_breaker_average_projection", fairness_value=0.0
     )

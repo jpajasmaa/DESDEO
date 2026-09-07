@@ -1,26 +1,28 @@
 <script lang="ts">
     import type { FairSolution } from './types';
 
-    let { 
-        candidate, 
-        index, 
-        onVote, 
-        disabled = false, 
-        isVoted = false, 
+    let {
+        candidate,
+        index,
+        onVote,
+        disabled = false,
+        isVoted = false,
         showVoteButton = false,
         isTiedCandidate = false,
         isDecisionPhase = false,
-        isFinalWinner = false
-    }: { 
-        candidate: FairSolution; 
-        index: number; 
-        onVote: (idx: number) => void; 
-        disabled?: boolean; 
+        isFinalWinner = false,
+        objectiveNameMap = {}
+    }: {
+        candidate: FairSolution;
+        index: number;
+        onVote: (idx: number) => void;
+        disabled?: boolean;
         isVoted?: boolean;
         showVoteButton?: boolean;
         isTiedCandidate?: boolean;
         isDecisionPhase?: boolean;
         isFinalWinner?: boolean;
+        objectiveNameMap?: Record<string, string>;
     } = $props();
 
     // Extract objective keys and values for clean rendering using standard objective_values
@@ -68,7 +70,7 @@
         <ul class="text-sm space-y-1">
             {#each objectives as [key, val]}
                 <li class="flex justify-between">
-                    <span class="font-medium text-gray-600">{key}:</span>
+                    <span class="font-medium text-gray-600">{objectiveNameMap[key] || key}:</span>
                     <span>{Number(val).toFixed(4)}</span>
                 </li>
             {/each}
@@ -76,7 +78,7 @@
     </div>
 
     {#if showVoteButton}
-        <button 
+        <button
             class="w-full py-2 rounded font-semibold text-white transition-colors {isVoted ? 'bg-green-600' : isTiedCandidate ? 'bg-amber-600 hover:bg-amber-700' : 'bg-blue-600 hover:bg-blue-700'} disabled:opacity-50 disabled:cursor-not-allowed"
             onclick={() => onVote(index)}
             disabled={disabled || isVoted}

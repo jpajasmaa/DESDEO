@@ -227,6 +227,12 @@ from .enautilus import (
     ENautilusStepResponse,
     ENautilusTreeNodeResponse,
 )
+from .gdm.favorite import (
+    FavoriteInitRequest,
+    FavoriteSessionDB,
+    FavoriteSessionState,
+    FavoriteVoteRequest,
+)
 from .gdm.gdm_aggregate import (
     Group,
     GroupCreateRequest,
@@ -260,12 +266,6 @@ from .gdm.gnimbus import (
     GNIMBUSSwitchPhaseResponse,
     OptimizationPreference,
     VotingPreference,
-)
-from .gdm.favorite import (
-    FavoriteInitRequest,
-    FavoriteSessionState,
-    FavoriteVoteRequest,
-    FavoriteSessionDB,
 )
 from .generic import (
     GenericIntermediateSolutionResponse,

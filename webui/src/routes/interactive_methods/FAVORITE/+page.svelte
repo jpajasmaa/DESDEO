@@ -2,11 +2,11 @@
     import { BaseLayout } from '$lib/components/custom/method_layout';
     import VisualizationsPanel from '$lib/components/custom/visualizations-panel/visualizations-panel.svelte';
     import CandidateCard from './CandidateCard.svelte';
-    import { 
-        initializeFavoriteSession, 
-        getFavoriteState, 
-        submitFavoriteVote, 
-        iterateFavoriteSession 
+    import {
+        initializeFavoriteSession,
+        getFavoriteState,
+        submitFavoriteVote,
+        iterateFavoriteSession
     } from './handler';
     import type { FavoriteSessionState } from './types';
     import { onMount, onDestroy } from 'svelte';
@@ -35,9 +35,9 @@
     // Available DMs: automatically derived from active session, or from group info, or default
     let groupDms = $derived<string[]>(
         session?.dm_ids ??
-        (data.group?.user_ids?.length 
+        (data.group?.user_ids?.length
             ? data.group.user_ids.map((_: any, i: number) => `dm${i + 1}`)
-            : ["dm1", "dm2", "dm3"])
+            : ["dm1", "dm2", "dm3", "dm4"])
     );
 
     let isDecisionPhase = $derived(
@@ -46,6 +46,12 @@
 
     let currentProblem = $derived(
         data.problems?.find((p: any) => Number(p.id) === Number(selectedProblemId))
+    );
+
+    let objectiveNameMap = $derived<Record<string, string>>(
+        Object.fromEntries(
+            (currentProblem?.objectives ?? []).map((o: any) => [o.symbol, o.name])
+        )
     );
 
     function startPolling() {
@@ -68,20 +74,40 @@
         const active_dms = [...groupDms];
         let mps_payload: Record<string, Record<string, number>> = {};
 
-        if (probId === 1) {
+        const probName = currentProblem?.name?.toLowerCase() ?? "";
+
+        if (probId === 1 || probName.includes("river")) {
             // Problem 1: Discrete River Pollution (4 objectives - all maximized)
             // Pareto optimal solutions from datasets/river_poll_4_objs.csv
             const defaultMps: Record<string, Record<string, number>> = {
                 "dm1": {"f1": 5.9066, "f2": 3.2894, "f3": 6.5792, "f4": -4.5460},
                 "dm2": {"f1": 5.4290, "f2": 3.0121, "f3": 7.2395, "f4": -0.9135},
                 "dm3": {"f1": 6.1623, "f2": 2.8839, "f3": 5.2575, "f4": -0.0045},
+                "dm4": {"f1": 5.8790, "f2": 3.3617, "f3": 6.6493, "f4": -6.6835},
             };
             active_dms.forEach((dm, i) => {
                 mps_payload[dm] = defaultMps[dm] || {
-                    "f1": 5.80 + (i * 0.1), 
-                    "f2": 3.10 + (i * 0.05), 
-                    "f3": 6.00 + (i * 0.2), 
+                    "f1": 5.80 + (i * 0.1),
+                    "f2": 3.10 + (i * 0.05),
+                    "f3": 6.00 + (i * 0.2),
                     "f4": -3.00 + (i * 0.5)
+                };
+            });
+        } else if (probId === 3 || probName.includes("forest") || probName.includes("dmitry")) {
+            // Problem 3: Dmitry Forest Problem (Discrete) (4 objectives - all maximized)
+            // Pareto optimal solutions from datasets/dmitry_forest_problem_non_dom_solns.csv
+            const defaultMps: Record<string, Record<string, number>> = {
+                "dm1": {"Rev": 249.5904, "HA": 12497.6850, "Carb": 2880.2038, "DW": 96.9443},
+                "dm2": {"Rev": 141.1089, "HA": 20224.8348, "Carb": 3952.1429, "DW": 211.6469},
+                "dm3": {"Rev": 86.2129, "HA": 18288.0717, "Carb": 4448.7892, "DW": 206.2755},
+                "dm4": {"Rev": 232.3387, "HA": 18328.0238, "Carb": 3347.8052, "DW": 186.4134},
+            };
+            active_dms.forEach((dm, i) => {
+                mps_payload[dm] = defaultMps[dm] || {
+                    "Rev": 150.0 + (i * 10),
+                    "HA": 18000.0 + (i * 500),
+                    "Carb": 3900.0 + (i * 100),
+                    "DW": 200.0 + (i * 5)
                 };
             });
         } else {
@@ -90,6 +116,7 @@
                 "dm1": {"f_1": 0.6666, "f_2": 0.6666, "f_3": 0.3333},
                 "dm2": {"f_1": 0.6666, "f_2": 0.3333, "f_3": 0.6666},
                 "dm3": {"f_1": 0.3333, "f_2": 0.6666, "f_3": 0.6666},
+                "dm4": {"f_1": 0.5774, "f_2": 0.5774, "f_3": 0.5774},
             };
             active_dms.forEach((dm, i) => {
                 mps_payload[dm] = defaultMps[dm] || {
@@ -106,7 +133,7 @@
             total_n_of_candidates: 5,
             candidate_generation_options: "mm",
             max_iterations: 3,
-            num_initial_reference_points: 50,
+            num_initial_reference_points: 1000,
             most_preferred_solutions: mps_payload
         });
 
@@ -196,7 +223,7 @@
 </div>
 
 <BaseLayout showLeftSidebar={true} showRightSidebar={false}>
-    
+
     {#snippet leftSidebar()}
         <div class="p-4 flex flex-col gap-6">
             <h2 class="text-xl font-bold border-b pb-2">Favorite Method</h2>
@@ -214,7 +241,7 @@
                     <div class="text-xs text-gray-500">
                         Configured with <strong>{groupDms.length} Decision Makers</strong>: {groupDms.join(", ")}
                     </div>
-                    <button 
+                    <button
                         class="bg-green-600 text-white py-2 rounded hover:bg-green-700 disabled:opacity-50 font-semibold"
                         onclick={handleInit}
                         disabled={isProcessing}
@@ -228,7 +255,7 @@
             {:else}
                 <div class="bg-gray-50 p-3 rounded border">
                     <p class="text-sm">
-                        <strong>Phase:</strong> 
+                        <strong>Phase:</strong>
                         <span class="font-bold text-indigo-700">
                             {session.status === 'completed' ? 'Completed' : isDecisionPhase ? 'Final Decision Phase' : 'Consensus-Reaching Phase'}
                         </span>
@@ -244,7 +271,7 @@
                     <ul class="text-sm space-y-1">
                         {#each session.dm_ids as dm}
                             <li>
-                                {dm}: 
+                                {dm}:
                                 {#if session.current_votes[dm] !== undefined}
                                     <span class="text-green-600 font-medium">✅ Voted (Cand {session.current_votes[dm] + 1})</span>
                                 {:else}
@@ -267,7 +294,7 @@
                         </div>
                     {:else}
                         {@const allVoted = Object.keys(session.current_votes).length === session.dm_ids.length}
-                        <button 
+                        <button
                             class="bg-purple-600 text-white py-2 rounded hover:bg-purple-700 disabled:opacity-50 font-semibold shadow"
                             onclick={handleIterate}
                             disabled={isProcessing || !allVoted || session.status === "revote_pending"}
@@ -287,9 +314,9 @@
         {#if session && currentProblem}
             <div class="p-4 flex flex-col gap-6 h-full overflow-y-auto">
                 <div class="h-64 border rounded shadow-sm bg-white p-2">
-                    <VisualizationsPanel 
-                        problem={currentProblem} 
-                        solutionsObjectiveValues={candidateObjectives} 
+                    <VisualizationsPanel
+                        problem={currentProblem}
+                        solutionsObjectiveValues={candidateObjectives}
                         previousPreferenceType="reference_point"
                         currentPreferenceType="reference_point"
                     />
@@ -318,6 +345,19 @@
                     </div>
                 {/if}
 
+                {#if session.tie_state?.strategy === "tie_breaker_avgproj"}
+                    {@const tiedIndices = session.tie_state?.tied_candidate_indices ?? []}
+                    {@const tiedListStr = tiedIndices.map((idx: number) => `Candidate ${idx + 1}`).join(" and ")}
+                    <div class="bg-blue-50 text-blue-900 p-4 rounded border border-blue-300 font-medium text-center shadow-sm">
+                        <span class="font-bold text-base">🤝 Adjacent Tie Detected between {tiedListStr}!</span>
+                        <p class="text-sm mt-1">
+                            {session.status === "completed"
+                                ? "A compromise solution was generated via Average Projection and chosen as the group consensus."
+                                : "A compromise solution was generated via Average Projection onto the Pareto front. Proceed to the next iteration to zoom around this compromise."}
+                        </p>
+                    </div>
+                {/if}
+
                 <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-4">
                     {#each session.candidates as candidate, i}
                         {@const tiedIndices = session.tie_state?.tied_candidate_indices ?? []}
@@ -330,9 +370,10 @@
                                 ? JSON.stringify(session.final_solution.objective_values) === JSON.stringify(candidate.objective_values)
                                 : session.tie_state?.final_winner_idx === i
                         )}
-                        <CandidateCard 
-                            {candidate} 
-                            index={i} 
+                        <CandidateCard
+                            {candidate}
+                            {objectiveNameMap}
+                            index={i}
                             onVote={handleVote}
                             showVoteButton={currentRole !== "analyst" && session.status !== "completed"}
                             isVoted={session.current_votes[currentRole] === i}
@@ -372,7 +413,7 @@
                     <tbody>
                         {#each Object.entries(session.final_solution.objective_values ?? {}) as [key, val]}
                             <tr class="border-b last:border-0 hover:bg-gray-50">
-                                <td class="p-2.5 font-medium text-gray-700">{key}</td>
+                                <td class="p-2.5 font-medium text-gray-700">{objectiveNameMap[key] || key}</td>
                                 <td class="p-2.5 font-mono text-gray-900 font-semibold">{Number(val).toFixed(4)}</td>
                             </tr>
                         {/each}
@@ -388,7 +429,7 @@
                             <th class="pb-2 pr-4 font-bold text-gray-700">Candidate</th>
                             <th class="pb-2 pr-4 font-bold text-gray-700">Fairness</th>
                             {#each Object.keys(session.candidates[0].objective_values ?? {}) as objKey}
-                                <th class="pb-2 pr-4 font-bold text-gray-700">{objKey}</th>
+                                <th class="pb-2 pr-4 font-bold text-gray-700">{objectiveNameMap[objKey] || objKey}</th>
                             {/each}
                         </tr>
                     </thead>

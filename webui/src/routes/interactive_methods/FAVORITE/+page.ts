@@ -1,7 +1,7 @@
 import type { PageLoad } from './$types';
-import { 
-  getProblemsInfoProblemAllInfoGet, 
-  getGroupInfoGdmGetGroupInfoPost 
+import {
+  getProblemsInfoProblemAllInfoGet,
+  getGroupInfoGdmGetGroupInfoPost
 } from '$lib/gen/endpoints/DESDEOFastAPI';
 import type { ProblemInfo, GroupPublic } from '$lib/gen/endpoints/DESDEOFastAPI';
 
@@ -40,7 +40,7 @@ export const load: PageLoad = async ({ url }) => {
     }
   }
 
-  return { 
+  return {
     problems,
     group
   };

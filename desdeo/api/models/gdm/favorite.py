@@ -29,7 +29,7 @@ class FavoriteInitRequest(BaseModel):
         description="Fairness criterion ('mm', 'utilitarian', 'nash').",
     )
     max_iterations: int = Field(default=3, ge=1, description="Total planned zooming iterations.")
-    num_initial_reference_points: int = Field(default=50, ge=1, description="IPR sample points.")
+    num_initial_reference_points: int = Field(default=1000, ge=1, description="IPR sample points.")
     most_preferred_solutions: dict[str, dict[str, float]] | None = Field(
         default=None,
         description="Optional manual MPS map (e.g., {'dm1': {'f_1': 0.1, 'f_2': 0.05}}). If None, fetched from DB.",
@@ -78,6 +78,9 @@ class FavoriteSessionState(BaseModel):
     candidates: list[FairSolution] = Field(default_factory=list)
     tie_state: dict | None = None
     final_solution: FairSolution | None = None
+    current_most_preferred_solutions: dict[str, dict[str, float]] | None = None
+    mps_history: list[dict[str, dict[str, float]]] = Field(default_factory=list)
+    mps_adjustments_history: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class FavoriteSessionDB(SQLModel, table=True):
@@ -89,4 +92,3 @@ class FavoriteSessionDB(SQLModel, table=True):
 
     # Store the entire FavoriteSessionState Pydantic object as a JSON blob
     state_data: dict[str, Any] = SQLField(default_factory=dict, sa_column=Column(JSON))
-

@@ -27,7 +27,12 @@ def dmitry_forest_problem_disc() -> Problem:
         / "tests/data/dmitry_discrete_repr/dmitry_forest_problem_non_dom_solns.csv"
     )
 
-    obj_names = ["Rev", "HA", "Carb", "DW"]
+    obj_definitions = [
+        ("Harvest Revenue", "Rev"),
+        ("Habitat Availability", "HA"),
+        ("Carbon Storage", "Carb"),
+        ("Deadwood Volume", "DW"),
+    ]
 
     var_name = "index"
 
@@ -51,14 +56,14 @@ def dmitry_forest_problem_disc() -> Problem:
 
     objectives = [
         Objective(
-            name=obj_name,
-            symbol=obj_name,
+            name=name,
+            symbol=symbol,
             objective_type=ObjectiveTypeEnum.data_based,
-            ideal=data[obj_name].max(),
-            nadir=data[obj_name].min(),
+            ideal=data[symbol].max(),
+            nadir=data[symbol].min(),
             maximize=True,
         )
-        for obj_name in obj_names
+        for name, symbol in obj_definitions
     ]
 
     discrete_def = DiscreteRepresentation(

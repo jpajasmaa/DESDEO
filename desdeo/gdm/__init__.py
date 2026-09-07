@@ -26,6 +26,10 @@ __all__ = [
     "expand_and_generate_candidates",
     "generate_next_iteration_mps",
     "select_final_candidates",
+    "calculate_dm_utility",
+    "project_point_to_pareto_front",
+    "minimum_adjustment_mps",
+    "adapt_all_dm_preferences",
 ]
 
 from .gdmtools import (
@@ -62,4 +66,8 @@ from .favorite_method import (
     expand_and_generate_candidates,
     generate_next_iteration_mps,
     select_final_candidates,
+    calculate_dm_utility,
+    project_point_to_pareto_front,
+    minimum_adjustment_mps,
+    adapt_all_dm_preferences,
 )
