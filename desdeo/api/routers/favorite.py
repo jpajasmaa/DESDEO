@@ -32,7 +32,13 @@ from desdeo.gdm.favorite_method import (
     tie_breaker_avgproj,
 )
 from desdeo.problem.schema import Problem
-from desdeo.problem.testproblems import dmitry_forest_problem_disc, dtlz2, river_pollution_problem_discrete
+from desdeo.problem.testproblems import (
+    dmitry_forest_problem_disc,
+    dtlz2,
+    metallurgical_application_discrete,
+    re34,
+    river_pollution_problem_discrete,
+)
 
 router = APIRouter(prefix="/favorite", tags=["Favorite Method"])
 
@@ -75,18 +81,21 @@ def get_session():
         yield session
 
 
-def fetch_dm_preferences_from_db(dm_ids: list[str], problem: Problem) -> dict[str, dict[str, float]]:
-    """Fetch or compute default reference points for decision makers based on ideal and nadir points."""
-    prob_name = getattr(problem, "name", "")
-    if prob_name == "The river pollution problem (Discrete)":
-        river_mps = {
+def fetch_dm_preferences_from_db(
+    dm_ids: list[str],
+    problem: Problem,
+) -> dict[str, dict[str, float]]:
+    """Fetches or generates realistic starting preferences for each DM."""
+    prob_name = problem.name or ""
+    if prob_name == "Discrete River Pollution (4 objectives)" or "river" in prob_name.lower():
+        default_mps = {
             "dm1": {"f1": 5.9066, "f2": 3.2894, "f3": 6.5792, "f4": -4.5460},
             "dm2": {"f1": 5.4290, "f2": 3.0121, "f3": 7.2395, "f4": -0.9135},
             "dm3": {"f1": 6.1623, "f2": 2.8839, "f3": 5.2575, "f4": -0.0045},
             "dm4": {"f1": 5.8790, "f2": 3.3617, "f3": 6.6493, "f4": -6.6835},
         }
         return {
-            dm_id: river_mps.get(
+            dm_id: default_mps.get(
                 dm_id,
                 {
                     "f1": 5.80 + (idx * 0.1),
@@ -116,6 +125,42 @@ def fetch_dm_preferences_from_db(dm_ids: list[str], problem: Problem) -> dict[st
             for idx, dm_id in enumerate(dm_ids)
         }
 
+    if "metall" in prob_name.lower():
+        metall_mps = {
+            "dm1": {"YS": 796.16, "UTS": 870.8688, "ELON": 19.5884, "CE": 0.3452, "COST": 6.4521},
+            "dm2": {"YS": 598.4819, "UTS": 1898.2363, "ELON": 22.892, "CE": 1.2768, "COST": 180.4054},
+            "dm3": {"YS": 557.6385, "UTS": 576.9771, "ELON": 41.1, "CE": 0.3058, "COST": 3.3261},
+            "dm4": {"YS": 638.744, "UTS": 612.2479, "ELON": 29.9485, "CE": 0.1782, "COST": 0.922},
+            "dm5": {"YS": 652.8835, "UTS": 1061.3929, "ELON": 30.7727, "CE": 0.5317, "COST": 7.108},
+        }
+        ideal = problem.get_ideal_point()
+        nadir = problem.get_nadir_point()
+        obj_keys = list(ideal.keys())
+        return {
+            dm_id: metall_mps.get(
+                dm_id,
+                {k: float(ideal[k] + (nadir[k] - ideal[k]) * (0.2 * (idx + 1))) for k in obj_keys},
+            )
+            for idx, dm_id in enumerate(dm_ids)
+        }
+
+    if "re34" in prob_name.lower() or "crash" in prob_name.lower():
+        re34_mps = {
+            "dm1": {"f_1": 1666.4106, "f_2": 6.9593, "f_3": 0.0923},
+            "dm2": {"f_1": 1675.4896, "f_2": 6.1428, "f_3": 0.264},
+            "dm3": {"f_1": 1674.3033, "f_2": 9.0811, "f_3": 0.0523},
+        }
+        ideal = problem.get_ideal_point()
+        nadir = problem.get_nadir_point()
+        obj_keys = list(ideal.keys())
+        return {
+            dm_id: re34_mps.get(
+                dm_id,
+                {k: float(ideal[k] + (nadir[k] - ideal[k]) * (0.2 * (idx + 1))) for k in obj_keys},
+            )
+            for idx, dm_id in enumerate(dm_ids)
+        }
+
     ideal = problem.get_ideal_point()
     nadir = problem.get_nadir_point()
     obj_keys = list(ideal.keys())
@@ -128,6 +173,8 @@ def fetch_dm_preferences_from_db(dm_ids: list[str], problem: Problem) -> dict[st
 RIVER_POLLUTION_PROBLEM_ID = 1
 DTLZ2_PROBLEM_ID = 2
 DMITRY_FOREST_PROBLEM_ID = 3
+METALLURGICAL_PROBLEM_ID = 4
+RE34_PROBLEM_ID = 5
 
 
 def get_problem_instance(problem_id: int, db: Session) -> Problem:
@@ -144,6 +191,14 @@ def get_problem_instance(problem_id: int, db: Session) -> Problem:
         problem_db and problem_db.name and ("forest" in problem_db.name.lower() or "dmitry" in problem_db.name.lower())
     ):
         return dmitry_forest_problem_disc()
+    if problem_id == METALLURGICAL_PROBLEM_ID or (
+        problem_db and problem_db.name and "metall" in problem_db.name.lower()
+    ):
+        return metallurgical_application_discrete()
+    if problem_id == RE34_PROBLEM_ID or (
+        problem_db and problem_db.name and ("re34" in problem_db.name.lower() or "crash" in problem_db.name.lower())
+    ):
+        return re34()
 
     if not problem_db:
         raise HTTPException(status_code=404, detail=f"Problem ID {problem_id} not found in DB.")
@@ -263,7 +318,7 @@ def _handle_revote_completion(state: FavoriteSessionState) -> None:
 
 
 @router.post("/vote/{session_id}")
-async def submit_favorite_vote(
+async def submit_favorite_vote(  # noqa: C901
     session_id: str,
     vote: FavoriteVoteRequest,
     db: Annotated[Session, Depends(get_session)],
@@ -312,7 +367,7 @@ async def submit_favorite_vote(
                 is_adjacent = False
                 compromise_solution = None
 
-                if len(top_candidates) == 2:
+                if len(top_candidates) == 2:  # noqa: PLR2004
                     prev_results = state.results_history[-1]
                     pts_mat, _, labels = cluster_points(prev_results)
                     idx_a, idx_b = top_candidates[0], top_candidates[1]
@@ -425,9 +480,7 @@ async def iterate_favorite_session(
         compromise_sol = FairSolution(**compromise_dict)
         prev_results = state.results_history[-1]
         all_points = prev_results.GPRMResults.raw_results.evaluated_points
-        _, new_labels, winning_idx = recluster_for_tie_breaker(
-            all_points, state.candidates, compromise_sol
-        )
+        _, new_labels, winning_idx = recluster_for_tie_breaker(all_points, state.candidates, compromise_sol)
         labels = new_labels
     elif state.tie_state and "resolved_winner_idx" in state.tie_state:
         winning_idx = state.tie_state["resolved_winner_idx"]
@@ -493,9 +546,7 @@ async def iterate_favorite_session(
         state.current_votes = {}
         state.tie_state = None
         state.status = "voting"
-        state.current_most_preferred_solutions = (
-            new_results.FavOptions.current_most_preferred_solutions or adapted_mps
-        )
+        state.current_most_preferred_solutions = new_results.FavOptions.current_most_preferred_solutions or adapted_mps
 
         if state.current_iteration >= state.max_iterations:
             state.phase = "decision"

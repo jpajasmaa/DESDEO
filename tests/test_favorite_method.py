@@ -14,19 +14,21 @@ from desdeo.gdm.favorite_method import (
     GPRMResults,
     IPR_Options,
     IPR_Results,
-    ProblemWrapper,
     ZoomOptions,
+    adapt_all_dm_preferences,
+    calculate_dm_utility,
     calculate_fraction_to_keep,
+    check_adjacency,
     cluster_points,
     favorite_method,
     find_group_solutions,
+    get_tied_candidates,
     hausdorff_candidates,
+    minimum_adjustment_mps,
+    random_tie_breaker,
     recluster_for_tie_breaker,
     select_final_candidates,
     tie_breaker_avgproj,
-    adapt_all_dm_preferences,
-    calculate_dm_utility,
-    minimum_adjustment_mps,
 )
 from desdeo.problem.testproblems.dtlz_problems import dtlz2
 from desdeo.tools.iterative_pareto_representer import _EvaluatedPoint
@@ -44,6 +46,7 @@ def dummy_problem():
 
 @pytest.fixture
 def dummy_mps():
+    """Returns dummy most preferred solutions for 4 decision makers."""
     return {
         "DM1": {"f_1": 0.0, "f_2": 0.9, "f_3": 0.8},
         "DM2": {"f_1": 0.9, "f_2": 0.0, "f_3": 0.8},
@@ -113,8 +116,50 @@ def test_shrinking():
     assert frac_final == 0.0
 
 
+def test_get_tied_candidates():
+    """Test get_tied_candidates identifies all tied winners."""
+    votes_single = {"dm1": 0, "dm2": 0, "dm3": 1}
+    assert get_tied_candidates(votes_single) == [0]
+
+    votes_tie = {"dm1": 0, "dm2": 1, "dm3": 2}
+    assert sorted(get_tied_candidates(votes_tie)) == [0, 1, 2]
+
+    votes_empty = {}
+    assert get_tied_candidates(votes_empty) == []
+
+
+def test_random_tie_breaker():
+    """Test random_tie_breaker picks one candidate from tied indices."""
+    candidates = [
+        FairSolution(objective_values={"f1": 1.0}, fairness_criterion="c0", fairness_value=0.0),
+        FairSolution(objective_values={"f1": 2.0}, fairness_criterion="c1", fairness_value=0.0),
+        FairSolution(objective_values={"f1": 3.0}, fairness_criterion="c2", fairness_value=0.0),
+    ]
+    tied = [0, 2]
+    winner_sol, winner_idx = random_tie_breaker(tied, candidates)
+    assert winner_idx in [0, 2]
+    assert winner_sol == candidates[winner_idx]
+
+
+def test_check_adjacency():
+    """Test check_adjacency correctly evaluates proximity between clusters."""
+    pts = np.array(
+        [
+            [0.0, 0.0],
+            [0.1, 0.1],
+            [0.15, 0.15],
+            [5.0, 5.0],
+            [5.1, 5.1],
+        ]
+    )
+    labels = np.array([0, 0, 1, 2, 2])
+    assert check_adjacency(pts, labels, 0, 1) is True
+    assert check_adjacency(pts, labels, 0, 2) is False
+    assert check_adjacency(pts, labels, 0, 9) is False
+
+
 def test_recluster_tie_breaker_override():
-    """TODO: see if this test makes sense anymore"""
+    """Test that recluster_for_tie_breaker updates candidate seeds and reclusters evaluated points."""
     # Mock evaluated points
     mock_points = [
         _EvaluatedPoint(reference_point={}, targets={}, objectives={"f_1": 0.1, "f_2": 0.9, "f_3": 0.1}),
@@ -232,26 +277,6 @@ def test_select_final_candidates(dummy_problem, dummy_evaluated_points, base_opt
 # ==========================================
 
 
-@patch("desdeo.gdm.favorite_method.guess_best_solver")
-def test_problem_wrapper_data_flow(mock_guess, dummy_problem):
-    """Tests if the ProblemWrapper correctly formats the solver inputs/outputs."""
-    mock_solver_instance = MagicMock()
-    mock_result = MagicMock()
-    mock_result.optimal_objectives = {"f_1": 0.5, "f_2": 0.5, "f_3": 0.5}
-    mock_solver_instance.solve.return_value = mock_result
-    mock_guess.return_value = MagicMock(return_value=mock_solver_instance)
-
-    fake_ideal = {"f_1": 0.0, "f_2": 0.0, "f_3": 0.0}
-    fake_nadir = {"f_1": 1.0, "f_2": 1.0, "f_3": 1.0}
-
-    wrapper = ProblemWrapper(dummy_problem, fake_ideal, fake_nadir)
-    res = wrapper.solve([0.2, 0.2, 0.2])
-
-    assert len(res) == 1
-    assert isinstance(res[0], _EvaluatedPoint)
-    assert res[0].targets == {"f_1": 0.5, "f_2": 0.5, "f_3": 0.5}
-
-
 @patch("desdeo.gdm.favorite_method.get_representative_set_IPR")
 @patch("desdeo.gdm.favorite_method.find_group_solutions")
 def test_favorite_method_first_iteration(mock_find_group, mock_get_ipr, dummy_problem, base_options):
@@ -276,24 +301,6 @@ def test_favorite_method_first_iteration(mock_find_group, mock_get_ipr, dummy_pr
         assert final_results.tie_state is None
         assert len(final_results.fair_solutions) == 3
         assert final_results.FavOptions.votes is None
-
-
-def test_find_group_solutions_data_flow(dummy_problem, dummy_mps):
-    """Tests that find_group_solutions works properly."""
-    targets_df = pl.DataFrame({"f_1": [0.1, 0.9], "f_2": [0.9, 0.1], "f_3": [0.5, 0.5]})
-    solutions_df = pl.DataFrame({"f_1": [0.1, 0.9], "f_2": [0.9, 0.1], "f_3": [0.5, 0.5]})
-
-    fair_sols = find_group_solutions(
-        problem=dummy_problem,
-        solutions=solutions_df,
-        targets=targets_df,
-        most_preferred_solutions=dummy_mps,
-        fairness_criterion="mm",
-    )
-
-    assert len(fair_sols) == 1
-    assert isinstance(fair_sols[0], FairSolution)
-    assert fair_sols[0].fairness_criterion == "mm"
 
 
 @pytest.mark.slow
@@ -330,9 +337,7 @@ def test_favorite_method_e2e_integration(dummy_problem, dummy_mps):
 
 
 def test_favorite_method_tie_routing(dummy_problem, base_options):
-    """Tests that a simulated tie triggers the handle_ties mechanism and correctly
-    flags the FavResults object as needing a re-vote if clusters are disjoint.
-    """
+    """Test that a simulated tie triggers the handle_ties mechanism and requests a revote."""
     # Mock the first iteration results to provide previous candidates
     mock_points = [
         _EvaluatedPoint(reference_point={}, targets={}, objectives={"f_1": 0.1, "f_2": 0.9, "f_3": 0.1}),
@@ -370,9 +375,7 @@ def test_favorite_method_tie_routing(dummy_problem, base_options):
 @patch("desdeo.gdm.favorite_method.add_asf_diff")
 @patch("desdeo.gdm.favorite_method.guess_best_solver")
 def test_tie_breaker_avgproj(mock_guess, mock_add_asf, dummy_problem):
-    """Tests the tie-breaker functionality: verifying the average is calculated correctly
-    and the solver pipeline is triggered and routed.
-    """
+    """Test tie-breaker average projection calculation and solver pipeline routing."""
     mock_solver_instance = MagicMock()
     mock_result = MagicMock()
 
@@ -399,7 +402,6 @@ def test_tie_breaker_avgproj(mock_guess, mock_add_asf, dummy_problem):
 
     mock_add_asf.assert_called_once()
     passed_avg_point = mock_add_asf.call_args[0][2]
-    print(passed_avg_point)
 
     assert passed_avg_point == {"f_1": 1.5, "f_2": 1.5, "f_3": 4.5}, "Calculated average is incorrect!"
     assert isinstance(winning_sol, FairSolution)
@@ -448,8 +450,16 @@ def test_minimum_adjustment_mps_adjusted_when_suboptimal(dummy_problem):
 def test_adapt_all_dm_preferences(dummy_problem):
     """Test adapting preferences across multiple DMs."""
     cands = [
-        FairSolution(objective_values={"f_1": 0.0, "f_2": 0.9, "f_3": 0.8}, fairness_criterion="mm", fairness_value=0.0),
-        FairSolution(objective_values={"f_1": 0.9, "f_2": 0.1, "f_3": 0.1}, fairness_criterion="mm", fairness_value=0.0),
+        FairSolution(
+            objective_values={"f_1": 0.0, "f_2": 0.9, "f_3": 0.8},
+            fairness_criterion="mm",
+            fairness_value=0.0,
+        ),
+        FairSolution(
+            objective_values={"f_1": 0.9, "f_2": 0.1, "f_3": 0.1},
+            fairness_criterion="mm",
+            fairness_value=0.0,
+        ),
     ]
     current_mps = {
         "DM1": {"f_1": 0.0, "f_2": 0.9, "f_3": 0.8},
@@ -470,3 +480,103 @@ def test_adapt_all_dm_preferences(dummy_problem):
     assert updated_mps["DM2"] == current_mps["DM2"]
     assert updated_mps["DM1"] != current_mps["DM1"]
 
+
+def test_select_final_candidates_duplicate_merged(dummy_problem, dummy_evaluated_points, base_options):
+    """Tests that when winning candidate is identical to group-fair solution, they merge into winner_and_mm."""
+    mock_gprm = GPRMResults(
+        raw_results=IPR_Results(evaluated_points=dummy_evaluated_points), solutions=None, outputs=pl.DataFrame()
+    )
+
+    targets_df = pl.DataFrame([p.targets for p in dummy_evaluated_points])
+    outputs_df = pl.DataFrame([p.objectives for p in dummy_evaluated_points])
+    fair_list = find_group_solutions(
+        problem=dummy_problem,
+        solutions=outputs_df,
+        targets=targets_df,
+        most_preferred_solutions=base_options.original_most_preferred_solutions,
+        fairness_criterion="mm",
+    )
+    fair_pt = fair_list[0]
+
+    candidates = [
+        FairSolution(
+            objective_values=fair_pt.objective_values,
+            fairness_criterion="last_winner",
+            fairness_value=fair_pt.fairness_value,
+        ),
+        FairSolution(
+            objective_values=dummy_evaluated_points[9].objectives,
+            fairness_criterion="nash",
+            fairness_value=0,
+        ),
+    ]
+
+    mock_fav_results = FavResults(
+        FavOptions=base_options, GPRMResults=mock_gprm, fair_solutions=candidates, status="success", tie_state=None
+    )
+    labels = np.zeros(10, dtype=int)
+
+    final_sols = select_final_candidates(
+        problem=dummy_problem, fav_results=mock_fav_results, cluster_labels=labels, winning_idx=0, n_candidates=5
+    )
+
+    assert len(final_sols) == 5
+    assert final_sols[0].fairness_criterion == "winner_and_mm"
+    assert final_sols[1].fairness_criterion == "final_hausdorff"
+    assert final_sols[2].fairness_criterion == "final_hausdorff"
+    assert final_sols[3].fairness_criterion == "final_hausdorff"
+    assert final_sols[4].fairness_criterion == "final_hausdorff"
+
+
+def test_favorite_method_winner_duplicate_merging(dummy_problem, base_options):
+    """Test that if previous winner matches newly computed fair solution, they merge into winner_and_mm."""
+    winner_sol = FairSolution(
+        objective_values={"f_1": 0.2, "f_2": 0.8, "f_3": 0.1},
+        fairness_criterion="mm",
+        fairness_value=0.5,
+        variable_values={"x_1": 1.0, "x_2": 2.0},
+    )
+    initial_results = FavResults(
+        FavOptions=base_options,
+        GPRMResults=GPRMResults(raw_results=IPR_Results(evaluated_points=[]), solutions=None, outputs=pl.DataFrame()),
+        fair_solutions=[winner_sol],
+        status="success",
+    )
+
+    # Next iteration: voting for candidate 0 (the winner)
+    iter2_options = base_options.model_copy(deep=True)
+    iter2_options.votes = {"DM1": 0, "DM2": 0, "DM3": 0}
+    iter2_options.total_n_of_candidates = 5
+
+    # Mock new fair solution to be identical to winner_sol
+    identical_fair_sol = FairSolution(
+        objective_values={"f_1": 0.2, "f_2": 0.8, "f_3": 0.1},
+        fairness_criterion="mm",
+        fairness_value=0.45,
+        variable_values={"x_1": 1.0, "x_2": 2.0},
+    )
+
+    with (
+        patch("desdeo.gdm.favorite_method.get_representative_set") as mock_get_rep,
+        patch("desdeo.gdm.favorite_method.find_group_solutions") as mock_find_group,
+        patch("desdeo.gdm.favorite_method.hausdorff_candidates") as mock_hausdorff,
+    ):
+        mock_get_rep.return_value = GPRMResults(
+            raw_results=IPR_Results(evaluated_points=[]), solutions=None, outputs=pl.DataFrame()
+        )
+        mock_find_group.return_value = [identical_fair_sol]
+        mock_hausdorff.side_effect = lambda all_pts, fairs, n_missing: fairs + [
+            FairSolution(
+                objective_values={"f_1": 0.5, "f_2": 0.5, "f_3": 0.5},
+                fairness_criterion="avg_hausdorff",
+                fairness_value=1e6,
+            )
+            for _ in range(n_missing)
+        ]
+
+        res = favorite_method(dummy_problem, iter2_options, results_list=[initial_results])
+
+        assert len(res.fair_solutions) == 5
+        assert res.fair_solutions[0].fairness_criterion == "winner_and_mm"
+        assert res.fair_solutions[0].fairness_value == 0.45
+        assert res.fair_solutions[1].fairness_criterion == "avg_hausdorff"

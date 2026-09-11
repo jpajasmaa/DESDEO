@@ -110,6 +110,8 @@
 	};
 	// optional map of labels for each data index for tooltip display on hover
 	export let lineLabels: { [key: string]: string } = {}; // Map of data index to label
+	// Optional custom colors for each data line
+	export let customLineColors: string[] = [];
 	// Index of currently selected line (null = no selection)
 	export let selectedIndex: number | null = null;
 	// indexes for the case where multiple lines can be selected
@@ -282,15 +284,21 @@
 			// Set stroke color - selected lines get theme color, other lines are thinner and color lighter variant
 			.attr('stroke', (d, i) => {
 				const passes = passesFilters(d);
-				if (!passes) return '#93c5fd'; // Hidden lines are lighter color, tailwind sky 700
+				const hasCustom = customLineColors && customLineColors[i];
+				if (!passes) return hasCustom ? '#cbd5e1' : '#93c5fd';
+
+				if (hasCustom) {
+					return customLineColors[i];
+				}
 
 				if (isSelected(i)) return '#3b82f6'; // Selected line uses primary color, tailwind blue 500
 				return '#93c5fd'; // Non-selected lines are lighter color
 			})
 			// Set stroke width - selected line is slightly thicker
 			.attr('stroke-width', (d, i) => {
-				if (isSelected(i)) return options.strokeWidth + 1; // Selected line is thicker
-				return options.strokeWidth; // Normal thickness for others
+				const hasCustom = customLineColors && customLineColors[i];
+				if (isSelected(i)) return options.strokeWidth + (hasCustom ? 2 : 1);
+				return hasCustom ? options.strokeWidth + 1 : options.strokeWidth;
 			});
 		// Move selected lines to front by reordering DOM
 		lines.each(function (d, i) {
@@ -883,8 +891,9 @@
 					if (!passesFilters(d)) return; // Only highlight visible lines
 
 					const index = data.indexOf(d);
+					const hasCustom = customLineColors && customLineColors[index];
 					// Temporarily increase stroke width on hover
-					d3.select(this).attr('stroke-width', options.strokeWidth + 2);
+					d3.select(this).attr('stroke-width', options.strokeWidth + (hasCustom ? 3 : 2));
 
 					// Only show tooltip if there's a label
 					if (lineLabels[index]) {
@@ -897,11 +906,13 @@
 				})
 				.on('mouseout', function (event, d) {
 					const index = data.indexOf(d);
+					const hasCustom = customLineColors && customLineColors[index];
+					const baseWidth = hasCustom ? options.strokeWidth + 1 : options.strokeWidth;
 
 					// Restore original stroke width
 					d3.select(this).attr(
 						'stroke-width',
-						isSelected(index) ? options.strokeWidth + 1 : options.strokeWidth
+						isSelected(index) ? baseWidth + 1 : baseWidth
 					);
 					// Hide tooltip
 					tooltip.transition().duration(500).style('opacity', 0);

@@ -2,7 +2,7 @@ export interface FairSolution {
   fairness_criterion: string;
   fairness_value: number;
   objective_values: Record<string, number>;
-  objectives?: Record<string, number>;
+  variable_values?: Record<string, number> | null;
 }
 
 export interface FavoriteInitRequest {
@@ -40,4 +40,7 @@ export interface FavoriteSessionState {
   final_solution?: FairSolution | null;
   options?: Record<string, any>;
   results_history?: any[];
+  current_most_preferred_solutions?: Record<string, Record<string, number>> | null;
+  mps_history?: Array<Record<string, Record<string, number>>>;
+  mps_adjustments_history?: Array<Record<string, any>> | null;
 }

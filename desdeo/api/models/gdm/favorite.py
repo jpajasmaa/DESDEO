@@ -28,7 +28,7 @@ class FavoriteInitRequest(BaseModel):
         default="mm",
         description="Fairness criterion ('mm', 'utilitarian', 'nash').",
     )
-    max_iterations: int = Field(default=3, ge=1, description="Total planned zooming iterations.")
+    max_iterations: int = Field(default=5, ge=1, description="Total planned zooming iterations.")
     num_initial_reference_points: int = Field(default=1000, ge=1, description="IPR sample points.")
     most_preferred_solutions: dict[str, dict[str, float]] | None = Field(
         default=None,

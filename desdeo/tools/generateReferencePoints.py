@@ -4,7 +4,7 @@ from itertools import product
 
 import numpy as np
 from numba import njit
-from scipy.spatial import ConvexHull
+from scipy.spatial import ConvexHull, QhullError
 
 
 def normalize(vectors):
@@ -50,17 +50,17 @@ def rotate(initial_vector, rotated_vector, other_vectors):
     return np.matmul(other_vectors, np.transpose(reflection_matrix))
 
 
-def get_reference_hull(num_dims, reference_points):
-    """Get the convex hull of the valid reference points for IPA.
+def get_reference_hull(
+    num_dims: int, reference_points: np.ndarray | None
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, ConvexHull]:
+    """Find the convex hull of valid reference points.
 
-    This algorithm generates the vertices of the unit hypercube in the (num_dims)-dimensional space.
-    Then, the vertices are projected onto the plane perpendicular to the largest space diagonal (vertex first parallel
-    projection) and rotated such that the plane is perpendular to one of the axes. Then, the points are are flattened
-    to (num_dims-1)-dimensional space. A convex hull is then constructed from the projected vertices, and a bounding box
+    Reference points can be generated anywhere within this convex hull. Furthermore, a bounding box
     is constructed around the convex hull.
 
     Args:
         num_dims (int): The number of dimensions of the space in which the reference points are generated.
+        reference_points (np.ndarray | None): The reference points to form the convex hull, or None.
 
     Returns:
         np.ndarray: A (2) x (num_dims-1) array of the bounding box. Reference points are guaranteed to be within
@@ -70,13 +70,32 @@ def get_reference_hull(num_dims, reference_points):
         np.ndarray: A (num_dims-1) array of the constants of the hyperplanes defining the convex hull. See above.
         scipy.spatial.ConvexHull: The convex hull of the projected vertices/valid reference points.
     """
+    # TODO: [BIG FIX NEEDED] Qhull Simplex Dimensionality Limitation:
+    # When generating reference points in convex_hull mode, the reference points in M-dimensional
+    # space are projected via `rotate_in` onto an (M-1)-dimensional hyperplane.
+    # scipy.spatial.ConvexHull requires at least (M-1) + 1 = M affinely independent points to
+    # construct an initial simplex.
+    # If len(DMs) < M (e.g. 4 DMs in a 5-objective problem, or 2 DMs in a 3-objective problem),
+    # Qhull raises: QhullError: "not enough points to construct initial simplex".
+    # Permanent future fix: implement a lower-dimensional affine subspace projection (or PCA)
+    # to sample along the lower-dimensional affine hull of the DMs' preferences.
+    # Safety fallback: if len(vertices) < num_dims or QhullError occurs, expand the
+    # reference points to span the hyper-rectangle (bounding box) corners of the DMs' preference range,
+    # ensuring ConvexHull always receives 2^num_dims non-degenerate vertices.
+    degenerate_tol = 1e-6
+    padding = 1e-4
+
     if reference_points is None:
         vertices = np.array(list(product([0, 1], repeat=num_dims)))
-    # OPTION 1: give min and max of each objectives from the DMs prefs to rotate in
-
-    # OPTION 2: give normalized RPs from the DMs to the rotate in
     else:
         vertices = reference_points
+        if len(vertices) < num_dims:
+            mins = np.min(vertices, axis=0)
+            maxs = np.max(vertices, axis=0)
+            diff = maxs - mins
+            maxs = np.where(diff < degenerate_tol, maxs + padding, maxs)
+            mins = np.where(diff < degenerate_tol, mins - padding, mins)
+            vertices = np.array(list(product(*zip(mins, maxs, strict=True))))
 
     # Project vertices onto plane perpendicular to largest space diagonal, rotate to make one of the objectives zero.
     # Then flatten to (num_dims-1) dimensions.
@@ -84,7 +103,18 @@ def get_reference_hull(num_dims, reference_points):
 
     bounding_box = np.array([np.min(rotated_vertices, axis=0), np.max(rotated_vertices, axis=0)])
 
-    hull = ConvexHull(rotated_vertices)
+    try:
+        hull = ConvexHull(rotated_vertices)
+    except QhullError:
+        mins = np.min(reference_points, axis=0)
+        maxs = np.max(reference_points, axis=0)
+        diff = maxs - mins
+        maxs = np.where(diff < degenerate_tol, maxs + padding, maxs)
+        mins = np.where(diff < degenerate_tol, mins - padding, mins)
+        vertices = np.array(list(product(*zip(mins, maxs, strict=True))))
+        rotated_vertices = rotate_in(vertices)
+        bounding_box = np.array([np.min(rotated_vertices, axis=0), np.max(rotated_vertices, axis=0)])
+        hull = ConvexHull(rotated_vertices)
 
     a, b = get_hull_equations(hull)  # A, b
 
@@ -141,7 +171,9 @@ def get_hull_equations(hull: ConvexHull) -> tuple[np.ndarray, np.ndarray]:
 
 
 def generate_points(
-    num_points: int, num_dims: int, reference_points: np.ndarray | None,
+    num_points: int,
+    num_dims: int,
+    reference_points: np.ndarray | None,
 ) -> tuple[
     np.ndarray,
     np.ndarray,
@@ -166,9 +198,8 @@ def generate_points(
     Returns:
         np.ndarray: A (num_points) x (num_dims-1) array of reference points.
     """
-
-    bounding_box, A, b, _ = get_reference_hull(num_dims, reference_points)
-    points = numba_random_gen(num_points, bounding_box, A, b)
+    bounding_box, a_mat, b, _ = get_reference_hull(num_dims, reference_points)
+    points = numba_random_gen(num_points, bounding_box, a_mat, b)
     # Project vertices onto plane perpendicular to largest space diagonal
     points_rotated = rotate_out(points)
     return points, points_rotated

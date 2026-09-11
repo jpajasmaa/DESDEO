@@ -26,11 +26,108 @@
     let isProcessing = $state(false);
     let pollInterval: ReturnType<typeof setInterval>;
 
-    let candidateObjectives = $derived<number[][]>(
-        session?.candidates
-            ? session.candidates.map((c) => Object.values(c.objective_values ?? {}))
-            : []
+    // Analyst View Mode: "candidates" (default) | "current_mps" | "original_mps"
+    let analystViewMode = $state<"candidates" | "current_mps" | "original_mps">("candidates");
+
+    // Enforce default candidates view for non-analysts
+    let activeViewMode = $derived<"candidates" | "current_mps" | "original_mps">(
+        currentRole === "analyst" ? analystViewMode : "candidates"
     );
+
+    // DM Palette for up to 5 DMs
+    const DM_PALETTE = [
+        { stroke: "#7c3aed", fill: "#f5f3ff", text: "#6d28d9", border: "#c4b5fd", pill: "bg-purple-100 text-purple-800 border-purple-300" },
+        { stroke: "#059669", fill: "#ecfdf5", text: "#047857", border: "#6ee7b7", pill: "bg-emerald-100 text-emerald-800 border-emerald-300" },
+        { stroke: "#d97706", fill: "#fffbeb", text: "#b45309", border: "#fcd34d", pill: "bg-amber-100 text-amber-800 border-amber-300" },
+        { stroke: "#e11d48", fill: "#fff1f2", text: "#be123c", border: "#fda4af", pill: "bg-rose-100 text-rose-800 border-rose-300" },
+        { stroke: "#0284c7", fill: "#f0f9ff", text: "#0369a1", border: "#7dd3fc", pill: "bg-sky-100 text-sky-800 border-sky-300" },
+    ];
+    function getDmColor(index: number) {
+        return DM_PALETTE[index % DM_PALETTE.length];
+    }
+
+    // Maps for preferred solutions
+    let originalMpsMap = $derived<Record<string, Record<string, number>>>(
+        session?.options?.original_most_preferred_solutions ?? {}
+    );
+    let currentMpsMap = $derived<Record<string, Record<string, number>>>(
+        session?.current_most_preferred_solutions ?? originalMpsMap
+    );
+
+    // Helpers to extract objective arrays in order of currentProblem.objectives
+    function extractObjectiveArray(solObj: Record<string, number> | undefined): number[] {
+        if (!solObj || !currentProblem?.objectives) return [];
+        return currentProblem.objectives.map((obj: any) => solObj[obj.symbol] ?? 0);
+    }
+
+    // Helper to get user-friendly adjustment info for a DM
+    function getDmAdjustmentInfo(dm: string): { adjusted: boolean; description: string; badgeClass: string } {
+        if (!session?.mps_adjustments_history || session.mps_adjustments_history.length === 0) {
+            return { adjusted: false, description: "Retained (Iteration 1)", badgeClass: "bg-slate-100 text-slate-700 border-slate-300" };
+        }
+        const lastAdj = session.mps_adjustments_history[session.mps_adjustments_history.length - 1];
+        const dmMeta = lastAdj?.[dm];
+        if (dmMeta && dmMeta.adjusted) {
+            const candText = dmMeta.voted_candidate_index !== undefined ? ` towards Cand ${dmMeta.voted_candidate_index + 1}` : "";
+            return {
+                adjusted: true,
+                description: `⚡ Adjusted${candText} (Iter ${session.current_iteration - 1})`,
+                badgeClass: "bg-amber-100 text-amber-800 border-amber-300 font-semibold"
+            };
+        }
+        return {
+            adjusted: false,
+            description: "🟢 Retained (Voted top choice)",
+            badgeClass: "bg-emerald-50 text-emerald-700 border-emerald-300 font-medium"
+        };
+    }
+
+    // Derived objectives array fed directly to the parallel coordinates plot
+    let displayedObjectives = $derived.by<number[][]>(() => {
+        if (!session) return [];
+        if (activeViewMode === "current_mps") {
+            return groupDms.map(dm => extractObjectiveArray(currentMpsMap[dm]));
+        }
+        if (activeViewMode === "original_mps") {
+            return groupDms.map(dm => extractObjectiveArray(originalMpsMap[dm]));
+        }
+        return session.candidates.map(c => extractObjectiveArray(c.objective_values));
+    });
+
+    // Tooltip labels for parallel coordinates lines
+    let displayedLineLabels = $derived.by<Record<string, string>>(() => {
+        if (!session) return {};
+        if (activeViewMode === "current_mps") {
+            return Object.fromEntries(
+                groupDms.map((dm, i) => [
+                    i,
+                    `<strong>${dm.toUpperCase()}</strong>: Current Preferred Solution`
+                ])
+            );
+        }
+        if (activeViewMode === "original_mps") {
+            return Object.fromEntries(
+                groupDms.map((dm, i) => [
+                    i,
+                    `<strong>${dm.toUpperCase()}</strong>: Original Preferred Solution (Iteration 1)`
+                ])
+            );
+        }
+        return Object.fromEntries(
+            session.candidates.map((c, i) => [
+                i,
+                `<strong>Candidate ${i + 1}</strong> (${c.fairness_criterion})`
+            ])
+        );
+    });
+
+    // Custom line stroke colors for DM preference curves
+    let displayedCustomLineColors = $derived.by<string[]>(() => {
+        if (activeViewMode === "current_mps" || activeViewMode === "original_mps") {
+            return groupDms.map((_, i) => getDmColor(i).stroke);
+        }
+        return [];
+    });
 
     // Available DMs: automatically derived from active session, or from group info, or default
     let groupDms = $derived<string[]>(
@@ -110,6 +207,40 @@
                     "DW": 200.0 + (i * 5)
                 };
             });
+        } else if (probId === 4 || probName.includes("metall")) {
+            // Problem 4: Metallurgical Application (Discrete) (5 objectives)
+            // Pareto optimal solutions from metallappl_mop2_m5.npz in metallfronts.zip
+            const defaultMps: Record<string, Record<string, number>> = {
+                "dm1": {"YS": 796.1600, "UTS": 870.8688, "ELON": 19.5884, "CE": 0.3452, "COST": 6.4521},
+                "dm2": {"YS": 598.4819, "UTS": 1898.2363, "ELON": 22.8920, "CE": 1.2768, "COST": 180.4054},
+                "dm3": {"YS": 557.6385, "UTS": 576.9771, "ELON": 41.1000, "CE": 0.3058, "COST": 3.3261},
+                "dm4": {"YS": 638.7440, "UTS": 612.2479, "ELON": 29.9485, "CE": 0.1782, "COST": 0.9220},
+                "dm5": {"YS": 652.8835, "UTS": 1061.3929, "ELON": 30.7727, "CE": 0.5317, "COST": 7.1080},
+            };
+            active_dms.forEach((dm, i) => {
+                mps_payload[dm] = defaultMps[dm] || {
+                    "YS": 650.0 + (i * 20),
+                    "UTS": 1000.0 + (i * 50),
+                    "ELON": 30.0 + (i * 2),
+                    "CE": 0.5 + (i * 0.1),
+                    "COST": 20.0 + (i * 5)
+                };
+            });
+        } else if (probId === 5 || probName.includes("re34") || probName.includes("crash")) {
+            // Problem 5: RE34 Vehicle Crashworthiness (3 objectives)
+            // Pareto optimal solutions solved via PyomoIpoptSolver
+            const defaultMps: Record<string, Record<string, number>> = {
+                "dm1": {"f_1": 1666.4106, "f_2": 6.9593, "f_3": 0.0923},
+                "dm2": {"f_1": 1675.4896, "f_2": 6.1428, "f_3": 0.2640},
+                "dm3": {"f_1": 1674.3033, "f_2": 9.0811, "f_3": 0.0523},
+            };
+            active_dms.forEach((dm, i) => {
+                mps_payload[dm] = defaultMps[dm] || {
+                    "f_1": 1665.0 + (i * 3),
+                    "f_2": 7.0 + (i * 0.5),
+                    "f_3": 0.1 + (i * 0.03)
+                };
+            });
         } else {
             // Problem 2: DTLZ2 (3 objectives)
             const defaultMps: Record<string, Record<string, number>> = {
@@ -132,13 +263,14 @@
             dm_ids: active_dms,
             total_n_of_candidates: 5,
             candidate_generation_options: "mm",
-            max_iterations: 3,
+            max_iterations: 5,
             num_initial_reference_points: 1000,
             most_preferred_solutions: mps_payload
         });
 
         if (newState) {
             session = newState;
+            analystViewMode = "candidates";
             startPolling();
         }
         isProcessing = false;
@@ -313,12 +445,59 @@
     {#snippet visualizationArea()}
         {#if session && currentProblem}
             <div class="p-4 flex flex-col gap-6 h-full overflow-y-auto">
+                <!-- Analyst View Switcher & DM Legend (Analyst Mode Only) -->
+                {#if currentRole === "analyst"}
+                    <div class="bg-white border rounded-lg p-3 shadow-sm flex flex-wrap items-center justify-between gap-3">
+                        <div class="flex items-center gap-2">
+                            <span class="text-xs font-bold uppercase tracking-wider text-gray-500">Analyst View:</span>
+                            <div class="inline-flex rounded-md shadow-sm" role="group">
+                                <button
+                                    type="button"
+                                    class="px-3 py-1.5 text-xs font-semibold rounded-l-lg border transition-colors {analystViewMode === 'candidates' ? 'bg-blue-600 text-white border-blue-600 shadow' : 'bg-white text-gray-700 hover:bg-gray-100 border-gray-300'}"
+                                    onclick={() => analystViewMode = 'candidates'}
+                                >
+                                    📊 Current Candidates ({session.candidates.length})
+                                </button>
+                                <button
+                                    type="button"
+                                    class="px-3 py-1.5 text-xs font-semibold border-t border-b border-r transition-colors {analystViewMode === 'current_mps' ? 'bg-purple-600 text-white border-purple-600 shadow' : 'bg-white text-gray-700 hover:bg-gray-100 border-gray-300'}"
+                                    onclick={() => analystViewMode = 'current_mps'}
+                                >
+                                    🎯 Current DM Preferences ({groupDms.length})
+                                </button>
+                                <button
+                                    type="button"
+                                    class="px-3 py-1.5 text-xs font-semibold rounded-r-lg border-t border-b border-r transition-colors {analystViewMode === 'original_mps' ? 'bg-slate-700 text-white border-slate-700 shadow' : 'bg-white text-gray-700 hover:bg-gray-100 border-gray-300'}"
+                                    onclick={() => analystViewMode = 'original_mps'}
+                                >
+                                    📍 Original Baseline ({groupDms.length})
+                                </button>
+                            </div>
+                        </div>
+
+                        {#if analystViewMode === 'current_mps' || analystViewMode === 'original_mps'}
+                            <div class="flex items-center gap-2 flex-wrap text-xs">
+                                <span class="font-bold text-gray-500">DMs:</span>
+                                {#each groupDms as dm, i}
+                                    {@const color = getDmColor(i)}
+                                    <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full border font-semibold {color.pill}">
+                                        <span class="w-2 h-2 rounded-full inline-block shadow-sm" style="background-color: {color.stroke};"></span>
+                                        {dm.toUpperCase()}
+                                    </span>
+                                {/each}
+                            </div>
+                        {/if}
+                    </div>
+                {/if}
+
                 <div class="h-64 border rounded shadow-sm bg-white p-2">
                     <VisualizationsPanel
                         problem={currentProblem}
-                        solutionsObjectiveValues={candidateObjectives}
+                        solutionsObjectiveValues={displayedObjectives}
                         previousPreferenceType="reference_point"
                         currentPreferenceType="reference_point"
+                        lineLabels={displayedLineLabels}
+                        customLineColors={displayedCustomLineColors}
                     />
                 </div>
 
@@ -358,32 +537,131 @@
                     </div>
                 {/if}
 
-                <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-4">
-                    {#each session.candidates as candidate, i}
-                        {@const tiedIndices = session.tie_state?.tied_candidate_indices ?? []}
-                        {@const isRevote = session.status === "revote_pending"}
-                        {@const isTied = isRevote && tiedIndices.includes(i)}
-                        {@const hasCurrentRoleVoted = session.current_votes[currentRole] !== undefined}
-                        {@const isCardDisabled = isProcessing || (isRevote ? (!isTied || hasCurrentRoleVoted) : (hasCurrentRoleVoted && session.current_votes[currentRole] !== i))}
-                        {@const isFinalSolution = session.status === "completed" && (
-                            session.final_solution
-                                ? JSON.stringify(session.final_solution.objective_values) === JSON.stringify(candidate.objective_values)
-                                : session.tie_state?.final_winner_idx === i
-                        )}
-                        <CandidateCard
-                            {candidate}
-                            {objectiveNameMap}
-                            index={i}
-                            onVote={handleVote}
-                            showVoteButton={currentRole !== "analyst" && session.status !== "completed"}
-                            isVoted={session.current_votes[currentRole] === i}
-                            disabled={isCardDisabled}
-                            isTiedCandidate={isTied}
-                            isDecisionPhase={isDecisionPhase}
-                            isFinalWinner={isFinalSolution}
-                        />
-                    {/each}
-                </div>
+                {#if session.candidates.some((c: any) => c.fairness_criterion?.startsWith("winner_and_"))}
+                    <div class="bg-indigo-50/80 border border-indigo-200 text-indigo-900 p-3.5 rounded-lg text-sm shadow-sm flex items-center gap-3">
+                        <span class="text-xl">ℹ️</span>
+                        <div>
+                            <span class="font-bold">Duplicate Candidate Merged:</span> The previous winning solution was identical to this iteration's group-fair solution in both objective and decision spaces. They have been combined into <strong>Candidate 1 (Fair & Last Voted)</strong>, and an additional diversity candidate was generated so the group always evaluates 5 distinct alternatives.
+                        </div>
+                    </div>
+                {/if}
+
+                <!-- Sub-plot Cards Area: Candidates OR DM Preferences -->
+                {#if activeViewMode === "candidates"}
+                    <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-4">
+                        {#each session.candidates as candidate, i}
+                            {@const tiedIndices = session.tie_state?.tied_candidate_indices ?? []}
+                            {@const isRevote = session.status === "revote_pending"}
+                            {@const isTied = isRevote && tiedIndices.includes(i)}
+                            {@const hasCurrentRoleVoted = session.current_votes[currentRole] !== undefined}
+                            {@const isCardDisabled = isProcessing || (isRevote ? (!isTied || hasCurrentRoleVoted) : (hasCurrentRoleVoted && session.current_votes[currentRole] !== i))}
+                            {@const isFinalSolution = session.status === "completed" && (
+                                session.final_solution
+                                    ? JSON.stringify(session.final_solution.objective_values) === JSON.stringify(candidate.objective_values)
+                                    : session.tie_state?.final_winner_idx === i
+                            )}
+                            <CandidateCard
+                                {candidate}
+                                {objectiveNameMap}
+                                index={i}
+                                onVote={handleVote}
+                                showVoteButton={currentRole !== "analyst" && session.status !== "completed"}
+                                isVoted={session.current_votes[currentRole] === i}
+                                disabled={isCardDisabled}
+                                isTiedCandidate={isTied}
+                                isDecisionPhase={isDecisionPhase}
+                                isFinalWinner={isFinalSolution}
+                            />
+                        {/each}
+                    </div>
+                {:else if activeViewMode === "current_mps"}
+                    <div class="flex flex-col gap-3">
+                        <div class="flex items-center justify-between">
+                            <h4 class="font-bold text-sm text-purple-950 flex items-center gap-2">
+                                🎯 Current Decision Maker Preferred Solutions (Iteration {session.current_iteration})
+                            </h4>
+                            <span class="text-xs text-purple-700 font-semibold bg-purple-50 px-2.5 py-1 rounded border border-purple-200">
+                                Dynamically Adapted Preferences
+                            </span>
+                        </div>
+                        <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-4">
+                            {#each groupDms as dm, i}
+                                {@const color = getDmColor(i)}
+                                {@const adjInfo = getDmAdjustmentInfo(dm)}
+                                {@const mpsObj = currentMpsMap[dm] ?? {}}
+                                <div class="p-4 rounded-lg border-2 shadow-sm flex flex-col justify-between transition-all bg-white" style="border-color: {color.stroke};">
+                                    <div>
+                                        <div class="flex items-center justify-between mb-2">
+                                            <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-bold border {color.pill}">
+                                                <span class="w-2.5 h-2.5 rounded-full inline-block shadow-sm" style="background-color: {color.stroke};"></span>
+                                                {dm.toUpperCase()} Preferred
+                                            </span>
+                                            <span class="text-[11px] px-2 py-0.5 rounded-full border {adjInfo.badgeClass}">
+                                                {adjInfo.description}
+                                            </span>
+                                        </div>
+                                        <div class="text-xs space-y-1.5 mt-3">
+                                            {#each (currentProblem?.objectives ?? []) as obj}
+                                                <div class="flex justify-between border-b pb-1 last:border-0">
+                                                    <span class="text-gray-500 font-medium">{obj.name || obj.symbol}:</span>
+                                                    <span class="font-mono font-bold text-gray-800">
+                                                        {mpsObj[obj.symbol] !== undefined ? Number(mpsObj[obj.symbol]).toFixed(4) : "—"}
+                                                    </span>
+                                                </div>
+                                            {/each}
+                                        </div>
+                                    </div>
+                                    <div class="mt-3 pt-2 border-t text-[11px] text-gray-400 italic text-right">
+                                        Active in group fairness ranking
+                                    </div>
+                                </div>
+                            {/each}
+                        </div>
+                    </div>
+                {:else if activeViewMode === "original_mps"}
+                    <div class="flex flex-col gap-3">
+                        <div class="flex items-center justify-between">
+                            <h4 class="font-bold text-sm text-slate-800 flex items-center gap-2">
+                                📍 Original Decision Maker Preferred Solutions (Iteration 1 Baseline)
+                            </h4>
+                            <span class="text-xs text-slate-700 font-semibold bg-slate-100 px-2.5 py-1 rounded border border-slate-300">
+                                Baseline Preferences
+                            </span>
+                        </div>
+                        <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-4">
+                            {#each groupDms as dm, i}
+                                {@const color = getDmColor(i)}
+                                {@const mpsObj = originalMpsMap[dm] ?? {}}
+                                <div class="p-4 rounded-lg border shadow-sm flex flex-col justify-between bg-white border-slate-200">
+                                    <div>
+                                        <div class="flex items-center justify-between mb-2">
+                                            <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-bold border {color.pill}">
+                                                <span class="w-2.5 h-2.5 rounded-full inline-block shadow-sm" style="background-color: {color.stroke};"></span>
+                                                {dm.toUpperCase()} Baseline
+                                            </span>
+                                            <span class="text-[11px] px-2 py-0.5 rounded-full border bg-slate-100 text-slate-700 border-slate-300 font-medium">
+                                                Iter 1
+                                            </span>
+                                        </div>
+                                        <div class="text-xs space-y-1.5 mt-3">
+                                            {#each (currentProblem?.objectives ?? []) as obj}
+                                                <div class="flex justify-between border-b pb-1 last:border-0">
+                                                    <span class="text-gray-500 font-medium">{obj.name || obj.symbol}:</span>
+                                                    <span class="font-mono font-bold text-gray-800">
+                                                        {mpsObj[obj.symbol] !== undefined ? Number(mpsObj[obj.symbol]).toFixed(4) : "—"}
+                                                    </span>
+                                                </div>
+                                            {/each}
+                                        </div>
+                                    </div>
+                                    <div class="mt-3 pt-2 border-t text-[11px] text-gray-400 italic text-right">
+                                        Starting aspiration anchor
+                                    </div>
+                                </div>
+                            {/each}
+                        </div>
+                    </div>
+                {/if}
             </div>
         {/if}
     {/snippet}
@@ -420,7 +698,7 @@
                     </tbody>
                 </table>
             </div>
-        {:else if session && session.candidates.length > 0}
+        {:else if session && activeViewMode === "candidates"}
             <div class="p-4 bg-white rounded h-full overflow-y-auto">
                 <h3 class="font-bold mb-3 text-lg">Candidate Data Table</h3>
                 <table class="w-full text-sm text-left border-collapse">
@@ -428,8 +706,8 @@
                         <tr class="border-b-2 border-gray-300">
                             <th class="pb-2 pr-4 font-bold text-gray-700">Candidate</th>
                             <th class="pb-2 pr-4 font-bold text-gray-700">Fairness</th>
-                            {#each Object.keys(session.candidates[0].objective_values ?? {}) as objKey}
-                                <th class="pb-2 pr-4 font-bold text-gray-700">{objectiveNameMap[objKey] || objKey}</th>
+                            {#each (currentProblem?.objectives ?? []) as obj}
+                                <th class="pb-2 pr-4 font-bold text-gray-700">{obj.name || obj.symbol}</th>
                             {/each}
                         </tr>
                     </thead>
@@ -445,8 +723,103 @@
                                         <span class="text-xs">({cand.fairness_value.toFixed(4)})</span>
                                     {/if}
                                 </td>
-                                {#each Object.values(cand.objective_values ?? {}) as val}
-                                    <td class="py-3 pr-4 font-mono">{Number(val).toFixed(4)}</td>
+                                {#each (currentProblem?.objectives ?? []) as obj}
+                                    <td class="py-3 pr-4 font-mono">
+                                        {cand.objective_values[obj.symbol] !== undefined ? Number(cand.objective_values[obj.symbol]).toFixed(4) : "—"}
+                                    </td>
+                                {/each}
+                            </tr>
+                        {/each}
+                    </tbody>
+                </table>
+            </div>
+        {:else if session && activeViewMode === "current_mps"}
+            <div class="p-4 bg-white rounded h-full overflow-y-auto">
+                <div class="flex items-center justify-between mb-3 border-b pb-2">
+                    <h3 class="font-bold text-lg text-purple-950 flex items-center gap-2">
+                        🎯 Current DM Preferred Solutions Table
+                    </h3>
+                    <span class="text-xs text-purple-700 font-semibold bg-purple-50 px-2 py-0.5 rounded border border-purple-200">
+                        Active In Iteration {session.current_iteration}
+                    </span>
+                </div>
+                <table class="w-full text-sm text-left border-collapse">
+                    <thead>
+                        <tr class="border-b-2 border-gray-300">
+                            <th class="pb-2 pr-4 font-bold text-gray-700">Decision Maker</th>
+                            <th class="pb-2 pr-4 font-bold text-gray-700">Status</th>
+                            {#each (currentProblem?.objectives ?? []) as obj}
+                                <th class="pb-2 pr-4 font-bold text-gray-700">{obj.name || obj.symbol}</th>
+                            {/each}
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {#each groupDms as dm, i}
+                            {@const color = getDmColor(i)}
+                            {@const adjInfo = getDmAdjustmentInfo(dm)}
+                            {@const mpsObj = currentMpsMap[dm] ?? {}}
+                            <tr class="border-b last:border-0 hover:bg-gray-50">
+                                <td class="py-3 pr-4 font-semibold">
+                                    <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-bold border {color.pill}">
+                                        <span class="w-2 h-2 rounded-full inline-block shadow-sm" style="background-color: {color.stroke};"></span>
+                                        {dm.toUpperCase()}
+                                    </span>
+                                </td>
+                                <td class="py-3 pr-4">
+                                    <span class="text-xs px-2 py-0.5 rounded-full border {adjInfo.badgeClass}">
+                                        {adjInfo.description}
+                                    </span>
+                                </td>
+                                {#each (currentProblem?.objectives ?? []) as obj}
+                                    <td class="py-3 pr-4 font-mono font-medium">
+                                        {mpsObj[obj.symbol] !== undefined ? Number(mpsObj[obj.symbol]).toFixed(4) : "—"}
+                                    </td>
+                                {/each}
+                            </tr>
+                        {/each}
+                    </tbody>
+                </table>
+            </div>
+        {:else if session && activeViewMode === "original_mps"}
+            <div class="p-4 bg-white rounded h-full overflow-y-auto">
+                <div class="flex items-center justify-between mb-3 border-b pb-2">
+                    <h3 class="font-bold text-lg text-slate-900 flex items-center gap-2">
+                        📍 Original Baseline Preferred Solutions Table
+                    </h3>
+                    <span class="text-xs text-slate-700 font-semibold bg-slate-100 px-2 py-0.5 rounded border border-slate-300">
+                        Immutable Baseline
+                    </span>
+                </div>
+                <table class="w-full text-sm text-left border-collapse">
+                    <thead>
+                        <tr class="border-b-2 border-gray-300">
+                            <th class="pb-2 pr-4 font-bold text-gray-700">Decision Maker</th>
+                            <th class="pb-2 pr-4 font-bold text-gray-700">Type</th>
+                            {#each (currentProblem?.objectives ?? []) as obj}
+                                <th class="pb-2 pr-4 font-bold text-gray-700">{obj.name || obj.symbol}</th>
+                            {/each}
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {#each groupDms as dm, i}
+                            {@const color = getDmColor(i)}
+                            {@const mpsObj = originalMpsMap[dm] ?? {}}
+                            <tr class="border-b last:border-0 hover:bg-gray-50">
+                                <td class="py-3 pr-4 font-semibold">
+                                    <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-bold border {color.pill}">
+                                        <span class="w-2 h-2 rounded-full inline-block shadow-sm" style="background-color: {color.stroke};"></span>
+                                        {dm.toUpperCase()}
+                                    </span>
+                                </td>
+                                <td class="py-3 pr-4">
+                                    <span class="text-xs px-2 py-0.5 rounded-full border bg-slate-100 text-slate-700 border-slate-300 font-medium">
+                                        Iteration 1 Baseline
+                                    </span>
+                                </td>
+                                {#each (currentProblem?.objectives ?? []) as obj}
+                                    <td class="py-3 pr-4 font-mono font-medium">
+                                        {mpsObj[obj.symbol] !== undefined ? Number(mpsObj[obj.symbol]).toFixed(4) : "—"}
+                                    </td>
                                 {/each}
                             </tr>
                         {/each}

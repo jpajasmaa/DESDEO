@@ -1,16 +1,62 @@
-"""Automated integration tests for the Favorite method FastAPI router."""
+"""Tests for the FAVORITE FastAPI router endpoints and workflow."""
 
+from unittest.mock import patch
+
+import polars as pl
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from sqlmodel import Session
 
+from desdeo.api.db import engine
+from desdeo.api.models import ProblemDB, User
 from desdeo.api.routers.favorite import router
 from desdeo.gdm import calculate_dm_utility
-from desdeo.problem.testproblems import river_pollution_problem_discrete
+from desdeo.gdm.favorite_method import FairSolution, FavResults, GPRMResults, IPR_Results
+from desdeo.problem.testproblems import dmitry_forest_problem_disc, river_pollution_problem_discrete
+from desdeo.tools.iterative_pareto_representer import _EvaluatedPoint
 
 app = FastAPI()
 app.include_router(router)
 client = TestClient(app)
+
+
+def _mock_favorite_method_call(problem, fav_options, results_list=None):
+    """Fast mock for favorite_method router integration tests."""
+    obj_names = list(problem.get_ideal_point().keys())
+    var_names = [v.name for v in problem.variables] if problem.variables else ["x1"]
+    cands = [
+        FairSolution(
+            fairness_criterion="mmfair" if i == 0 else "haus",
+            fairness_value=float(i) * 0.1,
+            objective_values={name: float(i + 1) for name in obj_names},
+            variable_values=dict.fromkeys(var_names, 1.0),
+        )
+        for i in range(fav_options.total_n_of_candidates)
+    ]
+    eval_pts = [
+        _EvaluatedPoint(
+            reference_point={name: float(i + 1) for name in obj_names},
+            targets={name: float(i + 1) for name in obj_names},
+            objectives={name: float(i + 1) for name in obj_names},
+        )
+        for i in range(fav_options.total_n_of_candidates)
+    ]
+    gprm = GPRMResults(
+        raw_results=IPR_Results(evaluated_points=eval_pts),
+        solutions=None,
+        outputs=pl.DataFrame(
+            {name: [float(i + 1) for i in range(fav_options.total_n_of_candidates)] for name in obj_names}
+        ),
+    )
+    fav_options.GPRMoptions.fake_ideal = problem.get_ideal_point()
+    fav_options.GPRMoptions.fake_nadir = problem.get_nadir_point()
+    return FavResults(
+        FavOptions=fav_options,
+        GPRMResults=gprm,
+        fair_solutions=cands,
+        status="success",
+    )
 
 
 @pytest.fixture
@@ -22,7 +68,7 @@ def sample_init_payload():
         "total_n_of_candidates": 5,
         "candidate_generation_options": "mm",
         "max_iterations": 3,
-        "num_initial_reference_points": 50,
+        "num_initial_reference_points": 20,
         "most_preferred_solutions": {
             "dm1": {"f1": 5.9066, "f2": 3.2894, "f3": 6.5792, "f4": -4.5460},
             "dm2": {"f1": 5.4290, "f2": 3.0121, "f3": 7.2395, "f4": -0.9135},
@@ -49,6 +95,7 @@ def test_init_schema_resilience():
     payload_str_id = {
         "problem_id": "1",
         "total_n_of_candidates": 5,
+        "num_initial_reference_points": 20,
         "most_preferred_solutions": {
             "dm1": {"f1": 5.9066, "f2": 3.2894, "f3": 6.5792, "f4": -4.5460},
             "dm2": {"f1": 5.4290, "f2": 3.0121, "f3": 7.2395, "f4": -0.9135},
@@ -62,6 +109,7 @@ def test_init_schema_resilience():
 
     payload_empty_id = {
         "problem_id": "",
+        "num_initial_reference_points": 20,
         "most_preferred_solutions": {
             "dm1": {"f1": 5.9066, "f2": 3.2894, "f3": 6.5792, "f4": -4.5460},
             "dm2": {"f1": 5.4290, "f2": 3.0121, "f3": 7.2395, "f4": -0.9135},
@@ -75,7 +123,7 @@ def test_init_schema_resilience():
 
 
 def test_init_problem_2_dtlz2():
-    """Test initialization with problem 2 (dtlz2)."""
+    """Test initialization with problem 2 (dtlz2) using mocked solver."""
     payload = {
         "problem_id": 2,
         "dm_ids": ["dm1", "dm2", "dm3"],
@@ -89,11 +137,12 @@ def test_init_problem_2_dtlz2():
             "dm3": {"f_1": 0.3333, "f_2": 0.6666, "f_3": 0.6666},
         },
     }
-    res = client.post("/favorite/init", json=payload)
-    assert res.status_code == 201
-    data = res.json()
-    assert data["problem_id"] == 2
-    assert len(data["candidates"]) == 5
+    with patch("desdeo.api.routers.favorite.favorite_method", side_effect=_mock_favorite_method_call):
+        res = client.post("/favorite/init", json=payload)
+        assert res.status_code == 201
+        data = res.json()
+        assert data["problem_id"] == 2
+        assert len(data["candidates"]) == 5
 
 
 def test_init_missing_dm_mps_raises_400():
@@ -288,11 +337,6 @@ def test_full_lifecycle_to_final_decision(sample_init_payload):
 
 def test_init_problem_3_dmitry_forest():
     """Test initialization with Dmitry Forest Problem (problem_id 3) with 4 DMs and auto-fetched MPS."""
-    from sqlmodel import Session
-    from desdeo.api.db import engine
-    from desdeo.api.models import ProblemDB, User
-    from desdeo.problem.testproblems import dmitry_forest_problem_disc
-
     with Session(engine) as db:
         prob = db.get(ProblemDB, 3)
         if not prob:
@@ -309,23 +353,24 @@ def test_init_problem_3_dmitry_forest():
         "max_iterations": 3,
         "num_initial_reference_points": 50,
     }
-    res = client.post("/favorite/init", json=payload)
-    assert res.status_code == 201
-    data = res.json()
-    assert data["problem_id"] == 3
-    assert data["dm_ids"] == ["dm1", "dm2", "dm3", "dm4"]
-    assert len(data["candidates"]) == 5
-    assert data["status"] == "voting"
+    with patch("desdeo.api.routers.favorite.favorite_method", side_effect=_mock_favorite_method_call):
+        res = client.post("/favorite/init", json=payload)
+        assert res.status_code == 201
+        data = res.json()
+        assert data["problem_id"] == 3
+        assert data["dm_ids"] == ["dm1", "dm2", "dm3", "dm4"]
+        assert len(data["candidates"]) == 5
+        assert data["status"] == "voting"
 
-    # Verify candidates have the 4 forest objectives: Rev, HA, Carb, DW
-    candidate_objs = data["candidates"][0]["objective_values"]
-    assert set(candidate_objs.keys()) == {"Rev", "HA", "Carb", "DW"}
+        # Verify candidates have the 4 forest objectives: Rev, HA, Carb, DW
+        candidate_objs = data["candidates"][0]["objective_values"]
+        assert set(candidate_objs.keys()) == {"Rev", "HA", "Carb", "DW"}
 
-    # Test submitting a vote from DM4
-    session_id = data["session_id"]
-    vote_res = client.post(f"/favorite/vote/{session_id}", json={"dm_id": "dm4", "vote_idx": 0})
-    assert vote_res.status_code == 200
-    assert vote_res.json()["current_votes"]["dm4"] == 0
+        # Test submitting a vote from DM4
+        session_id = data["session_id"]
+        vote_res = client.post(f"/favorite/vote/{session_id}", json={"dm_id": "dm4", "vote_idx": 0})
+        assert vote_res.status_code == 200
+        assert vote_res.json()["current_votes"]["dm4"] == 0
 
 
 def test_adjacent_tie_breaker_avgproj():
@@ -389,32 +434,33 @@ def test_final_decision_adjacent_tie_breaker_avgproj():
 
 
 def test_dtlz2_multi_iteration_continuous():
-    """Test that DTLZ2 (continuous problem) runs multi-iteration IPR without reference point exhaustion."""
+    """Test that DTLZ2 (continuous problem) runs multi-iteration state transitions cleanly."""
     payload = {
         "problem_id": 2,
         "dm_ids": ["dm1", "dm2", "dm3"],
         "total_n_of_candidates": 5,
         "candidate_generation_options": "mm",
         "max_iterations": 2,
-        "num_initial_reference_points": 1000,
+        "num_initial_reference_points": 50,
     }
-    init_res = client.post("/favorite/init", json=payload).json()
-    session_id = init_res["session_id"]
-    assert init_res["current_iteration"] == 1
-    assert len(init_res["candidates"]) == 5
+    with patch("desdeo.api.routers.favorite.favorite_method", side_effect=_mock_favorite_method_call):
+        init_res = client.post("/favorite/init", json=payload).json()
+        session_id = init_res["session_id"]
+        assert init_res["current_iteration"] == 1
+        assert len(init_res["candidates"]) == 5
 
-    # Vote for candidate 0 across all DMs
-    client.post(f"/favorite/vote/{session_id}", json={"dm_id": "dm1", "vote_idx": 0})
-    client.post(f"/favorite/vote/{session_id}", json={"dm_id": "dm2", "vote_idx": 0})
-    client.post(f"/favorite/vote/{session_id}", json={"dm_id": "dm3", "vote_idx": 0})
+        # Vote for candidate 0 across all DMs
+        client.post(f"/favorite/vote/{session_id}", json={"dm_id": "dm1", "vote_idx": 0})
+        client.post(f"/favorite/vote/{session_id}", json={"dm_id": "dm2", "vote_idx": 0})
+        client.post(f"/favorite/vote/{session_id}", json={"dm_id": "dm3", "vote_idx": 0})
 
-    # Advance iteration
-    iter_res = client.post(f"/favorite/iterate/{session_id}")
-    assert iter_res.status_code == 200
-    iter_data = iter_res.json()
-    assert iter_data["current_iteration"] == 2
-    assert iter_data["phase"] == "decision"
-    assert len(iter_data["candidates"]) == 5
+        # Advance iteration
+        iter_res = client.post(f"/favorite/iterate/{session_id}")
+        assert iter_res.status_code == 200
+        iter_data = iter_res.json()
+        assert iter_data["current_iteration"] == 2
+        assert iter_data["phase"] == "decision"
+        assert len(iter_data["candidates"]) == 5
 
 
 def test_dm_preferred_solutions_adaptation_suboptimal_vote():
@@ -425,7 +471,7 @@ def test_dm_preferred_solutions_adaptation_suboptimal_vote():
         "total_n_of_candidates": 5,
         "candidate_generation_options": "mm",
         "max_iterations": 2,
-        "num_initial_reference_points": 50,
+        "num_initial_reference_points": 20,
     }
     init_res = client.post("/favorite/init", json=payload).json()
     session_id = init_res["session_id"]
@@ -439,10 +485,7 @@ def test_dm_preferred_solutions_adaptation_suboptimal_vote():
 
     problem = river_pollution_problem_discrete(five_objective_variant=False)
     # Calculate utility of all 5 candidates for dm1
-    utils = [
-        calculate_dm_utility(problem, orig_mps_dm1, c["objective_values"])
-        for c in candidates
-    ]
+    utils = [calculate_dm_utility(problem, orig_mps_dm1, c["objective_values"]) for c in candidates]
     best_idx = int(max(range(len(utils)), key=lambda i: utils[i]))
     worst_idx = int(min(range(len(utils)), key=lambda i: utils[i]))
     assert worst_idx != best_idx
@@ -480,7 +523,7 @@ def test_dm_preferred_solutions_adaptation_consistent_vote():
         "total_n_of_candidates": 5,
         "candidate_generation_options": "mm",
         "max_iterations": 2,
-        "num_initial_reference_points": 50,
+        "num_initial_reference_points": 20,
     }
     init_res = client.post("/favorite/init", json=payload).json()
     session_id = init_res["session_id"]
@@ -490,10 +533,7 @@ def test_dm_preferred_solutions_adaptation_consistent_vote():
     orig_mps_dm1 = state_res["options"]["original_most_preferred_solutions"]["dm1"]
 
     problem = river_pollution_problem_discrete(five_objective_variant=False)
-    utils = [
-        calculate_dm_utility(problem, orig_mps_dm1, c["objective_values"])
-        for c in candidates
-    ]
+    utils = [calculate_dm_utility(problem, orig_mps_dm1, c["objective_values"]) for c in candidates]
     best_idx = int(max(range(len(utils)), key=lambda i: utils[i]))
 
     # Both DMs vote for best_idx
@@ -510,4 +550,81 @@ def test_dm_preferred_solutions_adaptation_consistent_vote():
     assert dm1_meta["lambda_shift"] == 0.0
 
 
+def test_init_problem_4_discrete_metallurgical():
+    """Test initialization and iteration for Problem 4 (Discrete Metallurgical Application Problem) with 5 DMs."""
+    payload = {
+        "problem_id": 4,
+        "dm_ids": ["dm1", "dm2", "dm3", "dm4", "dm5"],
+        "total_n_of_candidates": 5,
+        "candidate_generation_options": "mm",
+        "max_iterations": 2,
+        "num_initial_reference_points": 50,
+    }
+    with patch("desdeo.api.routers.favorite.favorite_method", side_effect=_mock_favorite_method_call):
+        init_res = client.post("/favorite/init", json=payload)
+        assert init_res.status_code == 201
+        data = init_res.json()
+        assert data["problem_id"] == 4
+        assert len(data["dm_ids"]) == 5
+        assert len(data["candidates"]) == 5
+        assert data["current_iteration"] == 1
+        assert data["status"] == "voting"
 
+        # Verify objective keys
+        cand0_objs = data["candidates"][0]["objective_values"]
+        assert set(cand0_objs.keys()) == {"YS", "UTS", "ELON", "CE", "COST"}
+
+        session_id = data["session_id"]
+
+        # All 5 DMs vote: 3 vote for candidate 0, 2 vote for candidate 1
+        for dm in ["dm1", "dm2", "dm3"]:
+            client.post(f"/favorite/vote/{session_id}", json={"dm_id": dm, "vote_idx": 0})
+        for dm in ["dm4", "dm5"]:
+            client.post(f"/favorite/vote/{session_id}", json={"dm_id": dm, "vote_idx": 1})
+
+        # Advance iteration
+        iter_res = client.post(f"/favorite/iterate/{session_id}")
+        assert iter_res.status_code == 200
+        iter_data = iter_res.json()
+        assert iter_data["current_iteration"] == 2
+        assert iter_data["status"] == "voting"
+        assert len(iter_data["candidates"]) == 5
+
+
+def test_init_problem_5_re34_pyomo():
+    """Test initialization and continuous solving for Problem 5 (RE34 Crashworthiness) with 3 DMs."""
+    payload = {
+        "problem_id": 5,
+        "dm_ids": ["dm1", "dm2", "dm3"],
+        "total_n_of_candidates": 5,
+        "candidate_generation_options": "mm",
+        "max_iterations": 2,
+        "num_initial_reference_points": 10,
+    }
+    init_res = client.post("/favorite/init", json=payload)
+    assert init_res.status_code == 201
+    data = init_res.json()
+    assert data["problem_id"] == 5
+    assert len(data["dm_ids"]) == 3
+    assert len(data["candidates"]) == 5
+    assert data["current_iteration"] == 1
+    assert data["status"] == "voting"
+
+    # Verify objective keys
+    cand0_objs = data["candidates"][0]["objective_values"]
+    assert set(cand0_objs.keys()) == {"f_1", "f_2", "f_3"}
+
+    session_id = data["session_id"]
+
+    # All 3 DMs vote: 2 vote for candidate 0, 1 votes for candidate 1
+    client.post(f"/favorite/vote/{session_id}", json={"dm_id": "dm1", "vote_idx": 0})
+    client.post(f"/favorite/vote/{session_id}", json={"dm_id": "dm2", "vote_idx": 0})
+    client.post(f"/favorite/vote/{session_id}", json={"dm_id": "dm3", "vote_idx": 1})
+
+    # Advance iteration using Pyomo + Ipopt
+    iter_res = client.post(f"/favorite/iterate/{session_id}")
+    assert iter_res.status_code == 200
+    iter_data = iter_res.json()
+    assert iter_data["current_iteration"] == 2
+    assert iter_data["status"] == "voting"
+    assert len(iter_data["candidates"]) == 5

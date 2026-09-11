@@ -43,6 +43,8 @@
                     Criterion: Last Iteration Winner
                 {:else if candidate.fairness_criterion === "final_hausdorff" || candidate.fairness_criterion === "avg_hausdorff"}
                     Criterion: Diversity (Hausdorff)
+                {:else if candidate.fairness_criterion?.startsWith("winner_and_")}
+                    Criterion: Group Fair & Last Voted (Duplicate Merged)
                 {:else if candidate.fairness_criterion?.startsWith("final_")}
                     Criterion: Group Fair ({candidate.fairness_criterion.replace("final_", "").toUpperCase()})
                 {:else}
@@ -57,10 +59,16 @@
             {#if isDecisionPhase}
                 {#if candidate.fairness_criterion === "last_winner"}
                     <span class="text-xs bg-purple-100 text-purple-800 font-semibold px-1.5 py-0.5 rounded">Last Voted</span>
+                {:else if candidate.fairness_criterion?.startsWith("winner_and_")}
+                    <span class="text-xs bg-indigo-100 text-indigo-800 font-semibold px-1.5 py-0.5 rounded" title="The group-fair solution was identical to the previous winner, so they have been merged. An extra diversity candidate was added.">Fair & Last Voted (Merged)</span>
                 {:else if candidate.fairness_criterion?.startsWith("final_") && candidate.fairness_criterion !== "final_hausdorff"}
                     <span class="text-xs bg-blue-100 text-blue-800 font-semibold px-1.5 py-0.5 rounded">Fair Solution</span>
                 {:else if candidate.fairness_criterion === "final_hausdorff" || candidate.fairness_criterion === "avg_hausdorff"}
                     <span class="text-xs bg-teal-100 text-teal-800 font-semibold px-1.5 py-0.5 rounded">Diversity</span>
+                {/if}
+            {:else}
+                {#if candidate.fairness_criterion?.startsWith("winner_and_")}
+                    <span class="text-xs bg-indigo-100 text-indigo-800 font-semibold px-1.5 py-0.5 rounded" title="The group-fair solution was identical to the previous winner, so they have been merged. An extra diversity candidate was added.">Fair & Last Voted (Merged)</span>
                 {/if}
             {/if}
         </div>

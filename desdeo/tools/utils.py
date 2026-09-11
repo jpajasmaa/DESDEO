@@ -2,6 +2,7 @@
 
 import shutil
 from collections.abc import Callable
+from typing import Any
 
 import numpy as np
 import polars as pl
@@ -423,3 +424,88 @@ def repair(lower_bounds: dict[str, float], upper_bounds: dict[str, float]) -> Ca
         return offspring
 
     return fast_actual_repair
+
+
+def _extract_dict_values(sol: Any, keys: tuple[str, ...]) -> dict[str, Any] | None:
+    """Extract a dictionary of values from a solution object or dict using DESDEO conventional keys."""
+    if sol is None:
+        return None
+    for key in keys:
+        val = sol.get(key) if isinstance(sol, dict) else getattr(sol, key, None)
+        if isinstance(val, dict):
+            return val
+    return sol if isinstance(sol, dict) and all(isinstance(v, (int, float, np.number)) for v in sol.values()) else None
+
+
+def _dicts_close(
+    d1: dict[str, Any],
+    d2: dict[str, Any],
+    tol: float = 1e-4,
+    ignore_keys: tuple[str, ...] = ("_alpha",),
+) -> bool:
+    """Compare two value dictionaries using np.allclose."""
+    keys1 = sorted(k for k in d1 if k not in ignore_keys)
+    keys2 = sorted(k for k in d2 if k not in ignore_keys)
+    if keys1 != keys2:
+        return False
+    return bool(np.allclose([d1[k] for k in keys1], [d2[k] for k in keys1], atol=tol, rtol=tol))
+
+
+def is_duplicate_solution(
+    sol1: Any,
+    sol2: Any,
+    check_variables: bool = True,
+    problem: Problem | None = None,
+    tol: float = 1e-4,
+) -> bool:
+    """Checks whether two solutions are duplicates in objective space and (optionally) decision space.
+
+    Supports standard DESDEO solution types (FairSolution, SolverResults, SavedSolutionReference, dict).
+    When check_variables is True, multi-modal solutions with identical objectives but distinct
+    decision variables are preserved as distinct solutions.
+
+    Args:
+        sol1: First solution object or dict.
+        sol2: Second solution object or dict.
+        check_variables: If True, also compares decision variable values if present.
+        problem: Optional Problem instance (reserved for problem-specific scaling if needed).
+        tol: Comparison tolerance (default 1e-4).
+
+    Returns:
+        bool: True if the solutions are duplicates within tolerance, False otherwise.
+    """
+    if sol1 is None or sol2 is None:
+        return False
+
+    objs1 = _extract_dict_values(sol1, ("objective_values", "optimal_objectives"))
+    objs2 = _extract_dict_values(sol2, ("objective_values", "optimal_objectives"))
+    if objs1 is None or objs2 is None or not _dicts_close(objs1, objs2, tol=tol):
+        return False
+
+    if not check_variables:
+        return True
+
+    vars1 = _extract_dict_values(sol1, ("variable_values", "variables", "optimal_variables"))
+    vars2 = _extract_dict_values(sol2, ("variable_values", "variables", "optimal_variables"))
+    if vars1 is not None and vars2 is not None:
+        return _dicts_close(vars1, vars2, tol=tol)
+
+    return True
+
+
+def filter_duplicate_solutions(
+    solutions: list[Any],
+    check_variables: bool = True,
+    problem: Problem | None = None,
+    tol: float = 1e-4,
+) -> list[Any]:
+    """Filters duplicate solutions from a list, preserving order.
+
+    TODO: Unify with gnimbus_manager.filter_duplicates_with_variables and
+    api.routers.utils.filter_duplicates to use this standard utility across all methods.
+    """
+    unique: list[Any] = []
+    for sol in solutions:
+        if not any(is_duplicate_solution(sol, u, check_variables=check_variables, tol=tol) for u in unique):
+            unique.append(sol)
+    return unique

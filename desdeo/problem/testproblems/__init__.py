@@ -28,6 +28,7 @@ __all__ = [  # noqa: RUF022
     "mcwb_square_channel_problem",
     "mcwb_tapered_channel_problem",
     "metallurgical_application",
+    "metallurgical_application_discrete",
     "mixed_variable_dimensions_problem",
     "momip_ti2",
     "momip_ti7",
@@ -99,6 +100,7 @@ from .mcwb_problem import (
     mcwb_square_channel_problem,
     mcwb_tapered_channel_problem,
 )
+from .metallurgical_application_discrete import metallurgical_application_discrete
 from .metallurgical_application_problem import metallurgical_application
 from .mixed_variable_dimensions_problem import mixed_variable_dimensions_problem
 from .momip_problem import momip_ti2, momip_ti7

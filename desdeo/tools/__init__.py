@@ -63,10 +63,12 @@ __all__ = [
     "build_combined_scenario_problem",
     "build_scenario_problem",
     "build_scenario_symbol_maps",
+    "filter_duplicate_solutions",
     "find_compatible_solvers",
     "flip_maximized_objective_values",
     "get_corrected_ideal_and_nadir",
     "guess_best_solver",
+    "is_duplicate_solution",
     "payoff_table_method",
     "solve_all_scenarios",
     "solve_scenario",
@@ -142,9 +144,11 @@ from desdeo.tools.scipy_solver_interfaces import ScipyDeSolver, ScipyMinimizeSol
 from desdeo.tools.stochastic import add_conditional_value_at_risk, add_expected_asf, add_expected_value
 from desdeo.tools.utils import (
     available_solvers,
+    filter_duplicate_solutions,
     find_compatible_solvers,
     flip_maximized_objective_values,
     get_corrected_ideal_and_nadir,
     guess_best_solver,
+    is_duplicate_solution,
     payoff_table_method,
 )

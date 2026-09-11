@@ -13,8 +13,10 @@ from desdeo.problem.testproblems import (
 )
 from desdeo.tools.utils import (
     available_solvers,
+    filter_duplicate_solutions,
     find_compatible_solvers,
     guess_best_solver,
+    is_duplicate_solution,
     payoff_table_method,
 )
 
@@ -82,3 +84,34 @@ def test_payoff_dtlz2():
     problem = dtlz2(6, 4)
 
     ideal, nadir = payoff_table_method(problem)  # noqa: RUF059
+
+
+@pytest.mark.utils
+def test_is_duplicate_solution():
+    """Test generic solution equivalence across objective and decision spaces."""
+    sol1 = {"optimal_objectives": {"f1": 1.0, "f2": 2.0}, "optimal_variables": {"x1": 0.5, "x2": 0.5}}
+    sol2 = {"optimal_objectives": {"f1": 1.0, "f2": 2.0}, "optimal_variables": {"x1": 0.5, "x2": 0.5}}
+    sol_multimodal = {"optimal_objectives": {"f1": 1.0, "f2": 2.0}, "optimal_variables": {"x1": 0.9, "x2": 0.1}}
+    sol_diff_obj = {"optimal_objectives": {"f1": 1.5, "f2": 2.0}, "optimal_variables": {"x1": 0.5, "x2": 0.5}}
+
+    # Identical in both spaces
+    assert is_duplicate_solution(sol1, sol2, check_variables=True) is True
+    assert is_duplicate_solution(sol1, sol2, check_variables=False) is True
+
+    # Multi-modal: identical objectives, distinct decision variables
+    assert is_duplicate_solution(sol1, sol_multimodal, check_variables=True) is False
+    assert is_duplicate_solution(sol1, sol_multimodal, check_variables=False) is True
+
+    # Different objectives
+    assert is_duplicate_solution(sol1, sol_diff_obj, check_variables=True) is False
+
+    # Filtering
+    distinct = filter_duplicate_solutions([sol1, sol2, sol_multimodal, sol_diff_obj], check_variables=True)
+    assert len(distinct) == 3
+    assert distinct[0] == sol1
+    assert distinct[1] == sol_multimodal
+    assert distinct[2] == sol_diff_obj
+
+    # Filtering without variable checking merges multi-modal solutions
+    distinct_obj_only = filter_duplicate_solutions([sol1, sol2, sol_multimodal, sol_diff_obj], check_variables=False)
+    assert len(distinct_obj_only) == 2

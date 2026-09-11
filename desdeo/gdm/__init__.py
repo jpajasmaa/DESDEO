@@ -1,6 +1,7 @@
 """Imports available from the desdeo-gdm package."""
 
 __all__ = [
+    "FairSolution",
     "FavOptions",
     "FavResults",
     "GPRMOptions",
@@ -14,6 +15,7 @@ __all__ = [
     "build_grp_subproblem",
     "calculate_dist_to_hull",
     "calculate_dm_utility",
+    "check_adjacency",
     "cluster_points",
     "dict_of_rps_to_list_of_rps",
     "expand_and_generate_candidates",
@@ -23,6 +25,7 @@ __all__ = [
     "generate_next_iteration_mps",
     "get_representative_set",
     "get_representative_set_IPR",
+    "get_tied_candidates",
     "hausdorff_candidates",
     "list_of_rps_to_dict_of_rps",
     "majority_rule",
@@ -31,13 +34,16 @@ __all__ = [
     "minimum_adjustment_mps",
     "plurality_rule",
     "project_point_to_pareto_front",
+    "random_tie_breaker",
     "scale_delta",
     "select_final_candidates",
     "setup",
     "symmetric_cones_preference_constraints",
+    "tie_breaker_avgproj",
 ]
 
 from .favorite_method import (
+    FairSolution,
     FavOptions,
     FavResults,
     GPRMOptions,
@@ -48,6 +54,7 @@ from .favorite_method import (
     adapt_all_dm_preferences,
     calculate_dist_to_hull,
     calculate_dm_utility,
+    check_adjacency,
     cluster_points,
     expand_and_generate_candidates,
     favorite_method,
@@ -55,11 +62,14 @@ from .favorite_method import (
     generate_next_iteration_mps,
     get_representative_set,
     get_representative_set_IPR,
+    get_tied_candidates,
     hausdorff_candidates,
     minimum_adjustment_mps,
     project_point_to_pareto_front,
+    random_tie_breaker,
     select_final_candidates,
     setup,
+    tie_breaker_avgproj,
 )
 from .gdmtools import (
     agg_aspbounds,

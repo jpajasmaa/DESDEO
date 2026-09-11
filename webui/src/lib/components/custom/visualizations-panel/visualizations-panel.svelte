@@ -98,6 +98,7 @@
 		externalSelectedIndexes?: number[] | null;
 		// Labels for different types of solutions
 		lineLabels?: { [key: string]: string };
+		customLineColors?: string[];
 		referenceDataLabels?: {
 			currentRefLabel?: string;
 			previousRefLabel?: string;
@@ -120,6 +121,7 @@
 		externalSelectedIndex = null,
 		externalSelectedIndexes = null,
 		lineLabels = {},
+		customLineColors = [],
 		referenceDataLabels = {}
 	}: Props = $props();
 
@@ -258,6 +260,7 @@
 					multipleSelectedIndexes={externalSelectedIndexes}
 					onLineSelect={handleLineSelect}
 					{lineLabels}
+					{customLineColors}
 				/>
 			{:else if visualizationType === 'bar'}
 				<!-- Placeholder for Bar Chart Visualization -->
