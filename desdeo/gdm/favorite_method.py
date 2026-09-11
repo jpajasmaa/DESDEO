@@ -204,7 +204,7 @@ class ProblemWrapper:
         objs = results.optimal_objectives
         scaled_objs = {obj: (objs[obj] - self.ideal[obj]) / (self.nadir[obj] - self.ideal[obj]) for obj in objs}
         self.evaluated_points.append(
-            _EvaluatedPoint(
+            _EvaluatedPoint.model_construct(
                 reference_point=dict(zip(self.ideal.keys(), scaled_refp, strict=True)),
                 targets=scaled_objs,
                 objectives=objs,
