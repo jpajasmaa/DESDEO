@@ -599,7 +599,7 @@ def test_init_problem_5_re34_pyomo():
         "total_n_of_candidates": 5,
         "candidate_generation_options": "mm",
         "max_iterations": 2,
-        "num_initial_reference_points": 10,
+        "num_initial_reference_points": 500,
     }
     init_res = client.post("/favorite/init", json=payload)
     assert init_res.status_code == 201

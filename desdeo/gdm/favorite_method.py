@@ -26,6 +26,7 @@ from desdeo.problem import (
 )
 from desdeo.problem.schema import Problem
 from desdeo.tools import guess_best_solver, is_duplicate_solution
+from desdeo.tools.generate_rps_from_aspirations import generate_group_reference_points
 from desdeo.tools.generateReferencePoints import (
     generate_points,
     get_hull_equations,
@@ -49,9 +50,11 @@ class IPR_Options(pydantic.BaseModel):  # noqa: N801
     num_initial_reference_points: int = Field(default=10000, ge=1)
     """The number of points to generate uniformly to represent the reference space."""
     version: Literal["convex_hull", "box"] = "convex_hull"
-    """Sampling domain: 'convex_hull' within convex hull of points, or 'box' across bounding box."""
+    """Sampling domain: 'convex_hull' within convex hull of aspiration points, or 'box' across bounding box."""
     most_preferred_solutions: dict[str, dict[str, float]] | None = None
     """Most preferred solutions of the decision makers. Should be filled in by code, not by user."""
+    seed: int | None = None
+    """Random seed for reference point generation. Set for reproducible runs. Defaults to None."""
 
 
 class GPRMOptions(pydantic.BaseModel):
@@ -282,27 +285,20 @@ def get_representative_set_IPR(  # noqa: N802
 
     evaluated_points = [] if len(results_list) == 0 else results_list[-1].raw_results.evaluated_points
 
-    # Normalize mps for fairness and IPR
-    normalized_mpses = {}
-    ideal, nadir = problem.get_ideal_point(), problem.get_nadir_point()
-    for dm, mps in options.method_options.most_preferred_solutions.items():
-        normalized_mpses[dm] = {obj: (mps[obj] - ideal[obj]) / (nadir[obj] - ideal[obj]) for obj in mps}
-
-    # Reference points as array for methods to come
-    rp_arr = []
-    for _, dm in enumerate(normalized_mpses):
-        rp_arr.append(objective_dict_to_numpy_array(problem, normalized_mpses[dm]).tolist())
-
     dims = len(problem.get_nadir_point())
 
     # Get the representative set according to the num points to evaluate
     for n in [options.num_points_to_evaluate, int(options.num_points_to_evaluate / 2), 10]:
         try:
             if options.method_options.version == "convex_hull":
-                _, refp = generate_points(
+                # Generate reference points inside the convex hull of DM aspirations.
+                # Handles degenerate cases (fewer DMs than objectives) via SVD affine subspace projection.
+                aspirations = list(options.method_options.most_preferred_solutions.values())
+                refp = generate_group_reference_points(
+                    problem=problem,
+                    aspirations=aspirations,
                     num_points=options.method_options.num_initial_reference_points,
-                    num_dims=dims,
-                    reference_points=rp_arr,
+                    seed=options.method_options.seed,
                 )
             else:
                 _, refp = generate_points(

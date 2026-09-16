@@ -1,6 +1,7 @@
 """Imports available form the desdeo-tools package."""
 
 __all__ = [
+    "AffineSubspace",
     "BaseSolver",
     "BonminOptions",
     "CVXPYSolver",
@@ -63,13 +64,18 @@ __all__ = [
     "build_combined_scenario_problem",
     "build_scenario_problem",
     "build_scenario_symbol_maps",
+    "denormalize_reference_point",
     "filter_duplicate_solutions",
     "find_compatible_solvers",
     "flip_maximized_objective_values",
+    "generate_group_reference_points",
+    "generate_points_in_hull",
     "get_corrected_ideal_and_nadir",
     "guess_best_solver",
     "is_duplicate_solution",
+    "normalize_objective_vectors",
     "payoff_table_method",
+    "project_to_reference_plane",
     "solve_all_scenarios",
     "solve_scenario",
 ]
@@ -77,6 +83,14 @@ __all__ = [
 from desdeo.tools.cvxpy_solver_interfaces import (
     CVXPYSolver,
     CVXPYSolverOptions,
+)
+from desdeo.tools.generate_rps_from_aspirations import (
+    AffineSubspace,
+    denormalize_reference_point,
+    generate_group_reference_points,
+    generate_points_in_hull,
+    normalize_objective_vectors,
+    project_to_reference_plane,
 )
 from desdeo.tools.generics import BaseSolver, SolverOptions, SolverResults
 from desdeo.tools.group_scalarization import (
