@@ -218,7 +218,7 @@ class BaseDecompositionSelector(BaseSelector):
             self.interactive_adapt_2(
                 corrected_sols,
                 predefined_distance=self.reference_vector_options.adaptation_distance,
-                ord=2 if self.reference_vector_options.vector_type == "spherical" else 1,
+                norm_order=2 if self.reference_vector_options.vector_type == "spherical" else 1,
             )
         elif self.reference_vector_options.preferred_ranges:
             corrected_ranges = np.array(
@@ -844,7 +844,7 @@ class RVEASelector(BaseDecompositionSelector):
         if isinstance(self.selected_individuals, pl.DataFrame):
             message = PolarsDataFrameMessage(
                 topic=SelectorMessageTopics.SELECTED_VERBOSE_OUTPUTS,
-                value=pl.concat([self.selected_individuals, self.selected_targets], how="horizontal"),
+                value=self.selected_individuals.hstack(self.selected_targets),
                 source=self.__class__.__name__,
             )
         else:
@@ -1297,7 +1297,7 @@ class NSGA3Selector(BaseDecompositionSelector):
         if isinstance(self.selected_individuals, pl.DataFrame):
             message = PolarsDataFrameMessage(
                 topic=SelectorMessageTopics.SELECTED_VERBOSE_OUTPUTS,
-                value=pl.concat([self.selected_individuals, self.selected_targets], how="horizontal"),
+                value=self.selected_individuals.hstack(self.selected_targets),
                 source=self.__class__.__name__,
             )
         else:
@@ -1607,7 +1607,7 @@ class IBEASelector(BaseSelector):
         if isinstance(self.selected_individuals, pl.DataFrame):
             message = PolarsDataFrameMessage(
                 topic=SelectorMessageTopics.SELECTED_VERBOSE_OUTPUTS,
-                value=pl.concat([self.selected_individuals, self.selected_targets], how="horizontal"),
+                value=self.selected_individuals.hstack(self.selected_targets),
                 source=self.__class__.__name__,
             )
         else:
@@ -1977,7 +1977,7 @@ class NSGA2Selector(BaseSelector):
         if isinstance(self.selected_individuals, pl.DataFrame):
             message = PolarsDataFrameMessage(
                 topic=SelectorMessageTopics.SELECTED_VERBOSE_OUTPUTS,
-                value=pl.concat([self.selected_individuals, self.selected_targets], how="horizontal"),
+                value=self.selected_individuals.hstack(self.selected_targets),
                 source=self.__class__.__name__,
             )
         else:
@@ -2177,7 +2177,7 @@ class SMSEMOASelector(BaseSelector):
         if isinstance(self.selected_individuals, pl.DataFrame):
             message = PolarsDataFrameMessage(
                 topic=SelectorMessageTopics.SELECTED_VERBOSE_OUTPUTS,
-                value=pl.concat([self.selected_individuals, self.selected_targets], how="horizontal"),
+                value=self.selected_individuals.hstack(self.selected_targets),
                 source=self.__class__.__name__,
             )
         else:
