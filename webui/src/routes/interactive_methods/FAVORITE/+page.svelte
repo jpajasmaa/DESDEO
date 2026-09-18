@@ -327,6 +327,16 @@
                     🏆 Decision Phase Complete
                 </span>
                 <span class="text-sm font-semibold text-gray-800">Group Decision Complete! Winning Solution Selected</span>
+            {:else if session.status === "ready_for_iteration"}
+                <span class="inline-flex items-center gap-1 px-3 py-0.5 rounded-full text-xs font-bold uppercase tracking-wide bg-emerald-100 text-emerald-900 border border-emerald-300">
+                    ✨ Ready for Next Iteration
+                </span>
+                <span class="text-sm font-semibold text-gray-800">Iteration {session.current_iteration} Winner Resolved (Analyst to proceed)</span>
+            {:else if session.status === "revote_pending"}
+                <span class="inline-flex items-center gap-1 px-3 py-0.5 rounded-full text-xs font-bold uppercase tracking-wide bg-amber-200 text-amber-900 border border-amber-400">
+                    ⚠️ Round 2 Revote Pending
+                </span>
+                <span class="text-sm font-semibold text-gray-800">Global Forced Concession Revote</span>
             {:else if isDecisionPhase}
                 <span class="inline-flex items-center gap-1 px-3 py-0.5 rounded-full text-xs font-bold uppercase tracking-wide bg-amber-200 text-amber-900 border border-amber-400">
                     🎯 Decision Phase
@@ -425,16 +435,20 @@
                             <p class="text-xs text-indigo-700">Waiting for all Decision Makers to cast their final vote.</p>
                         </div>
                     {:else}
-                        {@const allVoted = Object.keys(session.current_votes).length === session.dm_ids.length}
+                        {@const isReadyForIter = session.status === "ready_for_iteration"}
                         <button
                             class="bg-purple-600 text-white py-2 rounded hover:bg-purple-700 disabled:opacity-50 font-semibold shadow"
                             onclick={handleIterate}
-                            disabled={isProcessing || !allVoted || session.status === "revote_pending"}
+                            disabled={isProcessing || !isReadyForIter}
                         >
-                            {isProcessing ? 'Computing...' : 'Run Next Iteration'}
+                            {isProcessing ? 'Computing...' : `Run Next Iteration (Iter ${session.current_iteration + 1})`}
                         </button>
-                        {#if !allVoted}
-                            <p class="text-xs text-gray-500 text-center">Waiting for all votes...</p>
+                        {#if session.status === "voting"}
+                            <p class="text-xs text-gray-500 text-center">Waiting for all DM votes...</p>
+                        {:else if session.status === "revote_pending"}
+                            <p class="text-xs text-amber-600 text-center font-medium">Round 2 concession revotes in progress...</p>
+                        {:else if session.status === "ready_for_iteration"}
+                            <p class="text-xs text-emerald-600 text-center font-medium">✓ Ready! Click above to zoom in.</p>
                         {/if}
                     {/if}
                 {/if}
@@ -519,8 +533,29 @@
                     {@const tiedIndices = session.tie_state?.tied_candidate_indices ?? []}
                     {@const tiedListStr = tiedIndices.map((idx: number) => `Candidate ${idx + 1}`).join(", ")}
                     <div class="bg-amber-100 text-amber-900 p-4 rounded border border-amber-400 font-medium text-center shadow-sm">
-                        <span class="font-bold text-base">⚠️ Tie detected between {tiedListStr}!</span>
-                        <p class="text-sm mt-1">Decision Makers must cast a revote between the tied candidates.</p>
+                        <span class="font-bold text-base">⚠️ Tie detected in Round 1 votes ({tiedListStr})!</span>
+                        <p class="text-sm mt-1">
+                            <strong>Round 2: Global Forced Concession Revote.</strong> Each Decision Maker must select an alternative candidate different from their 1st round choice.
+                        </p>
+                    </div>
+                {/if}
+
+                {#if session.status === "ready_for_iteration"}
+                    <div class="bg-emerald-50 text-emerald-900 p-4 rounded border border-emerald-400 font-medium text-center shadow-sm">
+                        <span class="font-bold text-base">🎉 Voting Complete & Winner Selected!</span>
+                        <p class="text-sm mt-1">
+                            {#if session.tie_state?.resolved_winner_idx !== undefined}
+                                Winning solution: <strong>Candidate {session.tie_state.resolved_winner_idx + 1}</strong>
+                                {#if session.tie_state?.borda_scores}
+                                    (via Global Forced Concession & Borda Scoring)
+                                {:else if session.tie_state?.strategy === "tie_breaker_avgproj"}
+                                    (via Average Projection Compromise)
+                                {/if}.
+                            {:else}
+                                Unique plurality winner selected.
+                            {/if}
+                            Decision Maker preferred solutions have been adapted. Proceed to the next iteration to zoom in on the winner.
+                        </p>
                     </div>
                 {/if}
 
@@ -553,24 +588,31 @@
                             {@const tiedIndices = session.tie_state?.tied_candidate_indices ?? []}
                             {@const isRevote = session.status === "revote_pending"}
                             {@const isTied = isRevote && tiedIndices.includes(i)}
+                            {@const round1Vote = session.tie_state?.round_1_votes?.[currentRole]}
+                            {@const isExcludedFromRevote = isRevote && round1Vote === i}
                             {@const hasCurrentRoleVoted = session.current_votes[currentRole] !== undefined}
-                            {@const isCardDisabled = isProcessing || (isRevote ? (!isTied || hasCurrentRoleVoted) : (hasCurrentRoleVoted && session.current_votes[currentRole] !== i))}
-                            {@const isFinalSolution = session.status === "completed" && (
-                                session.final_solution
-                                    ? JSON.stringify(session.final_solution.objective_values) === JSON.stringify(candidate.objective_values)
-                                    : session.tie_state?.final_winner_idx === i
-                            )}
+                            {@const isCardDisabled = isProcessing || (isRevote ? (isExcludedFromRevote || hasCurrentRoleVoted) : (hasCurrentRoleVoted && session.current_votes[currentRole] !== i))}
+                            {@const candBordaScore = session.tie_state?.borda_scores?.[i] ?? null}
+                            {@const isWinningCand = session.final_solution
+                                ? JSON.stringify(session.final_solution.objective_values) === JSON.stringify(candidate.objective_values)
+                                : (session.tie_state?.resolved_winner_idx === i || session.tie_state?.final_winner_idx === i)}
+                            {@const isFinalWinner = session.status === "completed" && isWinningCand}
+                            {@const isIterationWinner = session.status === "ready_for_iteration" && isWinningCand}
                             <CandidateCard
                                 {candidate}
                                 {objectiveNameMap}
                                 index={i}
                                 onVote={handleVote}
-                                showVoteButton={currentRole !== "analyst" && session.status !== "completed"}
+                                showVoteButton={currentRole !== "analyst" && session.status !== "completed" && session.status !== "ready_for_iteration"}
                                 isVoted={session.current_votes[currentRole] === i}
                                 disabled={isCardDisabled}
                                 isTiedCandidate={isTied}
                                 isDecisionPhase={isDecisionPhase}
-                                isFinalWinner={isFinalSolution}
+                                {isFinalWinner}
+                                {isIterationWinner}
+                                {isExcludedFromRevote}
+                                isRevotePhase={isRevote}
+                                bordaScore={candBordaScore}
                             />
                         {/each}
                     </div>

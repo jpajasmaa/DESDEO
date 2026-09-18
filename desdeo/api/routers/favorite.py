@@ -24,13 +24,14 @@ from desdeo.gdm.favorite_method import (
     ZoomOptions,
     adapt_all_dm_preferences,
     calculate_fraction_to_keep,
-    check_adjacency,
     cluster_points,
     favorite_method,
     generate_next_iteration_mps,
     recluster_for_tie_breaker,
-    tie_breaker_avgproj,
+    resolve_round1_winner,
+    resolve_round2_winner,
 )
+from desdeo.gdm.voting_rules import calculate_borda_scores, plurality_rule
 from desdeo.problem.schema import Problem
 from desdeo.problem.testproblems import (
     dmitry_forest_problem_disc,
@@ -43,12 +44,6 @@ from desdeo.problem.testproblems import (
 router = APIRouter(prefix="/favorite", tags=["Favorite Method"])
 
 
-def _tally_votes(current_votes: dict[str, int]) -> tuple[list[int], int]:
-    """Tally votes and return top candidates and max vote count."""
-    vote_counts = {v: list(current_votes.values()).count(v) for v in set(current_votes.values())}
-    max_votes = max(vote_counts.values()) if vote_counts else 0
-    top_candidates = [cand for cand, count in vote_counts.items() if count == max_votes]
-    return top_candidates, max_votes
 
 
 def _serialize_state(state: FavoriteSessionState) -> dict:
@@ -232,7 +227,9 @@ async def init_favorite_session(
     current_mps = copy.deepcopy(mps)
     fav_options = FavOptions(
         total_n_of_candidates=request.total_n_of_candidates,
-        candidate_generation_options=request.candidate_generation_options,
+        fairness_criterion=request.fairness_criterion,
+        voting_rule=request.voting_rule,
+        borda_weights=request.borda_weights,
         original_most_preferred_solutions=mps,
         current_most_preferred_solutions=current_mps,
         zoom_options=ZoomOptions(num_steps_remaining=request.max_iterations),
@@ -295,26 +292,38 @@ async def get_favorite_state(
     return db_session.state_data
 
 
-def _handle_revote_completion(state: FavoriteSessionState) -> None:
-    """Resolve revote outcome when all DMs have cast revotes."""
-    top_candidates, _ = _tally_votes(state.current_votes)
-    is_final_voting = state.phase == "decision"
+def _handle_revote_completion(state: FavoriteSessionState, db: Session) -> None:
+    """Resolve Round 2 revote using Weighted Borda scoring and group fairness tie-breaking."""
+    round_1_votes = (state.tie_state or {}).get("round_1_votes", {})
+    round_2_votes = state.current_votes
+    borda_weights = tuple(getattr(state.options, "borda_weights", (2, 1)))
 
-    if len(top_candidates) > 1:
-        winning_idx = min(top_candidates, key=lambda idx: state.candidates[idx].fairness_value)
-        state.tie_state = {
-            "tied_candidate_indices": top_candidates,
-            "resolved_winner_idx": winning_idx,
-        }
-    else:
-        winning_idx = top_candidates[0]
-        state.tie_state = None
+    scores = calculate_borda_scores(round_1_votes, round_2_votes, len(state.candidates), weights=borda_weights)
+    problem = get_problem_instance(state.problem_id, db)
+    active_mps = state.current_most_preferred_solutions or state.options.original_most_preferred_solutions
+    fairness_criterion = state.options.fairness_criterion
 
-    if is_final_voting:
+    winning_idx = resolve_round2_winner(
+        round_1_votes=round_1_votes,
+        round_2_votes=round_2_votes,
+        candidates=state.candidates,
+        problem=problem,
+        most_preferred_solutions=active_mps,
+        fairness_criterion=fairness_criterion,
+        borda_weights=borda_weights,
+    )
+
+    state.tie_state = {
+        **(state.tie_state or {}),
+        "resolved_winner_idx": winning_idx,
+        "borda_scores": {str(k): v for k, v in scores.items()},
+    }
+
+    if state.phase == "decision":
         state.final_solution = state.candidates[winning_idx]
         state.status = "completed"
     else:
-        state.status = "voting"
+        state.status = "ready_for_iteration"
 
 
 @router.post("/vote/{session_id}")
@@ -345,71 +354,71 @@ async def submit_favorite_vote(  # noqa: C901
         )
 
     if state.status == "revote_pending":
-        tied_indices = (state.tie_state or {}).get("tied_candidate_indices", [])
-        if vote.vote_idx not in tied_indices:
+        round_1_votes = (state.tie_state or {}).get("round_1_votes", {})
+        if vote.dm_id in round_1_votes and vote.vote_idx == round_1_votes[vote.dm_id]:
             raise HTTPException(
                 status_code=400,
-                detail=f"Candidate index {vote.vote_idx} is not among tied candidates {tied_indices}.",
+                detail=(
+                    f"In Global Forced Concession revote, DM '{vote.dm_id}' "
+                    f"cannot vote for their Round 1 choice (Candidate {vote.vote_idx + 1})."
+                ),
             )
         state.current_votes[vote.dm_id] = vote.vote_idx
 
         # When all DMs have revoted
         if len(state.current_votes) == len(state.dm_ids):
-            _handle_revote_completion(state)
+            _handle_revote_completion(state, db)
 
     elif state.status == "voting":
         state.current_votes[vote.dm_id] = vote.vote_idx
 
         if len(state.current_votes) == len(state.dm_ids):
-            top_candidates, _ = _tally_votes(state.current_votes)
+            prev_results = state.results_history[-1]
+            problem = get_problem_instance(state.problem_id, db)
+            voting_rule = state.options.voting_rule
+            borda_weights = tuple(state.options.borda_weights)
 
-            if len(top_candidates) > 1:
-                is_adjacent = False
-                compromise_solution = None
+            winner_idx, compromise_solution, tie_state = resolve_round1_winner(
+                votes=state.current_votes,
+                candidates=state.candidates,
+                prev_results=prev_results,
+                problem=problem,
+                voting_rule=voting_rule,
+                borda_weights=borda_weights,
+            )
 
-                if len(top_candidates) == 2:  # noqa: PLR2004
-                    prev_results = state.results_history[-1]
-                    pts_mat, _, labels = cluster_points(prev_results)
-                    idx_a, idx_b = top_candidates[0], top_candidates[1]
-                    is_adjacent = check_adjacency(pts_mat, labels, idx_a, idx_b)
-
-                    if is_adjacent:
-                        problem = get_problem_instance(state.problem_id, db)
-                        tied_votes = {dm: v for dm, v in state.current_votes.items() if v in top_candidates}
-                        compromise_solution = tie_breaker_avgproj(problem, tied_votes, state.candidates)
-
-                if is_adjacent and compromise_solution is not None:
-                    if state.phase == "decision":
-                        state.final_solution = compromise_solution
-                        state.status = "completed"
-                        state.tie_state = {
-                            "strategy": "tie_breaker_avgproj",
-                            "tied_candidate_indices": sorted(top_candidates),
-                            "is_adjacent": True,
-                        }
-                    else:
-                        state.tie_state = {
-                            "strategy": "tie_breaker_avgproj",
-                            "tied_candidate_indices": sorted(top_candidates),
-                            "is_adjacent": True,
-                            "compromise_solution": compromise_solution.model_dump(),
-                        }
-                else:
-                    # Non-adjacent or >2 tied candidates: Trigger revote
-                    state.status = "revote_pending"
-                    state.tie_state = {
-                        "tied_candidate_indices": sorted(top_candidates),
-                        "strategy": "Simple Vote-Again",
-                        "is_adjacent": False,
-                    }
-                    state.current_votes = {}
-            else:
-                state.tie_state = None
+            if winner_idx is not None:
+                # Clear unique winner
                 if state.phase == "decision":
-                    winner_idx = top_candidates[0]
                     state.final_solution = state.candidates[winner_idx]
                     state.status = "completed"
                     state.tie_state = {"final_winner_idx": winner_idx}
+                else:
+                    state.status = "ready_for_iteration"
+                    state.tie_state = {"final_winner_idx": winner_idx, "strategy": voting_rule}
+            elif compromise_solution is not None:
+                # 2-candidate adjacent tie → average-projection compromise
+                if state.phase == "decision":
+                    state.final_solution = compromise_solution
+                    state.status = "completed"
+                    state.tie_state = {
+                        "strategy": "tie_breaker_avgproj",
+                        "tied_candidate_indices": sorted(set(state.current_votes.values())),
+                        "is_adjacent": True,
+                    }
+                else:
+                    state.status = "ready_for_iteration"
+                    state.tie_state = {
+                        "strategy": "tie_breaker_avgproj",
+                        "tied_candidate_indices": sorted(set(state.current_votes.values())),
+                        "is_adjacent": True,
+                        "compromise_solution": compromise_solution.model_dump(),
+                    }
+            else:
+                # Round 2 revote required
+                state.status = "revote_pending"
+                state.tie_state = tie_state
+                state.current_votes = {}
 
     db_session.state_data = _serialize_state(state)
     db.add(db_session)
@@ -420,7 +429,7 @@ async def submit_favorite_vote(  # noqa: C901
         "current_votes": state.current_votes,
         "phase": state.phase,
         "status": state.status,
-        "is_ready": len(state.current_votes) == len(state.dm_ids),
+        "is_ready": state.status in ["ready_for_iteration", "completed"],
         "tie_state": state.tie_state,
         "final_solution": state.final_solution.model_dump() if state.final_solution else None,
     }
@@ -453,16 +462,21 @@ async def iterate_favorite_session(
             detail="In final decision phase: waiting for Decision Makers to cast final votes.",
         )
 
-    if len(state.current_votes) < len(state.dm_ids):
-        raise HTTPException(status_code=400, detail="Cannot iterate until all DMs have voted.")
+    # 1. Adapt DM preferred solutions based strictly on primary Round 1 votes
+    round_1_votes = (
+        state.tie_state.get("round_1_votes")
+        if (state.tie_state and "round_1_votes" in state.tie_state)
+        else state.current_votes
+    )
+    if not round_1_votes:
+        raise HTTPException(status_code=400, detail="Cannot iterate until DMs have voted.")
 
-    # 1. Adapt DM preferred solutions based on cast votes and presented candidates
     current_mps = state.current_most_preferred_solutions or state.options.original_most_preferred_solutions
     adapted_mps, adjustments_meta = adapt_all_dm_preferences(
         problem=problem,
         current_mps=current_mps,
         candidates=state.candidates,
-        votes=state.current_votes,
+        votes=round_1_votes,
         epsilon=1e-4,
     )
     state.current_most_preferred_solutions = adapted_mps
@@ -486,20 +500,13 @@ async def iterate_favorite_session(
         winning_idx = state.tie_state["resolved_winner_idx"]
         prev_results = state.results_history[-1]
         _, _, labels = cluster_points(prev_results)
+    elif state.tie_state and "final_winner_idx" in state.tie_state:
+        winning_idx = state.tie_state["final_winner_idx"]
+        prev_results = state.results_history[-1]
+        _, _, labels = cluster_points(prev_results)
     else:
-        top_candidates, _ = _tally_votes(state.current_votes)
-
-        if len(top_candidates) > 1:
-            # Fallback tie check
-            state.status = "revote_pending"
-            state.tie_state = {"tied_candidate_indices": sorted(top_candidates), "strategy": "Simple Vote-Again"}
-            state.current_votes = {}
-            db_session.state_data = _serialize_state(state)
-            db.add(db_session)
-            db.commit()
-            return db_session.state_data
-
-        winning_idx = top_candidates[0]
+        top_candidates = plurality_rule(state.current_votes)
+        winning_idx = top_candidates[0] if top_candidates else 0
         prev_results = state.results_history[-1]
         _, _, labels = cluster_points(prev_results)
 
@@ -523,6 +530,8 @@ async def iterate_favorite_session(
     next_options.original_most_preferred_solutions = state.options.original_most_preferred_solutions
     next_options.current_most_preferred_solutions = adapted_mps
     next_options.preferences_already_adapted = True
+    if next_options.GPRMoptions.method_options is None:
+        next_options.GPRMoptions.method_options = IPR_Options()
     next_options.GPRMoptions.method_options.most_preferred_solutions = next_mps
     next_options.GPRMoptions.method_options.num_initial_reference_points = num_ref_points
     next_options.GPRMoptions.method_options.version = "convex_hull"
@@ -535,8 +544,7 @@ async def iterate_favorite_session(
 
     if new_results.status == "revote_pending":
         state.status = "revote_pending"
-        tied_idxs = (new_results.tie_state or {}).get("tied_indices", [])
-        state.tie_state = {"tied_candidate_indices": tied_idxs}
+        state.tie_state = new_results.tie_state
         state.current_votes = {}
     else:
         state.results_history.append(new_results)
@@ -558,3 +566,4 @@ async def iterate_favorite_session(
     db.commit()
 
     return db_session.state_data
+

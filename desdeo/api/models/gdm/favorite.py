@@ -2,7 +2,7 @@
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy import JSON, Column
 from sqlmodel import Field as SQLField
 from sqlmodel import SQLModel
@@ -24,9 +24,21 @@ class FavoriteInitRequest(BaseModel):
         description="List of Decision Maker usernames or IDs (e.g., ['dm1', 'dm2', 'dm3']).",
     )
     total_n_of_candidates: int = Field(default=5, ge=1, description="Total candidates presented per iteration.")
-    candidate_generation_options: str = Field(
+    fairness_criterion: str = Field(
         default="mm",
         description="Fairness criterion ('mm', 'utilitarian', 'nash').",
+    )
+    candidate_generation_options: str = Field(
+        default="mm",
+        description="Alias for fairness_criterion ('mm', 'utilitarian', 'nash').",
+    )
+    voting_rule: Literal["plurality", "majority"] = Field(
+        default="plurality",
+        description="Voting rule used to determine the Round 1 winner: 'plurality' or 'majority'.",
+    )
+    borda_weights: tuple[float, float] | tuple[int, int] = Field(
+        default=(2, 1),
+        description="Weights (w1, w2) for Round 1 and Round 2 votes in Borda scoring.",
     )
     max_iterations: int = Field(default=5, ge=1, description="Total planned zooming iterations.")
     num_initial_reference_points: int = Field(default=1000, ge=1, description="IPR sample points.")
@@ -34,6 +46,21 @@ class FavoriteInitRequest(BaseModel):
         default=None,
         description="Optional manual MPS map (e.g., {'dm1': {'f_1': 0.1, 'f_2': 0.05}}). If None, fetched from DB.",
     )
+
+    @field_validator("candidate_generation_options", mode="before")
+    @classmethod
+    def sync_cand_gen_options(cls, v: Any, info: Any) -> Any:
+        return v
+
+    @model_validator(mode="before")
+    @classmethod
+    def sync_fairness_criterion(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            if "fairness_criterion" in data and "candidate_generation_options" not in data:
+                data["candidate_generation_options"] = data["fairness_criterion"]
+            elif "candidate_generation_options" in data and "fairness_criterion" not in data:
+                data["fairness_criterion"] = data["candidate_generation_options"]
+        return data
 
     @field_validator("problem_id", mode="before")
     @classmethod
@@ -71,7 +98,7 @@ class FavoriteSessionState(BaseModel):
     current_iteration: int
     max_iterations: int
     phase: Literal["consensus_reaching", "decision"] = "consensus_reaching"
-    status: Literal["voting", "revote_pending", "completed"] = "voting"
+    status: Literal["voting", "revote_pending", "ready_for_iteration", "completed"] = "voting"
     options: FavOptions
     results_history: list[FavResults]
     current_votes: dict[str, int] = Field(default_factory=dict)

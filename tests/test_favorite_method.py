@@ -1,5 +1,6 @@
 """Tests related to the Favorite method."""
 
+import copy
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -22,7 +23,9 @@ from desdeo.gdm.favorite_method import (
     cluster_points,
     favorite_method,
     find_group_solutions,
+    get_mm_candidate_index,
     get_tied_candidates,
+    handle_ties,
     hausdorff_candidates,
     minimum_adjustment_mps,
     random_tie_breaker,
@@ -30,6 +33,7 @@ from desdeo.gdm.favorite_method import (
     select_final_candidates,
     tie_breaker_avgproj,
 )
+from desdeo.gdm.voting_rules import borda_rule, calculate_borda_scores, plurality_rule
 from desdeo.problem.testproblems.dtlz_problems import dtlz2
 from desdeo.tools.iterative_pareto_representer import _EvaluatedPoint
 
@@ -71,7 +75,7 @@ def base_options(dummy_mps):
     )
     return FavOptions(
         GPRMoptions=gprm_options,
-        candidate_generation_options="mm",
+        fairness_criterion="mm",
         zoom_options=ZoomOptions(num_steps_remaining=4),
         original_most_preferred_solutions=dummy_mps,
         total_n_of_candidates=5,
@@ -317,7 +321,7 @@ def test_favorite_method_e2e_integration(dummy_problem, dummy_mps):
     )
     options = FavOptions(
         GPRMoptions=gprm_options,
-        candidate_generation_options="mm",
+        fairness_criterion="mm",
         zoom_options=ZoomOptions(num_steps_remaining=4),
         original_most_preferred_solutions=dummy_mps,
         total_n_of_candidates=3,
@@ -368,8 +372,8 @@ def test_favorite_method_tie_routing(dummy_problem, base_options):
 
     assert res2.status == "revote_pending", "Tie logic failed to halt progression!"
     assert res2.tie_state is not None, "UI State payload is missing!"
-    assert "tied_indices" in res2.tie_state
-    assert 0 in res2.tie_state["tied_indices"] and 1 in res2.tie_state["tied_indices"]
+    assert "tied_candidate_indices" in res2.tie_state
+    assert 0 in res2.tie_state["tied_candidate_indices"] and 1 in res2.tie_state["tied_candidate_indices"]
 
 
 @patch("desdeo.gdm.favorite_method.add_asf_diff")
@@ -580,3 +584,315 @@ def test_favorite_method_winner_duplicate_merging(dummy_problem, base_options):
         assert res.fair_solutions[0].fairness_criterion == "winner_and_mm"
         assert res.fair_solutions[0].fairness_value == 0.45
         assert res.fair_solutions[1].fairness_criterion == "avg_hausdorff"
+
+
+def test_plurality_rule_unique_and_tied():
+    """Test plurality_rule returns single winner for strict plurality and all tied candidates on tie."""
+    votes_unique = {"dm1": 0, "dm2": 0, "dm3": 1, "dm4": 2}
+    top = plurality_rule(votes_unique)
+    assert top == [0]
+
+    votes_tie = {"dm1": 0, "dm2": 1, "dm3": 1, "dm4": 0}
+    top_tie = plurality_rule(votes_tie)
+    assert sorted(top_tie) == [0, 1]
+
+
+def test_calculate_borda_scores_and_rule():
+    """Test weighted Borda scores (2*V1 + 1*V2) and borda_rule."""
+    r1 = {"dm1": 0, "dm2": 1, "dm3": 1}  # cand 0 has 1 vote (2 pts), cand 1 has 2 votes (4 pts)
+    r2 = {"dm1": 2, "dm2": 0, "dm3": 2}  # cand 0 has 1 vote (1 pt), cand 2 has 2 votes (2 pts)
+    # Total scores: cand 0 = 3, cand 1 = 4, cand 2 = 2
+    scores = calculate_borda_scores(r1, r2, n_candidates=3)
+    assert scores == {0: 3, 1: 4, 2: 2}
+
+    winners = borda_rule(r1, r2, n_candidates=3)
+    assert winners == [1]
+
+    # Test Borda tie
+    r2_tie = {"dm1": 0, "dm2": 2, "dm3": 0}  # cand 0 gets +2 pts -> total 4; cand 1 gets +0 -> total 4
+    scores_tie = calculate_borda_scores(r1, r2_tie, n_candidates=3)
+    assert scores_tie[0] == 4
+    assert scores_tie[1] == 4
+    tied_winners = borda_rule(r1, r2_tie, n_candidates=3)
+    assert sorted(tied_winners) == [0, 1]
+
+
+def test_get_mm_candidate_index():
+    """Test get_mm_candidate_index finds the group fair candidate."""
+    cands = [
+        FairSolution(objective_values={"f": 1.0}, fairness_criterion="last_winner", fairness_value=0.0),
+        FairSolution(objective_values={"f": 2.0}, fairness_criterion="mm", fairness_value=0.0),
+        FairSolution(objective_values={"f": 3.0}, fairness_criterion="avg_hausdorff", fairness_value=0.0),
+    ]
+    assert get_mm_candidate_index(cands) == 1
+
+    cands_merged = [
+        FairSolution(objective_values={"f": 1.0}, fairness_criterion="winner_and_mm", fairness_value=0.0),
+        FairSolution(objective_values={"f": 2.0}, fairness_criterion="avg_hausdorff", fairness_value=0.0),
+    ]
+    assert get_mm_candidate_index(cands_merged) == 0
+
+
+def test_handle_ties_global_forced_borda_and_mm_fallback(dummy_problem, base_options):
+    """Test handle_ties transitions through Round 1 tie, Borda resolution, and MM fallback."""
+    cands = [
+        FairSolution(objective_values={"f_1": 0.0, "f_2": 1.0, "f_3": 0.0}, fairness_criterion="mm", fairness_value=0),
+        FairSolution(
+            objective_values={"f_1": 1.0, "f_2": 0.0, "f_3": 0.0}, fairness_criterion="avg_hausdorff", fairness_value=0
+        ),
+        FairSolution(
+            objective_values={"f_1": 0.5, "f_2": 0.5, "f_3": 0.5}, fairness_criterion="avg_hausdorff", fairness_value=0
+        ),
+    ]
+    mock_gprm = GPRMResults(
+        raw_results=IPR_Results(
+            evaluated_points=[
+                _EvaluatedPoint(reference_point={}, targets={}, objectives={"f_1": 0.0, "f_2": 1.0, "f_3": 0.0}),
+                _EvaluatedPoint(reference_point={}, targets={}, objectives={"f_1": 1.0, "f_2": 0.0, "f_3": 0.0}),
+            ]
+        ),
+        solutions=None,
+        outputs=pl.DataFrame(),
+    )
+    res_prev = FavResults(FavOptions=base_options, GPRMResults=mock_gprm, fair_solutions=cands, status="success")
+
+    # 1. Round 1 3-way tie: should initiate global_forced_borda revote
+    votes_r1 = {"DM1": 0, "DM2": 1, "DM3": 2}
+    winner, tie_state = handle_ties(
+        problem=dummy_problem,
+        votes=votes_r1,
+        candidates=cands,
+        fav_results_previous=res_prev,
+        tie_state=None,
+    )
+    assert winner is None
+    assert tie_state is not None
+    assert tie_state["strategy"] == "global_forced_borda"
+    assert tie_state["round_1_votes"] == votes_r1
+    assert tie_state["eligible_candidates"] == [0, 1, 2]
+
+    # 2. Round 2 revote: DM1->1, DM2->2, DM3->1
+    # Borda: cand 0 = 2, cand 1 = 2 + 2 = 4, cand 2 = 2 + 1 = 3 -> cand 1 wins!
+    votes_r2 = {"DM1": 1, "DM2": 2, "DM3": 1}
+    winner_r2, tie_state_r2 = handle_ties(
+        problem=dummy_problem,
+        votes=votes_r2,
+        candidates=cands,
+        fav_results_previous=res_prev,
+        tie_state=tie_state,
+    )
+    assert tie_state_r2 is None
+    assert winner_r2 == cands[1]
+
+    # 3. Round 2 revote resulting in a 3-way Borda tie:
+    # All 3 candidates get 3 Borda points -> breaks tie by evaluating candidate fairness
+    votes_r2_tie = {"DM1": 1, "DM2": 2, "DM3": 0}
+    winner_tie, tie_state_tie = handle_ties(
+        problem=dummy_problem,
+        votes=votes_r2_tie,
+        candidates=cands,
+        fav_results_previous=res_prev,
+        tie_state=tie_state,
+    )
+    assert tie_state_tie is None
+    # Evaluates fairness among tied candidates: cand 2 has the highest group fairness score
+    assert winner_tie == cands[2]
+
+
+def test_borda_tie_between_non_mm_candidates_picks_fairer_leader(dummy_problem, base_options):
+    """Test that when top Borda candidates are tied, candidate 0 with fewer points cannot win."""
+    cands = [
+        FairSolution(objective_values={"f_1": 0.0, "f_2": 1.0, "f_3": 0.0}, fairness_criterion="mm", fairness_value=0),
+        FairSolution(
+            objective_values={"f_1": 0.3, "f_2": 0.3, "f_3": 0.3}, fairness_criterion="avg_hausdorff", fairness_value=0
+        ),
+        FairSolution(
+            objective_values={"f_1": 0.4, "f_2": 0.4, "f_3": 0.4}, fairness_criterion="avg_hausdorff", fairness_value=0
+        ),
+        FairSolution(
+            objective_values={"f_1": 0.9, "f_2": 0.9, "f_3": 0.9}, fairness_criterion="avg_hausdorff", fairness_value=0
+        ),
+    ]
+    res_prev = FavResults(
+        FavOptions=base_options,
+        GPRMResults=GPRMResults(
+            raw_results=IPR_Results(evaluated_points=[]),
+            solutions=None,
+            outputs=pl.DataFrame(),
+        ),
+        fair_solutions=cands,
+        status="success",
+    )
+
+    # 4-way tie in Round 1: each candidate gets 2 Borda points
+    votes_r1 = {"DM1": 0, "DM2": 1, "DM3": 2, "DM4": 3}
+    _, tie_state = handle_ties(
+        problem=dummy_problem,
+        votes=votes_r1,
+        candidates=cands,
+        fav_results_previous=res_prev,
+        tie_state=None,
+    )
+    assert tie_state is not None
+
+    # Round 2 revote:
+    # DM1 -> 1, DM2 -> 2, DM3 -> 1, DM4 -> 2
+    # Borda: Cand 0 has 2 pts, Cand 1 has 4 pts, Cand 2 has 4 pts, Cand 3 has 2 pts.
+    votes_r2 = {"DM1": 1, "DM2": 2, "DM3": 1, "DM4": 2}
+    winner, tie_state_r2 = handle_ties(
+        problem=dummy_problem,
+        votes=votes_r2,
+        candidates=cands,
+        fav_results_previous=res_prev,
+        tie_state=tie_state,
+    )
+    assert tie_state_r2 is None
+    # Cand 0 has only 2 Borda points and MUST NOT WIN. Winner must be cands[1] (fairer than cands[2]).
+    assert winner != cands[0]
+    assert winner == cands[1]
+
+
+def test_round_2_revotes_private_no_preference_leak(dummy_problem, base_options):
+    """Test that Round 2 concession votes do not leak into or alter DM preferred solutions."""
+    initial_mps = {
+        "DM1": {"f_1": 0.0, "f_2": 0.9, "f_3": 0.8},
+        "DM2": {"f_1": 0.9, "f_2": 0.0, "f_3": 0.8},
+        "DM3": {"f_1": 0.8, "f_2": 0.9, "f_3": 0.0},
+        "DM4": {"f_1": 0.3, "f_2": 0.3, "f_3": 0.3},
+    }
+    base_options.original_most_preferred_solutions = copy.deepcopy(initial_mps)
+    base_options.current_most_preferred_solutions = copy.deepcopy(initial_mps)
+
+    mock_candidates = [
+        FairSolution(objective_values={"f_1": 0.0, "f_2": 1.0, "f_3": 0.0}, fairness_criterion="mm", fairness_value=0),
+        FairSolution(
+            objective_values={"f_1": 1.0, "f_2": 0.0, "f_3": 0.0}, fairness_criterion="nash", fairness_value=0
+        ),
+    ]
+    mock_gprm = GPRMResults(
+        raw_results=IPR_Results(
+            evaluated_points=[
+                _EvaluatedPoint(reference_point={}, targets={}, objectives={"f_1": 0.0, "f_2": 1.0, "f_3": 0.0}),
+                _EvaluatedPoint(reference_point={}, targets={}, objectives={"f_1": 1.0, "f_2": 0.0, "f_3": 0.0}),
+            ]
+        ),
+        solutions=None,
+        outputs=pl.DataFrame(),
+    )
+    res1 = FavResults(FavOptions=base_options, GPRMResults=mock_gprm, fair_solutions=mock_candidates, status="success")
+
+    # Round 1 options: tie between 0 and 1
+    options_r1 = base_options.model_copy(deep=True)
+    options_r1.votes = {"DM1": 0, "DM2": 0, "DM3": 1, "DM4": 1}
+
+    with patch("desdeo.gdm.favorite_method.get_representative_set_IPR") as mock_ipr:
+        mock_ipr.return_value = mock_gprm
+        res_r1 = favorite_method(dummy_problem, options_r1, results_list=[res1])
+
+    assert res_r1.status == "revote_pending"
+    # DMs preferences were adapted on Round 1 votes
+    mps_after_r1 = copy.deepcopy(res_r1.FavOptions.current_most_preferred_solutions)
+    assert res_r1.FavOptions.preferences_already_adapted is True
+
+    # Now cast Round 2 revotes where DMs vote for concession candidates
+    options_r2 = res_r1.FavOptions.model_copy(deep=True)
+    options_r2.tie_state = res_r1.tie_state
+    options_r2.votes = {"DM1": 1, "DM2": 1, "DM3": 0, "DM4": 0}  # Concession votes
+
+    with (
+        patch("desdeo.gdm.favorite_method.get_representative_set") as mock_rep,
+        patch("desdeo.gdm.favorite_method.find_group_solutions") as mock_fairs,
+    ):
+        mock_rep.return_value = mock_gprm
+        mock_fairs.return_value = [mock_candidates[0]]
+        res_r2 = favorite_method(dummy_problem, options_r2, results_list=[res1])
+
+    assert res_r2.status == "success"
+    # Crucial assertion: MPS must NOT be altered by Round 2 concession votes!
+    assert res_r2.FavOptions.current_most_preferred_solutions == mps_after_r1
+
+
+def test_borda_scoring_custom_weights():
+    """Test calculate_borda_scores and borda_rule with customizable weights."""
+    r1 = {"DM1": 0, "DM2": 0, "DM3": 1}
+    r2 = {"DM1": 1, "DM2": 1, "DM3": 0}
+
+    # Default weights (2, 1):
+    # Cand 0: 2*2 + 1*1 = 5
+    # Cand 1: 1*2 + 2*1 = 4
+    scores_default = calculate_borda_scores(r1, r2, 2, weights=(2, 1))
+    assert scores_default[0] == 5
+    assert scores_default[1] == 4
+    assert borda_rule(r1, r2, 2, weights=(2, 1)) == [0]
+
+    # Custom weights (1, 3): (higher weight on concession revote)
+    # Cand 0: 2*1 + 1*3 = 5
+    # Cand 1: 1*1 + 2*3 = 7
+    scores_custom = calculate_borda_scores(r1, r2, 2, weights=(1, 3))
+    assert scores_custom[0] == 5
+    assert scores_custom[1] == 7
+    assert borda_rule(r1, r2, 2, weights=(1, 3)) == [1]
+
+
+def test_voting_rule_majority_vs_plurality(dummy_problem, base_options):
+    """Test that majority rule requires >50% votes, while plurality only requires max votes."""
+    mock_candidates = [
+        FairSolution(objective_values={"f_1": 0.0, "f_2": 1.0, "f_3": 0.0}, fairness_criterion="mm", fairness_value=0),
+        FairSolution(objective_values={"f_1": 1.0, "f_2": 0.0, "f_3": 0.0}, fairness_criterion="nash", fairness_value=0),
+        FairSolution(objective_values={"f_1": 0.5, "f_2": 0.5, "f_3": 0.0}, fairness_criterion="avg_hausdorff", fairness_value=0),
+    ]
+    mock_gprm = GPRMResults(
+        raw_results=IPR_Results(
+            evaluated_points=[
+                _EvaluatedPoint(reference_point={}, targets={}, objectives={"f_1": 0.0, "f_2": 1.0, "f_3": 0.0}),
+                _EvaluatedPoint(reference_point={}, targets={}, objectives={"f_1": 1.0, "f_2": 0.0, "f_3": 0.0}),
+                _EvaluatedPoint(reference_point={}, targets={}, objectives={"f_1": 0.5, "f_2": 0.5, "f_3": 0.0}),
+            ]
+        ),
+        solutions=None,
+        outputs=pl.DataFrame(),
+    )
+    res_prev = FavResults(FavOptions=base_options, GPRMResults=mock_gprm, fair_solutions=mock_candidates, status="success")
+
+    # 4 voters: Cand 0 has 2 votes (50%), Cand 1 has 1 vote (25%), Cand 2 has 1 vote (25%)
+    votes_no_maj = {"DM1": 0, "DM2": 0, "DM3": 1, "DM4": 2}
+
+    # Under Plurality Rule: Candidate 0 wins immediately because 2 > 1
+    options_plurality = base_options.model_copy(deep=True)
+    options_plurality.voting_rule = "plurality"
+    options_plurality.votes = votes_no_maj
+    with (
+        patch("desdeo.gdm.favorite_method.get_representative_set") as mock_rep,
+        patch("desdeo.gdm.favorite_method.find_group_solutions") as mock_fairs,
+    ):
+        mock_rep.return_value = mock_gprm
+        mock_fairs.return_value = [mock_candidates[0]]
+        res_plurality = favorite_method(dummy_problem, options_plurality, results_list=[res_prev])
+
+    assert res_plurality.status == "success"
+    # Winner was Candidate 0, so fair_solutions starts with Candidate 0
+    assert res_plurality.fair_solutions[0] == mock_candidates[0]
+
+    # Under Majority Rule: Candidate 0 has 2/4 = 50% (not >50%), so no majority -> revote_pending
+    options_majority = base_options.model_copy(deep=True)
+    options_majority.voting_rule = "majority"
+    options_majority.votes = votes_no_maj
+    with patch("desdeo.gdm.favorite_method.get_representative_set_IPR") as mock_ipr:
+        mock_ipr.return_value = mock_gprm
+        res_majority = favorite_method(dummy_problem, options_majority, results_list=[res_prev])
+
+    assert res_majority.status == "revote_pending"
+
+
+def test_fav_options_fairness_criterion(base_options):
+    """Test that fairness_criterion is the single field and backward-compat validator works."""
+    # 1. model_copy with fairness_criterion works directly
+    opt1 = base_options.model_copy(update={"fairness_criterion": "nash"})
+    assert opt1.fairness_criterion == "nash"
+
+    # 2. Backward-compat: old candidate_generation_options key in dict input is promoted
+    raw = base_options.model_dump()
+    del raw["fairness_criterion"]
+    raw["candidate_generation_options"] = "utilitarian"
+    opt2 = FavOptions(**raw)
+    assert opt2.fairness_criterion == "utilitarian"

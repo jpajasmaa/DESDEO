@@ -19,14 +19,18 @@ from desdeo.gdm.gdmtools import (
     min_max_regret_no_impro,
     regret_allDMs_no_impro,
 )
-from desdeo.gdm.voting_rules import majority_rule
+from desdeo.gdm.voting_rules import (
+    borda_rule,
+    majority_rule,
+    plurality_rule,
+)
 from desdeo.problem import (
     numpy_array_to_objective_dict,
     objective_dict_to_numpy_array,
 )
 from desdeo.problem.schema import Problem
 from desdeo.tools import guess_best_solver, is_duplicate_solution
-from desdeo.tools.generate_rps_from_aspirations import generate_group_reference_points
+from desdeo.tools.generate_rps_from_aspirations import generate_rps_from_aspirations
 from desdeo.tools.generateReferencePoints import (
     generate_points,
     get_hull_equations,
@@ -124,11 +128,20 @@ class FavOptions(pydantic.BaseModel):
 
     GPRMoptions: GPRMOptions
     """Options for the representative set method. EMO and IPR supported."""
-    candidate_generation_options: str
-    (
-        """Options for generating candidate fair solutions.
-        For now, just a string to determine the fairness criterion applied."""
-        """ Support more options later."""
+    fairness_criterion: str = Field(
+        default="mm",
+        description=(
+            "Fairness criterion for both candidate generation and group-fairness tie-breaking "
+            "(e.g. 'mm', 'utilitarian', 'nash')."
+        ),
+    )
+    voting_rule: Literal["plurality", "majority"] = Field(
+        default="plurality",
+        description="Voting rule used to determine the Round 1 winner: 'plurality' or 'majority'.",
+    )
+    borda_weights: tuple[float, float] | tuple[int, int] = Field(
+        default=(2, 1),
+        description="Weights (w1, w2) for Round 1 and Round 2 votes in Borda scoring.",
     )
     zoom_options: ZoomOptions = Field(default_factory=ZoomOptions)
     """Options for the zooming strategy. Support more options later."""
@@ -148,6 +161,18 @@ class FavOptions(pydantic.BaseModel):
     "Tracks possible revoting"
     preferences_already_adapted: bool = False
     """Flag indicating whether DM preferred solutions have already been adapted for this iteration."""
+
+    @pydantic.model_validator(mode="before")
+    @classmethod
+    def promote_candidate_generation_options(cls, data: object) -> object:
+        """Backward-compat: promote legacy ``candidate_generation_options`` to ``fairness_criterion``.
+
+        Old serialized session state and callers may still pass ``candidate_generation_options``
+        (the original IPR naming). Accept and promote it so existing data does not break.
+        """
+        if isinstance(data, dict) and "candidate_generation_options" in data and "fairness_criterion" not in data:
+            data["fairness_criterion"] = data["candidate_generation_options"]
+        return data
 
 
 class FavResults(pydantic.BaseModel):
@@ -294,7 +319,7 @@ def get_representative_set_IPR(  # noqa: N802
                 # Generate reference points inside the convex hull of DM aspirations.
                 # Handles degenerate cases (fewer DMs than objectives) via SVD affine subspace projection.
                 aspirations = list(options.method_options.most_preferred_solutions.values())
-                refp = generate_group_reference_points(
+                refp = generate_rps_from_aspirations(
                     problem=problem,
                     aspirations=aspirations,
                     num_points=options.method_options.num_initial_reference_points,
@@ -411,45 +436,336 @@ def random_tie_breaker(tied_indices: list[int], candidates: list[FairSolution]) 
     return candidates[winner_idx], winner_idx
 
 
+def calculate_candidate_fairness(
+    problem: Problem,
+    candidate: FairSolution,
+    most_preferred_solutions: dict[str, dict[str, float]],
+    fairness_criterion: str = "mm",
+) -> float:
+    """Calculates the group fairness score for a single candidate solution.
+
+    Uses the same normalization pattern as :func:`find_group_solutions`: objective keys are
+    sourced from ``problem.objectives`` (authoritative order and symbols). A ``KeyError`` will
+    be raised if the candidate or MPS dictionaries do not contain matching keys — this is
+    intentional, as it surfaces real key-format mismatches at the point of error rather than
+    silently returning wrong scores.
+
+    Higher return value represents higher group fairness.
+
+    Args:
+        problem: DESDEO Problem object.
+        candidate: Candidate FairSolution to evaluate.
+        most_preferred_solutions: Dictionary mapping DM IDs to their preferred solutions.
+            Keys must match ``problem.objectives[i].symbol``.
+        fairness_criterion: Criterion to use ('mm', 'nash', 'utilitarian').
+
+    Returns:
+        float: Group fairness score.
+    """
+    ideal = problem.get_ideal_point()
+    nadir = problem.get_nadir_point()
+
+    # Normalize candidate using problem's objective symbols (authoritative order & keys)
+    sol_norm = np.array([
+        (candidate.objective_values[obj.symbol] - ideal[obj.symbol]) / (nadir[obj.symbol] - ideal[obj.symbol])
+        for obj in problem.objectives
+    ])
+
+    # Normalize each DM's MPS using problem's objective symbols
+    normalized_mpses_arr = [
+        objective_dict_to_numpy_array(
+            problem,
+            {
+                obj.symbol: (mps[obj.symbol] - ideal[obj.symbol]) / (nadir[obj.symbol] - ideal[obj.symbol])
+                for obj in problem.objectives
+            },
+        )
+        for mps in most_preferred_solutions.values()
+    ]
+
+    # Calculate utilities for each DM (higher = better utility)
+    dm_utilities = regret_allDMs_no_impro(sol_norm, normalized_mpses_arr)
+
+    if fairness_criterion == "mm":
+        # Maxmin fairness: maximize the minimum utility across all DMs
+        return float(np.min(dm_utilities))
+    if fairness_criterion == "nash":
+        # Nash fairness: maximize the product of utilities (sum of logs)
+        return float(np.sum(np.log(np.maximum(dm_utilities, 1e-6))))
+    if fairness_criterion == "utilitarian":
+        # Utilitarian fairness: maximize the sum of utilities
+        return float(np.sum(dm_utilities))
+    return float(np.min(dm_utilities))
+
+
+def break_borda_tie_by_fairness(
+    problem: Problem,
+    candidates: list[FairSolution],
+    tied_indices: list[int],
+    most_preferred_solutions: dict[str, dict[str, float]],
+    fairness_criterion: str = "mm",
+) -> int:
+    """Select the candidate among tied Borda winners that has the highest group fairness.
+
+    Args:
+        problem: DESDEO Problem object.
+        candidates: Full list of candidate FairSolution objects.
+        tied_indices: Candidate indices tied for the maximum Borda score.
+        most_preferred_solutions: Dictionary mapping DM IDs to their preferred solutions.
+        fairness_criterion: Fairness criterion ('mm', 'nash', 'utilitarian').
+
+    Returns:
+        int: Index of the winning candidate among the tied candidates.
+    """
+    if not tied_indices:
+        return 0
+    if len(tied_indices) == 1:
+        return tied_indices[0]
+
+    best_idx = tied_indices[0]
+    best_score = -float("inf")
+
+    for idx in tied_indices:
+        cand = candidates[idx]
+        score = calculate_candidate_fairness(
+            problem=problem,
+            candidate=cand,
+            most_preferred_solutions=most_preferred_solutions,
+            fairness_criterion=fairness_criterion,
+        )
+        if score > best_score:
+            best_score = score
+            best_idx = idx
+
+    return best_idx
+
+
+def get_mm_candidate_index(candidates: list[FairSolution]) -> int:
+    """Find the index of the minimax (MM) fair candidate in the candidate list.
+
+    Matches candidates whose ``fairness_criterion`` is exactly ``"mm"`` or whose criterion
+    starts with ``"winner_and_"`` (used when the previous iteration winner also happened to
+    be the top fair solution). Defaults to 0 if no match is found.
+
+    .. todo::
+        Generalize to accept the configured ``fairness_criterion`` so callers are not
+        implicitly tied to ``"mm"`` being the active criterion.
+
+    Args:
+        candidates: List of candidate FairSolution objects.
+
+    Returns:
+        int: Index of the MM fair candidate (defaults to 0 if not found).
+    """
+    for idx, cand in enumerate(candidates):
+        crit = cand.fairness_criterion or ""
+        if crit == "mm" or crit.startswith("winner_and_"):
+            return idx
+    return 0
+
+
+def resolve_round2_winner(
+    round_1_votes: dict[str, int],
+    round_2_votes: dict[str, int],
+    candidates: list[FairSolution],
+    problem: Problem,
+    most_preferred_solutions: dict[str, dict[str, float]],
+    fairness_criterion: str = "mm",
+    borda_weights: tuple[int | float, int | float] = (2, 1),
+) -> int:
+    """Evaluate completed Round 2 (Global Forced Concession) votes and return the winning candidate index.
+
+    Applies weighted Borda scoring across both rounds. If multiple candidates tie for the
+    maximum Borda score, selects the one with the highest group fairness score.
+
+    Args:
+        round_1_votes: Map of DM ID → candidate index chosen in Round 1.
+        round_2_votes: Map of DM ID → candidate index chosen in Round 2.
+        candidates: Full list of candidate FairSolution objects.
+        problem: DESDEO Problem object (required for fairness evaluation).
+        most_preferred_solutions: Active DM preferred solutions (required for fairness evaluation).
+        fairness_criterion: Fairness criterion for tie-breaking ('mm', 'nash', 'utilitarian').
+        borda_weights: Weights (w1, w2) for Round 1 and Round 2 votes. Defaults to (2, 1).
+
+    Returns:
+        int: Index of the winning candidate.
+
+    Raises:
+        ValueError: If ``problem`` or ``most_preferred_solutions`` is not provided when a Borda
+            tie needs to be broken by fairness.
+    """
+    n_cands = len(candidates)
+    top_borda = borda_rule(round_1_votes, round_2_votes, n_cands, weights=borda_weights)
+
+    if len(top_borda) == 1:
+        return top_borda[0]
+
+    # Borda tie: resolve by group fairness among the tied leaders only
+    if problem is None:
+        raise ValueError(
+            "A Problem instance is required for Borda tie-breaking by group fairness. "
+            "Cannot resolve Borda tie without it."
+        )
+    if not most_preferred_solutions:
+        raise ValueError(
+            "most_preferred_solutions is required for Borda tie-breaking by group fairness. "
+            "Cannot resolve Borda tie without it."
+        )
+    return break_borda_tie_by_fairness(
+        problem=problem,
+        candidates=candidates,
+        tied_indices=top_borda,
+        most_preferred_solutions=most_preferred_solutions,
+        fairness_criterion=fairness_criterion,
+    )
+
+
+def resolve_round1_winner(
+    votes: dict[str, int],
+    candidates: list[FairSolution],
+    prev_results: FavResults,
+    problem: Problem,
+    voting_rule: Literal["plurality", "majority"] = "plurality",
+    borda_weights: tuple[int | float, int | float] = (2, 1),
+) -> tuple[int | None, FairSolution | None, dict | None]:
+    """Evaluate completed Round 1 votes and determine the outcome.
+
+    Applies the configured voting rule. On a tie:
+    - If exactly 2 candidates tie and are geometrically adjacent, returns an average-projection
+      compromise solution.
+    - Otherwise, returns a ``tie_state`` dict triggering Round 2 (Global Forced Concession).
+
+    Args:
+        votes: Map of DM ID → candidate index (all DMs must have voted).
+        candidates: List of candidate FairSolution objects.
+        prev_results: FavResults from the previous iteration (used for adjacency check).
+        problem: DESDEO Problem object (used if adjacency tie-break requires projection).
+        voting_rule: ``'plurality'`` (default) or ``'majority'``.
+        borda_weights: Weights to embed in the resulting ``tie_state`` for use in Round 2.
+
+    Returns:
+        tuple[int | None, FairSolution | None, dict | None]:
+        ``(winner_idx, compromise_solution, tie_state)``
+
+        Exactly one outcome:
+        - ``(winner_idx, None, None)`` — unique winner found.
+        - ``(None, compromise_solution, None)`` — adjacency compromise produced.
+        - ``(None, None, tie_state)`` — revote required; ``tie_state`` holds Round 2 info.
+    """
+    top_candidates = plurality_rule(votes)
+    has_winner = False
+    winner_idx = None
+
+    if voting_rule == "majority":
+        maj_winner = majority_rule(votes)
+        if maj_winner is not None:
+            has_winner = True
+            winner_idx = maj_winner
+    else:
+        if len(top_candidates) == 1:
+            has_winner = True
+            winner_idx = top_candidates[0]
+
+    if has_winner:
+        return winner_idx, None, None
+
+    # Tie: check 2-candidate adjacency
+    if len(top_candidates) == 2:  # noqa: PLR2004
+        pts_mat, _, labels = cluster_points(prev_results)
+        idx_a, idx_b = top_candidates[0], top_candidates[1]
+        if check_adjacency(pts_mat, labels, idx_a, idx_b):
+            tied_votes = {dm: v for dm, v in votes.items() if v in top_candidates}
+            compromise = tie_breaker_avgproj(problem, tied_votes, candidates)
+            return None, compromise, None
+
+    # Non-adjacent or >2 tied: request Round 2
+    new_tie_state = {
+        "strategy": "global_forced_borda",
+        "round_1_votes": copy.deepcopy(votes),
+        "eligible_candidates": list(range(len(candidates))),
+        "tied_candidate_indices": sorted(top_candidates),
+        "is_adjacent": False,
+        "borda_weights": list(borda_weights),
+    }
+    return None, None, new_tie_state
+
+
 def handle_ties(
     problem: Problem,
     votes: dict[str, int],
     candidates: list[FairSolution],
     fav_results_previous: FavResults,
     tie_state: dict | None,
+    borda_weights: tuple[int | float, int | float] = (2, 1),
+    tied_indices: list[int] | None = None,
 ) -> tuple[FairSolution | None, dict | None]:
-    """Evaluates a voting tie and routes it through the 3-step hierarchy.
+    """Evaluates a voting tie according to the voting protocol.
 
-    1. 2 regions Adjacent Check -> Average Projection
-    2. more than 2 regions or Non-Adjacent -> Request Re-Vote
-    3. Re-Vote Tied -> Random Fallback
+    1. Geometric Adjacency Bypass: If exactly 2 candidates tie in Round 1 and are adjacent,
+       project their midpoint onto the Pareto front via tie_breaker_avgproj.
+    2. Global Forced Concession Revote: If >= 3 tie or 2 are non-adjacent in Round 1,
+       request Round 2 revotes where DMs vote for an alternative candidate other than their Round 1 choice.
+    3. Weighted Borda Scoring / Group Fairness Tie-Breaker: If evaluating Round 2 revotes, tally Borda scores
+       (Score(c) = w1*V1(c) + w2*V2(c)). If a unique candidate has max score, declare winner.
+       If Borda scores tie among top candidates, break the tie by calculating their group fairness.
+
+    Args:
+        problem: DESDEO Problem object.
+        votes: In Round 1, the Round 1 votes. In Round 2, the Round 2 votes.
+        candidates: List of candidate FairSolutions.
+        fav_results_previous: FavResults from previous iteration.
+        tie_state: State dictionary preserving Round 1 info if currently in Round 2, or None.
+        borda_weights: Weights for Round 1 and Round 2 votes in Borda scoring. Defaults to (2, 1).
+        tied_indices: Optional pre-computed list of tied candidate indices (Round 1 only).
 
     Returns:
-        tuple: (winning_solution, updated_tie_state).
+        tuple[FairSolution | None, dict | None]: (winning_solution, updated_tie_state).
     """
-    tied_indices = get_tied_candidates(votes)
-
-    # Check Adjacency (Only applies if exactly 2 candidates tie)
-    is_adjacent = False
-    if len(tied_indices) == 2:  # noqa: PLR2004
-        pts_mat, _, labels = cluster_points(fav_results_previous)
-        is_adjacent = check_adjacency(pts_mat, labels, tied_indices[0], tied_indices[1])
-
-    if is_adjacent:
-        # Combine via Average Projection
-        tied_votes = {dm: v for dm, v in votes.items() if v in tied_indices}
-        compromise_solution = tie_breaker_avgproj(problem, tied_votes, candidates)
-        return compromise_solution, None
-
-    # Request re-vote among tied candidates
     if tie_state is None:
-        # Sub-Route B1: First tie -> Trigger Re-Vote UI
-        new_tie_state = {"tied_indices": tied_indices, "strategy": "Simple Vote-Again"}
+        if tied_indices is None:
+            tied_indices = get_tied_candidates(votes)
+
+        # Check Adjacency (Only applies if exactly 2 candidates tie)
+        is_adjacent = False
+        if len(tied_indices) == 2:  # noqa: PLR2004
+            pts_mat, _, labels = cluster_points(fav_results_previous)
+            is_adjacent = check_adjacency(pts_mat, labels, tied_indices[0], tied_indices[1])
+
+        if is_adjacent:
+            # Combine via Average Projection
+            tied_votes = {dm: v for dm, v in votes.items() if v in tied_indices}
+            compromise_solution = tie_breaker_avgproj(problem, tied_votes, candidates)
+            return compromise_solution, None
+
+        # Request Round 2 Global Forced Concession revote
+        new_tie_state = {
+            "strategy": "global_forced_borda",
+            "round_1_votes": copy.deepcopy(votes),
+            "eligible_candidates": list(range(len(candidates))),
+            "tied_candidate_indices": sorted(tied_indices),
+            "borda_weights": list(borda_weights),
+        }
         return None, new_tie_state
 
-    # Re-Vote tied again -> Random Fallback
-    winner_candidate, _ = random_tie_breaker(tied_indices, candidates)
-    return winner_candidate, None
+    # Round 2 revotes evaluation — delegate to resolve_round2_winner
+    round_1_votes = tie_state.get("round_1_votes", {})
+    weights = tuple(tie_state.get("borda_weights", borda_weights))
+    active_mps = (
+        fav_results_previous.FavOptions.current_most_preferred_solutions
+        or fav_results_previous.FavOptions.original_most_preferred_solutions
+    )
+    fairness_criterion = fav_results_previous.FavOptions.fairness_criterion
+
+    winner_idx = resolve_round2_winner(
+        round_1_votes=round_1_votes,
+        round_2_votes=votes,
+        candidates=candidates,
+        problem=problem,
+        most_preferred_solutions=active_mps,
+        fairness_criterion=fairness_criterion,
+        borda_weights=weights,
+    )
+    return candidates[winner_idx], None
 
 
 def setup(
@@ -484,35 +800,61 @@ def setup(
         previous_results = results_list[-1]
         old_candidates = previous_results.fair_solutions
 
-        # Adapt DM preferred solutions if any DM voted for a non-optimal candidate
-        if not options.preferences_already_adapted:
+        # Adapt DM preferred solutions based solely on primary Round 1 votes
+        round_1_votes = (
+            options.tie_state.get("round_1_votes") if options.tie_state else options.votes
+        )
+        if round_1_votes is not None and not options.preferences_already_adapted:
             adapted_mps, _ = adapt_all_dm_preferences(
                 problem=problem,
                 current_mps=options.current_most_preferred_solutions,
                 candidates=old_candidates,
-                votes=options.votes,
+                votes=round_1_votes,
             )
             options.current_most_preferred_solutions = adapted_mps
             options.preferences_already_adapted = True
 
-        # Determine Winner using Majority Rule else Tie-Breaker
-        winner_idx = majority_rule(votes=options.votes)
-        if winner_idx is not None:
-            winner_solution = old_candidates[winner_idx]
-        else:
+        # Determine Winner using Plurality or Majority Rule else Tie-Breaker
+        if options.tie_state is not None:
+            # Evaluating Round 2 revotes
             winner_solution, new_tie_state = handle_ties(
                 problem=problem,
                 votes=options.votes,
                 candidates=old_candidates,
                 fav_results_previous=previous_results,
                 tie_state=options.tie_state,
+                borda_weights=options.borda_weights,
             )
+        else:
+            has_winner = False
+            top_candidates = plurality_rule(votes=options.votes)
+            if options.voting_rule == "majority":
+                maj_winner = majority_rule(votes=options.votes)
+                if maj_winner is not None:
+                    has_winner = True
+                    winner_solution = old_candidates[maj_winner]
+            else:
+                if len(top_candidates) == 1:
+                    has_winner = True
+                    winner_solution = old_candidates[top_candidates[0]]
+
+            if not has_winner:
+                winner_solution, new_tie_state = handle_ties(
+                    problem=problem,
+                    votes=options.votes,
+                    candidates=old_candidates,
+                    fav_results_previous=previous_results,
+                    tie_state=None,
+                    borda_weights=options.borda_weights,
+                    tied_indices=top_candidates,
+                )
 
         fake_nadir = previous_results.FavOptions.GPRMoptions.fake_nadir
     options.GPRMoptions.fake_ideal = fake_ideal
     options.GPRMoptions.fake_nadir = fake_nadir
 
     return options, winner_solution, new_tie_state
+
 
 
 def favorite_method(problem: Problem, options: FavOptions, results_list: list[FavResults]) -> FavResults:
@@ -553,7 +895,7 @@ def favorite_method(problem: Problem, options: FavOptions, results_list: list[Fa
         solutions=gprm_results.outputs,
         targets=targets,
         most_preferred_solutions=active_mps,
-        fairness_criterion=options.candidate_generation_options,
+        fairness_criterion=options.fairness_criterion,
     )
 
     fair_solutions = []
@@ -563,7 +905,7 @@ def favorite_method(problem: Problem, options: FavOptions, results_list: list[Fa
             winner_solution, new_fair_solutions_list[0], check_variables=True, problem=problem
         ):
             # Previous winner is also top group fair solution in this iteration
-            winner_solution.fairness_criterion = f"winner_and_{options.candidate_generation_options}"
+            winner_solution.fairness_criterion = f"winner_and_{options.fairness_criterion}"
             winner_solution.fairness_value = new_fair_solutions_list[0].fairness_value
             fair_solutions = [winner_solution]
         else:
@@ -909,16 +1251,16 @@ def select_final_candidates(
         solutions=winning_outputs_df,
         targets=winning_targets_df,
         most_preferred_solutions=active_mps,
-        fairness_criterion=fav_results.FavOptions.candidate_generation_options,
+        fairness_criterion=fav_results.FavOptions.fairness_criterion,
     )
 
     # Extract the solution and brand its criterion clearly
     fair_cluster_candidate = fair_group_list[0]
-    fair_cluster_candidate.fairness_criterion = f"final_{fav_results.FavOptions.candidate_generation_options}"
+    fair_cluster_candidate.fairness_criterion = f"final_{fav_results.FavOptions.fairness_criterion}"
 
     # Check if the winning candidate is also the top-ranked group-fair solution in both objective and decision space
     if is_duplicate_solution(core_candidate, fair_cluster_candidate, check_variables=True, problem=problem):
-        core_candidate.fairness_criterion = f"winner_and_{fav_results.FavOptions.candidate_generation_options}"
+        core_candidate.fairness_criterion = f"winner_and_{fav_results.FavOptions.fairness_criterion}"
         core_candidate.fairness_value = fair_cluster_candidate.fairness_value
         final_solutions = [core_candidate]
     else:

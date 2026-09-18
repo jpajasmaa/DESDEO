@@ -11,6 +11,10 @@
         isTiedCandidate = false,
         isDecisionPhase = false,
         isFinalWinner = false,
+        isIterationWinner = false,
+        isExcludedFromRevote = false,
+        isRevotePhase = false,
+        bordaScore = null,
         objectiveNameMap = {}
     }: {
         candidate: FairSolution;
@@ -22,6 +26,10 @@
         isTiedCandidate?: boolean;
         isDecisionPhase?: boolean;
         isFinalWinner?: boolean;
+        isIterationWinner?: boolean;
+        isExcludedFromRevote?: boolean;
+        isRevotePhase?: boolean;
+        bordaScore?: number | null;
         objectiveNameMap?: Record<string, string>;
     } = $props();
 
@@ -29,13 +37,15 @@
     let objectives = $derived(Object.entries(candidate.objective_values ?? {}));
 </script>
 
-<div class="card {isFinalWinner ? 'border-yellow-500 bg-yellow-50/60 ring-2 ring-yellow-400' : isTiedCandidate ? 'border-amber-500 bg-amber-50/40 ring-2 ring-amber-400' : isVoted ? 'border-green-500 bg-green-50' : 'border-gray-200'} border rounded-lg p-4 shadow-sm flex flex-col h-full transition-all">
+<div class="card {isFinalWinner ? 'border-yellow-500 bg-yellow-50/60 ring-2 ring-yellow-400' : isIterationWinner ? 'border-emerald-500 bg-emerald-50/40 ring-2 ring-emerald-400' : isExcludedFromRevote ? 'border-rose-200 bg-rose-50/30' : isTiedCandidate ? 'border-amber-500 bg-amber-50/40 ring-2 ring-amber-400' : isVoted ? 'border-green-500 bg-green-50' : 'border-gray-200'} border rounded-lg p-4 shadow-sm flex flex-col h-full transition-all">
     <div class="mb-3 border-b pb-2 flex justify-between items-start">
         <div>
             <h3 class="text-lg font-bold flex items-center gap-1.5">
                 Candidate {index + 1}
                 {#if isFinalWinner}
                     <span class="text-xs bg-yellow-200 text-yellow-900 font-bold px-2 py-0.5 rounded">👑 Final Choice</span>
+                {:else if isIterationWinner}
+                    <span class="text-xs bg-emerald-200 text-emerald-900 font-bold px-2 py-0.5 rounded">⭐ Iteration Winner</span>
                 {/if}
             </h3>
             <p class="text-xs text-gray-500">
@@ -53,7 +63,16 @@
             </p>
         </div>
         <div class="flex flex-col gap-1 items-end">
-            {#if isTiedCandidate}
+            {#if bordaScore !== null && bordaScore !== undefined}
+                <span class="text-xs bg-indigo-100 text-indigo-900 font-bold px-2 py-0.5 rounded border border-indigo-200 shadow-sm">
+                    Borda: {bordaScore} pts
+                </span>
+            {/if}
+            {#if isExcludedFromRevote}
+                <span class="text-xs bg-rose-100 text-rose-800 font-semibold px-2 py-0.5 rounded border border-rose-200">
+                    1st Choice (Concession Required)
+                </span>
+            {:else if isTiedCandidate}
                 <span class="text-xs bg-amber-200 text-amber-900 font-semibold px-2 py-0.5 rounded">Tied</span>
             {/if}
             {#if isDecisionPhase}
@@ -87,11 +106,11 @@
 
     {#if showVoteButton}
         <button
-            class="w-full py-2 rounded font-semibold text-white transition-colors {isVoted ? 'bg-green-600' : isTiedCandidate ? 'bg-amber-600 hover:bg-amber-700' : 'bg-blue-600 hover:bg-blue-700'} disabled:opacity-50 disabled:cursor-not-allowed"
+            class="w-full py-2 rounded font-semibold text-white transition-colors {isVoted ? 'bg-green-600' : isExcludedFromRevote ? 'bg-gray-400' : isRevotePhase ? 'bg-amber-600 hover:bg-amber-700' : isDecisionPhase ? 'bg-indigo-600 hover:bg-indigo-700' : 'bg-blue-600 hover:bg-blue-700'} disabled:opacity-50 disabled:cursor-not-allowed"
             onclick={() => onVote(index)}
-            disabled={disabled || isVoted}
+            disabled={disabled || isVoted || isExcludedFromRevote}
         >
-            {isVoted ? '✓ Your Choice' : isTiedCandidate ? 'Vote in Revote' : isDecisionPhase ? 'Vote as Final Choice' : 'Vote as Favorite'}
+            {isVoted ? '✓ Your Choice' : isExcludedFromRevote ? '1st Choice (Ineligible)' : isRevotePhase ? 'Vote as Concession' : isDecisionPhase ? 'Vote as Final Choice' : 'Vote as Favorite'}
         </button>
     {/if}
 </div>

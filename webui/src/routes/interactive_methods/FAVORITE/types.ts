@@ -9,7 +9,8 @@ export interface FavoriteInitRequest {
   problem_id?: number | string;
   dm_ids?: string[];
   total_n_of_candidates?: number;
-  candidate_generation_options?: string;
+  fairness_criterion?: string;
+  candidate_generation_options?: string; // backward-compat alias for fairness_criterion
   max_iterations?: number;
   num_initial_reference_points?: number;
   most_preferred_solutions?: Record<string, Record<string, number>>;
@@ -21,8 +22,14 @@ export interface FavoriteVoteRequest {
 }
 
 export interface TieState {
+  strategy?: string;
   tied_candidate_indices?: number[];
+  round_1_votes?: Record<string, number>;
+  eligible_candidates?: number[];
+  borda_scores?: Record<string, number>;
   resolved_winner_idx?: number;
+  final_winner_idx?: number;
+  winner_solution?: any;
   [key: string]: any;
 }
 
@@ -33,7 +40,7 @@ export interface FavoriteSessionState {
   current_iteration: number;
   max_iterations: number;
   phase?: "consensus_reaching" | "decision";
-  status: "voting" | "revote_pending" | "completed";
+  status: "voting" | "revote_pending" | "ready_for_iteration" | "completed";
   candidates: FairSolution[];
   current_votes: Record<string, number>;
   tie_state?: TieState | null;

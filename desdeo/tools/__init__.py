@@ -68,8 +68,8 @@ __all__ = [
     "filter_duplicate_solutions",
     "find_compatible_solvers",
     "flip_maximized_objective_values",
-    "generate_group_reference_points",
     "generate_points_in_hull",
+    "generate_rps_from_aspirations",
     "get_corrected_ideal_and_nadir",
     "guess_best_solver",
     "is_duplicate_solution",
@@ -87,8 +87,8 @@ from desdeo.tools.cvxpy_solver_interfaces import (
 from desdeo.tools.generate_rps_from_aspirations import (
     AffineSubspace,
     denormalize_reference_point,
-    generate_group_reference_points,
     generate_points_in_hull,
+    generate_rps_from_aspirations,
     normalize_objective_vectors,
     project_to_reference_plane,
 )

@@ -58,7 +58,7 @@ export interface VoteResponse {
   is_ready: boolean;
   current_votes: Record<string, number>;
   phase?: "consensus_reaching" | "decision";
-  status: "voting" | "revote_pending" | "completed";
+  status: "voting" | "revote_pending" | "ready_for_iteration" | "completed";
   tie_state?: any;
   final_solution?: any;
 }

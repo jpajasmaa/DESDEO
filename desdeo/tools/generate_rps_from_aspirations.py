@@ -285,7 +285,7 @@ def project_to_reference_plane(points: np.ndarray) -> np.ndarray:
     return points + ((num_objectives - points.sum(axis=1)) / num_objectives)[:, np.newaxis]
 
 
-def generate_group_reference_points(
+def generate_rps_from_aspirations(
     problem: Problem,
     aspirations: list[dict[str, float]],
     num_points: int,

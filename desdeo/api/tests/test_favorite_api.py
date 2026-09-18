@@ -205,7 +205,7 @@ def test_voting_flow_and_iteration(sample_init_payload):
     v3 = client.post(f"/favorite/vote/{session_id}", json={"dm_id": "dm3", "vote_idx": 1})
     assert v3.status_code == 200
     assert v3.json()["is_ready"] is True
-    assert v3.json()["status"] == "voting"
+    assert v3.json()["status"] == "ready_for_iteration"
 
     # 8. Advance Iteration
     iter_res = client.post(f"/favorite/iterate/{session_id}")
@@ -217,7 +217,7 @@ def test_voting_flow_and_iteration(sample_init_payload):
 
 
 def test_tie_detection_and_revote_flow(sample_init_payload):
-    """Test 3-way tie triggering revote_pending, restricted revoting, and successful iteration."""
+    """Test 3-way tie triggering revote_pending, forced concession revoting, and successful iteration."""
     init_res = client.post("/favorite/init", json=sample_init_payload).json()
     session_id = init_res["session_id"]
 
@@ -239,19 +239,23 @@ def test_tie_detection_and_revote_flow(sample_init_payload):
     detail_lower = iter_fail.json()["detail"].lower()
     assert "revote while" in detail_lower or "revote is pending" in detail_lower
 
-    # 3. Voting for non-tied candidate (e.g. 3) should be rejected
-    bad_vote = client.post(f"/favorite/vote/{session_id}", json={"dm_id": "dm1", "vote_idx": 3})
+    # 3. Voting for Round 1 choice (dm1 -> 0) in Global Forced Concession should be rejected
+    bad_vote = client.post(f"/favorite/vote/{session_id}", json={"dm_id": "dm1", "vote_idx": 0})
     assert bad_vote.status_code == 400
-    assert "not among tied candidates" in bad_vote.json()["detail"]
+    assert "cannot vote for their round 1 choice" in bad_vote.json()["detail"].lower()
 
-    # 4. Cast valid revotes breaking the tie (dm1 -> 0, dm2 -> 0, dm3 -> 1)
-    client.post(f"/favorite/vote/{session_id}", json={"dm_id": "dm1", "vote_idx": 0})
-    client.post(f"/favorite/vote/{session_id}", json={"dm_id": "dm2", "vote_idx": 0})
+    # 4. Cast valid concession revotes: dm1 -> 1, dm2 -> 2, dm3 -> 1
+    # Borda: Cand 0: 2 pts, Cand 1: 4 pts (winner), Cand 2: 3 pts
+    client.post(f"/favorite/vote/{session_id}", json={"dm_id": "dm1", "vote_idx": 1})
+    client.post(f"/favorite/vote/{session_id}", json={"dm_id": "dm2", "vote_idx": 2})
     final_revote = client.post(f"/favorite/vote/{session_id}", json={"dm_id": "dm3", "vote_idx": 1})
 
     assert final_revote.status_code == 200
-    assert final_revote.json()["status"] == "voting"
-    assert final_revote.json()["is_ready"] is True
+    revote_data = final_revote.json()
+    assert revote_data["status"] == "ready_for_iteration"
+    assert revote_data["is_ready"] is True
+    assert revote_data["tie_state"]["resolved_winner_idx"] == 1
+    assert revote_data["tie_state"]["borda_scores"]["1"] == 4
 
     # 5. Iteration advances successfully
     iter_res = client.post(f"/favorite/iterate/{session_id}")
@@ -262,30 +266,66 @@ def test_tie_detection_and_revote_flow(sample_init_payload):
     assert iter_data["current_votes"] == {}
 
 
-def test_revote_persisting_tie_random_fallback(sample_init_payload):
-    """Test that if a tie persists after revoting, it is broken by randomly selecting from tied candidates."""
+def test_revote_borda_tie_mm_fallback(sample_init_payload):
+    """Test that if Borda scoring results in a tie, it falls back deterministically to the MM fair candidate."""
     init_res = client.post("/favorite/init", json=sample_init_payload).json()
     session_id = init_res["session_id"]
 
-    # Initial tie: 0, 1, 2
+    # Initial tie: dm1 -> 0, dm2 -> 1, dm3 -> 2
     client.post(f"/favorite/vote/{session_id}", json={"dm_id": "dm1", "vote_idx": 0})
     client.post(f"/favorite/vote/{session_id}", json={"dm_id": "dm2", "vote_idx": 1})
     client.post(f"/favorite/vote/{session_id}", json={"dm_id": "dm3", "vote_idx": 2})
 
-    # Revote still tied: dm1 -> 0, dm2 -> 1, dm3 -> 2
-    client.post(f"/favorite/vote/{session_id}", json={"dm_id": "dm1", "vote_idx": 0})
-    client.post(f"/favorite/vote/{session_id}", json={"dm_id": "dm2", "vote_idx": 1})
-    res = client.post(f"/favorite/vote/{session_id}", json={"dm_id": "dm3", "vote_idx": 2})
+    # Revote resulting in Borda tie: dm1 -> 1, dm2 -> 2, dm3 -> 0 (each gets 2 + 1 = 3 pts)
+    client.post(f"/favorite/vote/{session_id}", json={"dm_id": "dm1", "vote_idx": 1})
+    client.post(f"/favorite/vote/{session_id}", json={"dm_id": "dm2", "vote_idx": 2})
+    res = client.post(f"/favorite/vote/{session_id}", json={"dm_id": "dm3", "vote_idx": 0})
 
     assert res.status_code == 200
-    assert res.json()["status"] == "voting"
+    assert res.json()["status"] == "ready_for_iteration"
     resolved_winner = res.json()["tie_state"]["resolved_winner_idx"]
-    assert resolved_winner in [0, 1, 2]
+    # Group MM candidate is candidate 0
+    assert resolved_winner == 0
 
-    # Advance iteration successfully using the resolved winner
+    # Advance iteration successfully using the MM fallback winner
     iter_res = client.post(f"/favorite/iterate/{session_id}")
     assert iter_res.status_code == 200
     assert iter_res.json()["current_iteration"] == 2
+
+
+def test_revote_borda_tie_picks_fairer_leader_excluding_lower_scored_mm(sample_init_payload):
+    """Test that when two candidates tie with 3 Borda points while Candidate 0 has 2 points,
+    Candidate 0 does NOT win, and fairness breaks the tie between the two 3-point leaders."""
+    init_res = client.post("/favorite/init", json=sample_init_payload).json()
+    session_id = init_res["session_id"]
+
+    # Initial tie: dm1 -> 0, dm2 -> 1, dm3 -> 2 (each gets 2 Borda points)
+    client.post(f"/favorite/vote/{session_id}", json={"dm_id": "dm1", "vote_idx": 0})
+    client.post(f"/favorite/vote/{session_id}", json={"dm_id": "dm2", "vote_idx": 1})
+    client.post(f"/favorite/vote/{session_id}", json={"dm_id": "dm3", "vote_idx": 2})
+
+    # Revote:
+    # dm1 votes for Candidate 1 (+1 pt -> 3 total)
+    # dm2 votes for Candidate 2 (+1 pt -> 3 total)
+    # dm3 votes for Candidate 3 (+1 pt -> 1 total)
+    # Candidate 0 receives 0 second-round votes -> remains at 2 points.
+    client.post(f"/favorite/vote/{session_id}", json={"dm_id": "dm1", "vote_idx": 1})
+    client.post(f"/favorite/vote/{session_id}", json={"dm_id": "dm2", "vote_idx": 2})
+    res = client.post(f"/favorite/vote/{session_id}", json={"dm_id": "dm3", "vote_idx": 3})
+
+    assert res.status_code == 200
+    tie_state = res.json()["tie_state"]
+    assert tie_state["borda_scores"]["0"] == 2
+    assert tie_state["borda_scores"]["1"] == 3
+    assert tie_state["borda_scores"]["2"] == 3
+    assert tie_state["borda_scores"]["3"] == 1
+
+    resolved_winner = tie_state["resolved_winner_idx"]
+    # Candidate 0 must NOT win with only 2 points!
+    assert resolved_winner != 0
+    # Winner must be either Candidate 1 or Candidate 2 (the 3-point tied leaders)
+    assert resolved_winner in (1, 2)
+
 
 
 def test_full_lifecycle_to_final_decision(sample_init_payload):
@@ -628,3 +668,53 @@ def test_init_problem_5_re34_pyomo():
     assert iter_data["current_iteration"] == 2
     assert iter_data["status"] == "voting"
     assert len(iter_data["candidates"]) == 5
+
+
+def test_api_custom_borda_weights_and_majority_voting_rule():
+    """Test initializing with voting_rule='majority' and custom borda_weights=(3, 1)."""
+    payload = {
+        "problem_id": 1,
+        "dm_ids": ["dm1", "dm2", "dm3", "dm4"],
+        "total_n_of_candidates": 5,
+        "fairness_criterion": "mm",
+        "voting_rule": "majority",
+        "borda_weights": [3, 1],
+        "max_iterations": 2,
+        "num_initial_reference_points": 100,
+    }
+    init_res = client.post("/favorite/init", json=payload)
+    assert init_res.status_code == 201
+    init_data = init_res.json()
+    session_id = init_data["session_id"]
+    assert init_data["options"]["voting_rule"] == "majority"
+    assert init_data["options"]["borda_weights"] == [3, 1]
+
+    # 4 DMs vote: dm1 & dm2 vote for 0, dm3 votes for 1, dm4 votes for 2
+    # Plurality would give candidate 0 the win (2 votes > 1 vote).
+    # But majority rule requires > 50% (> 2 votes out of 4), so no majority -> revote_pending!
+    client.post(f"/favorite/vote/{session_id}", json={"dm_id": "dm1", "vote_idx": 0})
+    client.post(f"/favorite/vote/{session_id}", json={"dm_id": "dm2", "vote_idx": 0})
+    client.post(f"/favorite/vote/{session_id}", json={"dm_id": "dm3", "vote_idx": 1})
+    res_vote4 = client.post(f"/favorite/vote/{session_id}", json={"dm_id": "dm4", "vote_idx": 2})
+
+    assert res_vote4.status_code == 200
+    vote_data = res_vote4.json()
+    assert vote_data["status"] == "revote_pending"
+    assert vote_data["tie_state"]["borda_weights"] == [3, 1]
+
+    # Cast Round 2 concession votes
+    # DM1 votes 1, DM2 votes 1, DM3 votes 0, DM4 votes 0
+    # Candidate 0: R1 = 2 votes * 3 = 6; R2 = 2 votes * 1 = 2 -> Total = 8
+    # Candidate 1: R1 = 1 vote * 3 = 3; R2 = 2 votes * 1 = 2 -> Total = 5
+    client.post(f"/favorite/vote/{session_id}", json={"dm_id": "dm1", "vote_idx": 1})
+    client.post(f"/favorite/vote/{session_id}", json={"dm_id": "dm2", "vote_idx": 1})
+    client.post(f"/favorite/vote/{session_id}", json={"dm_id": "dm3", "vote_idx": 0})
+    res_revote4 = client.post(f"/favorite/vote/{session_id}", json={"dm_id": "dm4", "vote_idx": 0})
+
+    assert res_revote4.status_code == 200
+    revote_data = res_revote4.json()
+    assert revote_data["status"] == "ready_for_iteration"
+    assert revote_data["tie_state"]["resolved_winner_idx"] == 0
+    assert revote_data["tie_state"]["borda_scores"]["0"] == 8
+    assert revote_data["tie_state"]["borda_scores"]["1"] == 5
+
